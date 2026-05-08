@@ -1,0 +1,29 @@
+# Build artefacts
+/target
+/src-tauri/target
+/frontend/.next
+/frontend/out
+/frontend/.turbo
+/frontend/node_modules
+
+# Local dev state — contains user data + secrets
+.env
+data/
+.fastembed_cache/
+
+# pdfium DLL — prebuilt binary, README documents how to fetch.
+# Committing it would inflate the repo and pin to one platform.
+libs/pdfium/
+
+# Editor / OS
+.claude/
+.vscode/
+.idea/
+*.log
+.DS_Store
+Thumbs.db
+
+# Ad-hoc planning notes — kept out of the repo so the docs/
+# folder remains the single source of truth.
+PLAN.md
+TODO.md

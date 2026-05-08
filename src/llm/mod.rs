@@ -1,0 +1,149 @@
+pub mod types;
+pub mod claude;
+pub mod gemini;
+pub mod local;
+pub mod builtin_tools;
+pub mod summarize;
+
+pub use types::*;
+
+use anyhow::Result;
+use futures_util::Stream;
+use std::pin::Pin;
+
+pub type BoxStream = Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>;
+
+pub fn provider_for_model(model: &str) -> Provider {
+    // Explicit prefixes set by the model picker for user-configured providers.
+    if model.starts_with("openai:") || model.starts_with("local:") {
+        return Provider::OpenAI;
+    }
+    if model.starts_with("claude") {
+        return Provider::Claude;
+    }
+    if model.starts_with("gemini") {
+        return Provider::Gemini;
+    }
+    // Legacy fallback: env-configured names or "localllm-*" prefix.
+    let main = std::env::var("VLLM_MAIN_MODEL").unwrap_or_default();
+    let light = std::env::var("VLLM_LIGHT_MODEL").unwrap_or_default();
+    if (!main.is_empty() && model == main)
+        || (!light.is_empty() && model == light)
+        || model.starts_with("localllm")
+    {
+        return Provider::OpenAI;
+    }
+    Provider::Gemini
+}
+
+/// Strip the `openai:` / `local:` prefix from a model id when present.
+pub fn strip_model_prefix(model: &str) -> &str {
+    model
+        .strip_prefix("openai:")
+        .or_else(|| model.strip_prefix("local:"))
+        .unwrap_or(model)
+}
+
+/// Best-effort detection of multimodal (vision-capable) models.
+/// Used to decide whether to send rendered PDF pages to the LLM.
+pub fn is_vision_capable(model: &str) -> bool {
+    let m = strip_model_prefix(model).to_lowercase();
+    m.contains("gemma3")
+        || m.contains("gemma-3")
+        || m.contains("gpt-4o")
+        || m.contains("gpt-4-vision")
+        || m.contains("gpt-4-turbo")
+        || m.contains("claude")
+        || m.contains("gemini")
+        || m.contains("llava")
+        || m.contains("llama3.2-vision")
+        || m.contains("qwen2-vl")
+        || m.contains("qwen2.5-vl")
+        || m.contains("pixtral")
+        || m.contains("vision")
+}
+
+pub async fn stream_chat(params: StreamParams) -> Result<BoxStream> {
+    match provider_for_model(&params.model) {
+        Provider::Claude => claude::stream(params).await,
+        Provider::OpenAI => local::stream(params).await,
+        Provider::Gemini => gemini::stream(params).await,
+    }
+}
+
+pub async fn complete_text(model: &str, system: Option<&str>, user: &str) -> Result<String> {
+    let params = StreamParams {
+        model: model.to_string(),
+        system_prompt: system.unwrap_or("").to_string(),
+        messages: vec![Message::user(user.to_string())],
+        tools: vec![],
+        max_iterations: 1,
+        enable_thinking: false,
+        local_config: None,
+        claude_api_key: None,
+        gemini_api_key: None,
+        gemini_region: None,
+    };
+    match provider_for_model(model) {
+        Provider::Claude => claude::complete(params).await,
+        Provider::OpenAI => local::complete(params).await,
+        Provider::Gemini => gemini::complete(params).await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provider_routing_explicit_prefixes() {
+        assert_eq!(provider_for_model("openai:gpt-4o"), Provider::OpenAI);
+        assert_eq!(provider_for_model("local:llama3"), Provider::OpenAI);
+    }
+
+    #[test]
+    fn provider_routing_claude_family() {
+        assert_eq!(provider_for_model("claude-opus-4-7"), Provider::Claude);
+        assert_eq!(provider_for_model("claude-3-haiku"), Provider::Claude);
+    }
+
+    #[test]
+    fn provider_routing_gemini_family() {
+        assert_eq!(provider_for_model("gemini-2.5-pro"), Provider::Gemini);
+        assert_eq!(provider_for_model("gemini-3-flash-preview"), Provider::Gemini);
+    }
+
+    #[test]
+    fn provider_routing_unknown_falls_back_to_gemini() {
+        // SAFETY: tests run sequentially per default test binary, but we
+        // use unique env-var names so we don't fight other tests.
+        unsafe { std::env::remove_var("VLLM_MAIN_MODEL") };
+        unsafe { std::env::remove_var("VLLM_LIGHT_MODEL") };
+        assert_eq!(provider_for_model("foobar"), Provider::Gemini);
+    }
+
+    #[test]
+    fn strip_model_prefix_handles_known_prefixes() {
+        assert_eq!(strip_model_prefix("openai:gpt-4o"), "gpt-4o");
+        assert_eq!(strip_model_prefix("local:llama3"), "llama3");
+        // No prefix → unchanged.
+        assert_eq!(strip_model_prefix("claude-opus-4-7"), "claude-opus-4-7");
+    }
+
+    #[test]
+    fn vision_capability_known_models() {
+        assert!(is_vision_capable("gpt-4o"));
+        assert!(is_vision_capable("claude-opus-4-7"));
+        assert!(is_vision_capable("gemini-2.5-pro"));
+        assert!(is_vision_capable("gemma-3-27b"));
+        assert!(is_vision_capable("local:gemma3:4b"));
+        assert!(is_vision_capable("openai:gpt-4-turbo"));
+    }
+
+    #[test]
+    fn vision_capability_text_only_models() {
+        assert!(!is_vision_capable("llama3:7b"));
+        assert!(!is_vision_capable("mistral-small"));
+        assert!(!is_vision_capable("gpt-4")); // pre-vision
+    }
+}

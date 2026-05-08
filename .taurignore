@@ -1,0 +1,45 @@
+# Tauri dev watcher ignore file — placed at the workspace root because
+# this is a multi-member workspace ([".", "src-tauri"]) and Tauri's
+# watcher resolves paths relative to here, not just src-tauri/.
+#
+# Without these patterns, the dev loop is broken by:
+#  - Next.js writing frontend/.next/dev/logs/next-development.log on
+#    every request → triggers rebuild → kills app → next request → loop.
+#  - Webpack/Turbopack rewriting build chunks under .next/.
+#  - SQLite WAL/SHM files (defensive — DB is now outside the project).
+#  - Log files anywhere in the tree.
+#  - Generated docs / target / node_modules.
+
+# Frontend build/runtime artifacts
+frontend/.next/
+frontend/out/
+frontend/node_modules/
+
+# Anywhere in the tree (catches stray copies)
+**/*.log
+**/*.db
+**/*.db-shm
+**/*.db-wal
+**/.next/
+**/node_modules/
+**/target/
+
+# Local data & storage (project-relative, in case .env points back here)
+data/
+storage/
+mikerust-logs/
+
+# fastembed model cache — ~280MB of `.part` blobs streamed from
+# HuggingFace on first run. The watcher would see every chunk write
+# and bounce the dev server mid-download. Belt-and-suspenders: we also
+# pin fastembed to a stable location outside the workspace via the
+# FASTEMBED_CACHE_DIR env var (set in lib.rs::load_dotenv), but if
+# anything ever lands under the project tree, ignore it here too.
+**/.fastembed_cache/
+**/fastembed_cache/
+**/*.part
+
+# Tooling state
+.vscode/
+.idea/
+*.swp
