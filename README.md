@@ -1,8 +1,31 @@
 # MikeRust
 
-Sovereign local AI document assistant — Rust+axum backend, SQLite, local filesystem storage, ONNX-based embeddings, Tauri shell, Next.js frontend (forked from `willchen96/mike` upstream).
+Sovereign local AI document assistant — Rust+axum backend, SQLite, local filesystem storage, ONNX-based embeddings, Tauri shell, Next.js frontend (forked from [`willchen96/mike`][upstream] upstream).
 
 Designed to run entirely on the user's machine: no cloud database, no external auth provider, no S3 bucket. Optional LLM API keys are stored locally and never leave the box except to call the model provider the user explicitly configured.
+
+## Lineage
+
+MikeRust derives from the open-source **Mike** project by Will Chen
+([`willchen96/mike`][upstream]) — an AGPL-3.0 AI legal assistant with
+a TypeScript / Express / Supabase / S3 / LibreOffice stack. We keep
+the frontend largely intact (UI, chat panel, citations, document
+viewer) and replace the backend with a Rust+axum implementation that:
+
+  * uses SQLite (via [`sqlite-vec`](https://github.com/asg017/sqlite-vec))
+    instead of Supabase + pgvector;
+  * embeds locally with ONNX (multilingual-e5-base via fastembed +
+    optional DirectML / QNN execution providers);
+  * extracts PDF / DOCX / RTF / XLSX in pure Rust — no LibreOffice
+    process spawn;
+  * ships as a Tauri desktop app with no server-side dependency.
+
+For the original cloud-native upstream, see
+[github.com/willchen96/mike][upstream]. For a different sister fork
+specialised on Danish law, see
+[github.com/marklok/danishmike](https://github.com/marklok/danishmike).
+
+[upstream]: https://github.com/willchen96/mike
 
 ## Quick start
 
@@ -178,8 +201,8 @@ See `.env.example` for the full reference.
 - [docs/CORPORA.md](docs/CORPORA.md) — EUR-Lex + national legal-corpora plan + API survey
 - [docs/EURLEX_REGISTRATION.md](docs/EURLEX_REGISTRATION.md) — EUR-Lex V1 (no auth) + V2 SOAP registration steps
 - [docs/SESSION_RECAP.md](docs/SESSION_RECAP.md) — historical session notes
-- [docs/mike-upstream/](docs/mike-upstream/) — pristine upstream `willchen96/mike` README (for reference)
+- [docs/mike-upstream/](docs/mike-upstream/) — pristine upstream [`willchen96/mike`][upstream] README (for reference)
 
 ## License
 
-Inherits AGPL-3.0 from the upstream `willchen96/mike` frontend. Backend (`src/`, `src-tauri/`) is original Rust and ships under the same license for consistency. See `LICENSE`.
+Inherits AGPL-3.0 from the upstream [`willchen96/mike`][upstream] frontend. Backend (`src/`, `src-tauri/`) is original Rust and ships under the same license for consistency. See `LICENSE`.
