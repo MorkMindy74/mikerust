@@ -221,7 +221,8 @@ See `.env.example` for the full reference.
 | RAG: scanner, chunker, sqlite-vec, fastembed CPU | ✅ |
 | RAG: DirectML / QNN execution providers | ✅ opt-in |
 | LLM: Anthropic / Gemini / OpenAI / vLLM / Ollama | ✅ |
-| MCP client (HTTP/SSE) | ✅ |
+| MCP client (HTTP/SSE) — synchronous tools | ✅ |
+| MCP client — multi-step async flows (request → poll → fetch) | ⚠️ partial — see note below |
 | Routes: auth, user, chat, documents, projects, workflows, sync, tabular-review | ✅ |
 | Chat citations with persistence | ✅ |
 | Chat-attachment hash cache + ref-counted cleanup | ✅ |
@@ -233,6 +234,34 @@ See `.env.example` for the full reference.
 | Italia legale V2 (OpenGA opt-in, Cassazione, live Normattiva) | 🔲 see [CORPORA.md](docs/CORPORA.md) |
 | Italia legale V3 (regional laws, GU, ministerial decrees) | 🔲 |
 | Other corpus ingestors (Retsinformation, Légifrance, BOE, ...) | 🔲 planned |
+
+### Note: MCP client — async multi-step flows
+
+The MCP client successfully discovers servers and dispatches **synchronous
+tool calls** (a tool that returns its real result on the same call). What
+is **not yet reliably handled** is the multi-step async pattern that
+human-in-the-loop MCP servers use — Edge / Semplifica.Edge being the
+canonical case:
+
+```
+Mike → request_pseudonymized_documents       → {session_id, status:"pending"}
+        (Edge waits for the human to approve in its GUI)
+Mike →   get_pseudonymized_documents          → list of pseudonymised files
+Mike →     count entities / download text     → next tools in the chain
+```
+
+Today Mike's auto-chain wrapper covers the immediate `request_*` →
+`get_*` hop (with a 300 s timeout, configurable via
+`MCP_CALL_TIMEOUT_SECS`), but a third-step or beyond — "list the
+pseudonymised files, count their entities, download the pseudonymised
+text" as separate tool invocations within the same conversational turn —
+is not driven correctly by the dispatcher yet. The user has to nudge the
+chat to perform each subsequent step manually.
+
+Tracked as work-in-progress; do **not** modify `MIKE_SYSTEM_PROMPT` or
+`build_mcp_system_prompt` when fixing this — the prompt structure is
+preserved, only the dispatcher mechanics are in scope. See
+[`src/routes/chat.rs`](src/routes/chat.rs) `dispatch_mcp_tool_with_async_chain`.
 
 ## Documentation
 
