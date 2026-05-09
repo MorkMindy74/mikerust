@@ -28,6 +28,7 @@ use std::collections::HashMap;
 // MCP capability discovery — surfaces configured servers to the chat model
 // ---------------------------------------------------------------------------
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct McpDiscovered {
     config_name: String,
     server_name: Option<String>,
@@ -318,17 +319,68 @@ async fn dispatch_mcp_tool(
 }
 
 async fn discover_mcp_for_user(state: &AppState, user_id: &str) -> Vec<McpDiscovered> {
+    let ttl = crate::db::mcp_cache_ttl();
+
+    // Cache hit: deserialise and return without touching the network.
+    {
+        let cache = state.mcp_discovery_cache.read().await;
+        if let Some(entry) = cache.get(user_id) {
+            if entry.is_fresh(ttl) {
+                if let Ok(parsed) =
+                    serde_json::from_str::<Vec<McpDiscovered>>(&entry.payload_json)
+                {
+                    tracing::info!(
+                        "[mcp/discover] cache hit for user={}: {} servers ({} sec old, ttl {}s)",
+                        user_id,
+                        parsed.len(),
+                        entry.stored_at.elapsed().as_secs(),
+                        ttl.as_secs(),
+                    );
+                    return parsed;
+                }
+                tracing::warn!(
+                    "[mcp/discover] cache entry deserialise failed for user={}, re-discovering",
+                    user_id
+                );
+            }
+        }
+    }
+
+    // Cache miss / stale: do the full handshake.
     let servers = match fetch_mcp_servers(&state.db, user_id).await {
         Ok(v) => v,
         Err(_) => return vec![],
     };
-    let enabled: Vec<McpServerOut> = servers.into_iter().filter(|s| s.enabled).collect();
+    let enabled: Vec<McpServerOut> =
+        servers.into_iter().filter(|s| s.enabled).collect();
     if enabled.is_empty() {
+        // Drop any prior cached entry — the user just disabled all servers.
+        state.mcp_discovery_cache.write().await.remove(user_id);
         return vec![];
     }
     use futures_util::future::join_all;
     let futs = enabled.into_iter().map(discover_one_mcp);
-    join_all(futs).await.into_iter().flatten().collect()
+    let discovered: Vec<McpDiscovered> =
+        join_all(futs).await.into_iter().flatten().collect();
+    tracing::info!(
+        "[mcp/discover] cache miss for user={}: discovered {} servers via fresh handshake",
+        user_id,
+        discovered.len()
+    );
+
+    // Store in cache for next request.
+    if let Ok(payload_json) = serde_json::to_string(&discovered) {
+        let mut g = state.mcp_discovery_cache.write().await;
+        g.insert(
+            user_id.to_string(),
+            crate::db::McpDiscoveryCacheEntry {
+                stored_at: std::time::Instant::now(),
+                payload_json,
+            },
+        );
+    }
+
+    discovered
 }
 
 fn build_mcp_system_prompt(servers: &[McpDiscovered]) -> String {
@@ -1547,6 +1599,32 @@ async fn stream_chat_root(
         mcp_tools_enabled,
         doc_label_map.keys().collect::<Vec<_>>()
     );
+    // Verbose dump of the MCP tool names actually being shipped in the
+    // request — invaluable when a user reports "the model never calls
+    // my MCP tool". If this log shows the tool name, the schema is on
+    // the wire; if not, either the gate dropped it (model-not-supported)
+    // or discovery never returned it (server-side handshake failure).
+    if mcp_tools_enabled && mcp_tool_count > 0 {
+        let mcp_tool_names: Vec<&str> = mcp_servers
+            .iter()
+            .flat_map(|s| s.tool_schemas.iter().map(|t| t.function.name.as_str()))
+            .collect();
+        tracing::info!(
+            "[chat] MCP tools shipped to model: {:?}",
+            mcp_tool_names
+        );
+    } else if mcp_tool_count > 0 {
+        let server_names: Vec<&str> = mcp_servers
+            .iter()
+            .map(|s| s.config_name.as_str())
+            .collect();
+        tracing::info!(
+            "[chat] MCP servers discovered ({} tools total) but NOT shipped — model {:?} not in supports_mcp_tools allowlist. Servers: {:?}. Set MIKE_FORCE_MCP_TOOLS=1 to override.",
+            mcp_tool_count,
+            raw_model,
+            server_names
+        );
+    }
 
     let claude_key = user_settings.as_ref().and_then(|s| s.claude_api_key.clone());
     let gemini_key = user_settings.as_ref().and_then(|s| s.gemini_api_key.clone());

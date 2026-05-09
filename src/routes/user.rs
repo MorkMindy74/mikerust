@@ -500,6 +500,11 @@ async fn upsert_mcp_inner(
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
+    // Drop the chat handler's MCP discovery cache for this user — the
+    // server config just changed, the cached `tools/list` snapshot is
+    // probably stale (different URL, different auth, possibly disabled).
+    state.invalidate_mcp_cache_for_user(&auth.user_id).await;
+
     Ok(Json(json!({ "ok": true, "name": target_name })))
 }
 
@@ -913,6 +918,7 @@ async fn delete_mcp_server(
         .execute(&state.db)
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    state.invalidate_mcp_cache_for_user(&auth.user_id).await;
     Ok(Json(json!({ "ok": true })))
 }
 

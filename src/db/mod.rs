@@ -34,6 +34,39 @@ fn default_db_url() -> String {
 /// and sends back Ok(true/false) or Err(message).
 pub type BiometricRequest = (String, oneshot::Sender<Result<bool, String>>);
 
+/// How long an MCP discovery snapshot stays valid before we re-run the
+/// `initialize → tools/list → prompts/list` handshake. Five minutes
+/// matches the typical horizon at which an MCP server might cycle a
+/// session id; before this cache, every chat turn paid the full
+/// handshake cost on every configured server. Configurable via env
+/// override `MCP_CACHE_TTL_SECS` for tuning / tests.
+pub fn mcp_cache_ttl() -> std::time::Duration {
+    std::env::var("MCP_CACHE_TTL_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .map(std::time::Duration::from_secs)
+        .unwrap_or_else(|| std::time::Duration::from_secs(300))
+}
+
+/// Stored per-user. We carry the discovery payload as opaque JSON so
+/// `db/mod.rs` doesn't depend on the routes layer's `McpDiscovered`
+/// type — the chat handler serialises into this on insert and
+/// deserialises on read. Cheap (a handful of MCP servers per user;
+/// each one a few hundred bytes of JSON).
+#[derive(Clone)]
+pub struct McpDiscoveryCacheEntry {
+    pub stored_at: std::time::Instant,
+    /// JSON-encoded `Vec<McpDiscovered>`. Kept as a string to keep
+    /// this module dependency-free.
+    pub payload_json: String,
+}
+
+impl McpDiscoveryCacheEntry {
+    pub fn is_fresh(&self, ttl: std::time::Duration) -> bool {
+        self.stored_at.elapsed() < ttl
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub db: SqlitePool,
@@ -45,6 +78,16 @@ pub struct AppState {
     /// for `tools=[…]` (e.g. Ollama Gemma3 returns "does not support tools").
     /// Avoids paying the round-trip on every chat request.
     pub no_tools_models: Arc<RwLock<HashSet<String>>>,
+
+    /// Per-user MCP discovery cache. Avoids re-running the
+    /// `initialize → notifications/initialized → tools/list → prompts/list`
+    /// handshake on every chat turn — without this every user message
+    /// hammered every configured MCP server with a fresh session id.
+    /// TTL-based; entries older than `MCP_CACHE_TTL` are re-discovered
+    /// on the next chat. Manually invalidated when the user updates
+    /// MCP server settings (POST/PUT/DELETE on /user/mcp).
+    pub mcp_discovery_cache:
+        Arc<RwLock<HashMap<String, McpDiscoveryCacheEntry>>>,
 
     /// Process-wide embedding service (loads multilingual-e5-base once
     /// on first use and reuses it). `None` when the `rag` feature is
@@ -119,11 +162,21 @@ impl AppState {
             sessions,
             biometric_tx: None,
             no_tools_models: Arc::new(RwLock::new(HashSet::new())),
+            mcp_discovery_cache: Arc::new(RwLock::new(HashMap::new())),
             #[cfg(feature = "rag")]
             embeddings,
             #[cfg(feature = "rag")]
             scans: Arc::new(RwLock::new(HashMap::new())),
         })
+    }
+
+    /// Invalidate any cached MCP discovery for this user. Called from
+    /// the /user/mcp settings endpoints whenever the user adds, edits
+    /// or removes a server, so the next chat re-runs discovery instead
+    /// of using a stale (possibly broken) tool list.
+    pub async fn invalidate_mcp_cache_for_user(&self, user_id: &str) {
+        let mut g = self.mcp_discovery_cache.write().await;
+        g.remove(user_id);
     }
 
     pub async fn run_migrations(&self) -> Result<()> {
