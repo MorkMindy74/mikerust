@@ -1272,19 +1272,30 @@ export function AssistantMessage({
             );
         }
         if (event.type === "tool_call_start") {
+            const elapsed = event.elapsedSecs ?? 0;
+            const showSlowHint = elapsed >= 10;
             return (
-                <div
-                    key={globalIdx}
-                    className="flex items-center text-sm font-serif text-gray-500 relative"
-                >
-                    {showConnector && (
-                        <div className="absolute bottom-0 w-[1px] bg-gray-300 top-[13px] left-[2.5px] h-[calc(100%+11px)]" />
+                <div key={globalIdx} className="relative">
+                    <div className="flex items-center text-sm font-serif text-gray-500">
+                        {showConnector && (
+                            <div className="absolute bottom-0 w-[1px] bg-gray-300 top-[13px] left-[2.5px] h-[calc(100%+11px)]" />
+                        )}
+                        <div className="w-1.5 h-1.5 rounded-full border border-gray-400 border-t-transparent animate-spin shrink-0" />
+                        <span className="font-medium ml-2">{tA("running")}</span>
+                        <span className="ml-1">
+                            {event.name ? `${event.name}...` : "tool..."}
+                        </span>
+                        {elapsed > 0 && (
+                            <span className="ml-2 text-xs text-gray-400 tabular-nums">
+                                {elapsed}s
+                            </span>
+                        )}
+                    </div>
+                    {showSlowHint && (
+                        <div className="ml-4 mt-1 text-xs text-amber-700 italic leading-snug">
+                            {tA("slowToolHint")}
+                        </div>
                     )}
-                    <div className="w-1.5 h-1.5 rounded-full border border-gray-400 border-t-transparent animate-spin shrink-0" />
-                    <span className="font-medium ml-2">{tA("running")}</span>
-                    <span className="ml-1">
-                        {event.name ? `${event.name}...` : "tool..."}
-                    </span>
                 </div>
             );
         }

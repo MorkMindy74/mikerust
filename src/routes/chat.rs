@@ -1900,6 +1900,48 @@ async fn stream_chat_root(
                         let payload = json!({ "type": "tool_call_start", "name": call.name });
                         let _ = tx.send(Ok(Event::default().data(payload.to_string()))).await;
 
+                        // Race the dispatch against a 5-s ticker that
+                        // emits `tool_call_progress` SSE events to the
+                        // browser. Without this, slow MCP tools (e.g.
+                        // Edge's pseudonymise-with-human-approval flow
+                        // that can hold the connection for minutes
+                        // while a user clicks Conferma in the Edge UI)
+                        // looked silent in the chat — the user thought
+                        // Mike had died. Now the chat shows
+                        // "Sto eseguendo X (37s)…" so the wait is
+                        // visibly progressing.
+                        let dispatch_start_ts = std::time::Instant::now();
+                        let tool_name_for_progress = call.name.clone();
+                        let tx_progress = tx.clone();
+                        let progress_task = tokio::spawn(async move {
+                            // First tick at 5 s, then every 5 s after.
+                            let mut ticker = tokio::time::interval(
+                                std::time::Duration::from_secs(5),
+                            );
+                            // Skip the immediate first tick that
+                            // tokio::interval fires.
+                            ticker.tick().await;
+                            loop {
+                                ticker.tick().await;
+                                let elapsed_secs =
+                                    dispatch_start_ts.elapsed().as_secs();
+                                let payload = json!({
+                                    "type": "tool_call_progress",
+                                    "name": tool_name_for_progress,
+                                    "elapsed_secs": elapsed_secs,
+                                });
+                                if tx_progress
+                                    .send(Ok(Event::default()
+                                        .data(payload.to_string())))
+                                    .await
+                                    .is_err()
+                                {
+                                    // Receiver gone — stop ticking.
+                                    return;
+                                }
+                            }
+                        });
+
                         let result = if builtin_tools::is_builtin(&call.name) {
                             tracing::info!("[chat] dispatching builtin tool: {}", call.name);
                             builtin_tools::dispatch(
@@ -1914,6 +1956,7 @@ async fn stream_chat_root(
                             tracing::info!("[chat] dispatching MCP tool: {}", call.name);
                             dispatch_mcp_tool(&mcp_servers, &call.name, &call.input).await
                         };
+                        progress_task.abort();
                         // For diagnostics: when a tool result is short
                         // it's almost always an error envelope or a
                         // pointer to async work. Log the body verbatim

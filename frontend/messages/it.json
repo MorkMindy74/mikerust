@@ -290,6 +290,7 @@
         "stop": "Interrompi",
         "thinking": "Sto pensando…",
         "running": "In esecuzione…",
+        "slowToolHint": "Alcuni tool MCP attendono una conferma manuale lato server (es. clic su \"Approva\" nella UI del server). Continua ad aspettare — il risultato arriverà non appena il server lo rilascia.",
         "addDocument": "Allega documento",
         "addProject": "Aggiungi progetto",
         "addWorkflow": "Aggiungi workflow",

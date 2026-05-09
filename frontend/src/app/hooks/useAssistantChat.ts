@@ -642,6 +642,58 @@ export function useAssistantChat({
                             continue;
                         }
 
+                        if (data.type === "tool_call_progress") {
+                            // Backend ticker: update the elapsed_secs
+                            // on the in-flight tool_call_start
+                            // placeholder so the UI can render
+                            // "Sto eseguendo X (37s)…" without us
+                            // having to count seconds client-side.
+                            const name = (data.name as string) ?? "";
+                            const elapsed =
+                                typeof data.elapsed_secs === "number"
+                                    ? data.elapsed_secs
+                                    : Number(data.elapsed_secs ?? 0);
+                            const events = eventsRef.current;
+                            const idx = (() => {
+                                for (
+                                    let i = events.length - 1;
+                                    i >= 0;
+                                    i--
+                                ) {
+                                    const ev = events[i];
+                                    if (
+                                        ev.type === "tool_call_start" &&
+                                        ev.name === name &&
+                                        ev.isStreaming
+                                    ) {
+                                        return i;
+                                    }
+                                }
+                                return -1;
+                            })();
+                            if (idx >= 0) {
+                                const next = [...events];
+                                const ev = next[idx];
+                                if (ev.type === "tool_call_start") {
+                                    next[idx] = { ...ev, elapsedSecs: elapsed };
+                                }
+                                eventsRef.current = next;
+                                const snapshot = [...next];
+                                setMessages((prev) => {
+                                    const updated = [...prev];
+                                    const last = updated[updated.length - 1];
+                                    if (last?.role === "assistant") {
+                                        updated[updated.length - 1] = {
+                                            ...last,
+                                            events: snapshot,
+                                        };
+                                    }
+                                    return updated;
+                                });
+                            }
+                            continue;
+                        }
+
                         if (data.type === "workflow_applied") {
                             pushEvent({
                                 type: "workflow_applied",

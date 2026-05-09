@@ -290,6 +290,7 @@
         "stop": "Stop",
         "thinking": "Thinking…",
         "running": "Running…",
+        "slowToolHint": "Some MCP tools wait for a manual confirmation on the server side (e.g. an \"Approve\" click in the server's UI). Keep waiting — the result will arrive as soon as the server releases it.",
         "addDocument": "Attach document",
         "addProject": "Add project",
         "addWorkflow": "Add workflow",

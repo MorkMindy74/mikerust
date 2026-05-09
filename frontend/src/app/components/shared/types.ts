@@ -93,6 +93,13 @@ export type AssistantEvent =
         type: "tool_call_start";
         name: string;
         isStreaming?: boolean;
+        /** Updated in place by `tool_call_progress` SSE events the backend
+         *  emits every 5 s while a tool is still in flight. The UI uses
+         *  this to show "Sto eseguendo X (Ns)…" so the user knows the
+         *  long wait is intentional (e.g. an MCP tool that requires a
+         *  manual approval click on the server side). Absent on the
+         *  initial event; populated thereafter. */
+        elapsedSecs?: number;
     }
   | { type: "thinking"; isStreaming?: boolean }
   | {
