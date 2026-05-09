@@ -103,24 +103,54 @@ export function ChatView({
      */
     const upsertTab = useCallback(
         (tab: AssistantSidePanelTab) => {
+            // React `key` invariant: every tab MUST have a non-empty,
+            // unique id. The various `openCitation` / `openEditor` /
+            // `openDocument` paths used to assign `tab.id` from
+            // different source fields (`citation.path`,
+            // `citation.document_id`, `ann.document_id`,
+            // `args.documentId`), which left two cracks:
+            //
+            //   1. KB citations with neither `path` nor `document_id`
+            //      ended up with `id: undefined` — multiple such tabs
+            //      collided into a single React-rendered "undefined"
+            //      key.
+            //   2. A KB tab whose path happened to equal a later
+            //      non-KB tab's documentId pushed two tabs sharing
+            //      the same `id` but with different `documentId`,
+            //      slipping past the dedup-by-documentId check.
+            //
+            // We normalise the id to documentId here (with a hashed
+            // fallback when documentId itself is missing) so the
+            // invariant "tab.id === tab.documentId, always non-empty
+            // and unique" holds end-to-end.
+            const documentIdSafe =
+                typeof tab.documentId === "string" && tab.documentId.length > 0
+                    ? tab.documentId
+                    : `tab-${Date.now()}-${Math.random()
+                          .toString(36)
+                          .slice(2, 8)}`;
+            const normalised: AssistantSidePanelTab = {
+                ...tab,
+                id: documentIdSafe,
+                documentId: documentIdSafe,
+            };
             setTabs((prev) => {
                 const idx = prev.findIndex(
-                    (t) => t.documentId === tab.documentId,
+                    (t) => t.documentId === normalised.documentId,
                 );
                 if (idx >= 0) {
                     const existing = prev[idx];
                     const copy = prev.slice();
                     copy[idx] = {
-                        ...tab,
-                        id: existing.id,
+                        ...normalised,
                         warning: existing.warning,
                         initialScrollTop: existing.initialScrollTop,
                     };
                     return copy;
                 }
-                return [...prev, tab];
+                return [...prev, normalised];
             });
-            setActiveTabId(tab.id);
+            setActiveTabId(normalised.id);
             showPanel();
         },
         [showPanel],
