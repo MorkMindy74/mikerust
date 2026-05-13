@@ -135,7 +135,12 @@ Adding a new builtin: implement `LegalCorpusAdapter`, register the
 [`src/corpora/plugin.rs`](../src/corpora/plugin.rs), ship a manifest
 that points at it.
 
-### `http-fetch-per-id` *(reserved, not yet implemented)*
+### `http-fetch-per-id`
+
+Declarative REST corpora. The JSON manifest carries the URL templates
+and extraction rules; the runtime `ManifestAdapter` interprets them
+and implements `LegalCorpusAdapter` generically. **No per-corpus
+Rust code.** This is how CNIL is wired today.
 
 ```json
 "strategy": {
@@ -156,10 +161,41 @@ that points at it.
 }
 ```
 
-Loads fine today; the runtime marks the corpus as not-runnable
-(`is_runnable() == false`) until the declarative HTTP adapter
-lands. Will cover the 70% case: REST endpoints with JSON / HTML
-responses and standard auth.
+Template placeholders (percent-encoded at substitution):
+  - `{identifier}` — corpus-native id (CELEX, ref-CNIL, BOE-A-…)
+  - `{query}`      — user-typed free-text
+  - `{lang}`       — ISO-639-1 code from corpus settings
+  - `{limit}`      — search-result cap (server picks default 20)
+
+Unresolved placeholders after substitution fail with a clear error —
+typos don't produce `https://...{garbled}/...` URLs.
+
+Response shapes:
+  - `rest-html` — CSS selectors via `scraper` crate
+  - `rest-json` — tiny JSONPath subset: `$.a.b`, `$.a[0]`, `$.a[*].b`
+
+Selector-syntax extensions (work in both shapes where it makes sense):
+  - `selector@attr` — read an HTML attribute instead of element text
+  - `selector:strip-prefix=PFX` — trim a literal prefix
+  - `selector:strip-suffix=SFX` — trim a literal suffix
+
+Postprocessors stack: `a@href:strip-prefix=/fr/deliberation/` is
+"select the `<a>`, read `href`, strip the URL prefix". Used in the
+CNIL manifest to recover bare identifiers from `href` URLs.
+
+Generic routes that consume these strategies:
+
+| Verb / Path | Capability | What it does |
+|---|---|---|
+| `POST /corpora/:id/search` | `search` | Calls `search_by_id` if input has no whitespace and is short, else `search_by_keyword`. |
+| `POST /corpora/:id/fetch`  | `fetch`  | Calls `search_by_id.url_template`, extracts `title_path`/`body_path`, stores via hash-keyed cache, inserts a `documents` row, runs RAG indexing. |
+| `GET /corpora/:id/documents` | `documents` | Filtered list from `documents` where `corpus_id = :id`. |
+
+Builtin corpora (EUR-Lex, Italian Legal) bypass these routes today —
+their dedicated `/eurlex/*` / `/italian-legal/*` endpoints continue
+to work. The generic router returns `501 Not Implemented` for
+builtin corpus ids until the migration to a single set of routes
+finishes.
 
 ### `hf-dataset-bulk` *(reserved, not yet implemented)*
 

@@ -118,12 +118,25 @@ pub struct AppState {
     pub scans: Arc<RwLock<HashMap<String, ScanProgressHandle>>>,
 
     /// JSON-driven corpus plugin registry, loaded once at startup from
-    /// `MIKE_CORPUS_PLUGINS_DIR` (or `./corpora-plugins` by default).
-    /// Read by the `/corpora` endpoint and by the chat library-inventory
-    /// builder. Empty when no manifest directory exists — the hardcoded
-    /// EUR-Lex / Italian routes still work, the registry is purely
-    /// metadata for discovery and UI.
+    /// `MIKE_CORPUS_PLUGINS_DIR` (or walks ancestors for `corpora-plugins`
+    /// by default). Read by the `/corpora` endpoint and by the chat
+    /// library-inventory builder. Empty when no manifest directory
+    /// exists — the hardcoded EUR-Lex / Italian routes still work,
+    /// the registry is purely metadata for discovery and UI.
     pub corpus_plugins: Arc<Vec<crate::corpora::plugin::CorpusPlugin>>,
+
+    /// Per-corpus runtime adapter for declarative corpora
+    /// (`strategy.kind == "http-fetch-per-id"`). Keyed by corpus id.
+    /// Built once at startup from `corpus_plugins`. The generic
+    /// `/corpora/:id/{search,fetch}` routes look up this map to
+    /// dispatch HTTP fetch + extraction without per-corpus Rust code.
+    ///
+    /// Builtin corpora (EUR-Lex, Italian Legal) are NOT in this
+    /// registry today — their existing `/eurlex/*` /
+    /// `/italian-legal/*` routes call their adapters directly. They
+    /// migrate here when we converge on generic routes.
+    pub corpus_adapters:
+        Arc<crate::corpora::manifest_adapter::AdapterRegistry>,
 }
 
 impl AppState {
@@ -203,6 +216,15 @@ impl AppState {
                 Vec::new()
             }
         };
+        // Build the runtime adapter registry for declarative corpora.
+        // Builtin corpora are intentionally NOT inserted here yet —
+        // see comment on AppState::corpus_adapters.
+        let corpus_adapters =
+            crate::corpora::manifest_adapter::build_adapter_registry(&corpus_plugins);
+        tracing::info!(
+            "[corpus-adapters] {} declarative adapter(s) registered",
+            corpus_adapters.len()
+        );
 
         Ok(Self {
             db,
@@ -215,6 +237,7 @@ impl AppState {
             #[cfg(feature = "rag")]
             scans: Arc::new(RwLock::new(HashMap::new())),
             corpus_plugins: Arc::new(corpus_plugins),
+            corpus_adapters: Arc::new(corpus_adapters),
         })
     }
 

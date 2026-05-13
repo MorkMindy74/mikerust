@@ -37,10 +37,20 @@ interface TabGroup {
  * Kept here on purpose — not in the manifest — because the routing
  * decision is a frontend concern, not a corpus-config concern.
  */
+/**
+ * Explicit overrides for corpora that have hand-written legacy pages
+ * (EUR-Lex, Italian Legal). Any corpus NOT listed here falls through
+ * to the generic `/account/corpora/<id>` page, which renders from
+ * `/corpora/:id` metadata — capabilities, sources, identifier label.
+ */
 const CORPUS_ROUTE_BY_ID: Record<string, string> = {
     eurlex: "/account/eurlex",
     "italian-legal": "/account/italia-legale",
 };
+
+function routeForCorpus(corpusId: string): string {
+    return CORPUS_ROUTE_BY_ID[corpusId] ?? `/account/corpora/${corpusId}`;
+}
 
 export default function AccountLayout({
     children,
@@ -102,8 +112,8 @@ export default function AccountLayout({
             },
         ];
         for (const c of corpora ?? []) {
-            const route = CORPUS_ROUTE_BY_ID[c.id] ?? null;
-            const runnable = c.runnable && route !== null;
+            const route = routeForCorpus(c.id);
+            const runnable = c.runnable;
             // Per-locale name resolution at the consumer (the
             // manifest sends the full map but the API projection
             // already collapsed it to `display_name` at the

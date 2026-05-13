@@ -247,9 +247,7 @@ fn default_true() -> bool {
     true
 }
 
-/// Backend strategy. Only `builtin` is implemented today; the other
-/// variants are sketched here so future migrations don't need a
-/// manifest-format bump.
+/// Backend strategy. Discriminated union; `kind` chooses the variant.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum CorpusStrategy {
@@ -260,19 +258,109 @@ pub enum CorpusStrategy {
         builtin_id: String,
     },
 
-    /// Future: declarative HTTP fetch per identifier.
-    /// Reserved variant — parses fine but not yet honored by the
-    /// runtime; loading a manifest with this strategy emits a
-    /// warning and the corpus is treated as disabled until the
-    /// runtime implements it.
+    /// Declarative REST fetch driven entirely by the JSON manifest.
+    /// A generic `ManifestAdapter` reads `spec` and implements
+    /// `LegalCorpusAdapter` against it: URL-template substitution,
+    /// HTTP GET, CSS-selector / JSONPath extraction. See
+    /// `manifest_adapter.rs` for the runtime.
     #[serde(rename = "http-fetch-per-id")]
-    HttpFetchPerId(serde_json::Value),
+    HttpFetchPerId(HttpFetchPerIdSpec),
 
     /// Future: bulk metadata import from a Hugging Face dataset
     /// (parquet projection + filtered rows). What the current
     /// `italian_legal` adapter does today.
     #[serde(rename = "hf-dataset-bulk")]
     HfDatasetBulk(serde_json::Value),
+}
+
+/// Declarative spec for the `http-fetch-per-id` strategy. Two
+/// sub-specs (`search_by_id`, `search_by_keyword`) describe a URL
+/// template plus extraction rules for the response. The generic
+/// `ManifestAdapter` interprets these at runtime.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct HttpFetchPerIdSpec {
+    /// Resolve `{identifier}` (and `{lang}` if templated) to a doc
+    /// URL, fetch it, extract title + body + optional date. Required.
+    pub search_by_id: HttpFetchByIdSpec,
+
+    /// Resolve `{query}` (and `{lang}` if templated) to a search
+    /// URL, fetch it, walk the hit list. Optional — manifest can
+    /// declare `capabilities.search = false` and omit this entirely.
+    #[serde(default)]
+    pub search_by_keyword: Option<HttpSearchKeywordSpec>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct HttpFetchByIdSpec {
+    /// HTTP URL template with `{identifier}` and optional `{lang}`
+    /// placeholders. Placeholders are percent-encoded at substitution
+    /// time; unknown placeholders cause the substitution to fail
+    /// (with a runtime warning) so a typo doesn't silently produce
+    /// `https://...{garbled}/...` URLs.
+    pub url_template: String,
+
+    /// Response shape — drives which extraction engine runs.
+    pub shape: ResponseShape,
+
+    /// Selector for the document title. CSS-selector when
+    /// `shape == "rest-html"`, JSONPath when `shape == "rest-json"`.
+    /// Supports the `@attr` suffix to read an attribute instead of
+    /// the element's text (HTML only).
+    #[serde(default)]
+    pub title_path: Option<String>,
+
+    /// Selector for the document body. Same syntax as `title_path`.
+    /// Required: a fetch with no body is useless.
+    pub body_path: String,
+
+    /// Selector for an ISO-8601 date. Optional.
+    #[serde(default)]
+    pub date_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct HttpSearchKeywordSpec {
+    /// HTTP URL template with `{query}` and optional `{lang}`,
+    /// `{limit}` placeholders.
+    pub url_template: String,
+
+    /// Response shape.
+    pub shape: ResponseShape,
+
+    /// Selector that returns ONE element per hit. The
+    /// `identifier_at` / `title_at` selectors are then evaluated
+    /// *within* each hit element (HTML) or item object (JSON).
+    pub hits_path: String,
+
+    /// Selector for the corpus-native identifier inside a single hit.
+    /// Supports HTML `@attr` and `:strip-prefix=...` /
+    /// `:strip-suffix=...` postprocessors so e.g. `href` attributes
+    /// can be trimmed to just the identifier.
+    pub identifier_at: String,
+
+    /// Selector for the hit title. Same syntax.
+    pub title_at: String,
+
+    /// Optional date selector inside the hit.
+    #[serde(default)]
+    pub date_at: Option<String>,
+}
+
+/// Response shape understood by the declarative engine. `rest-html`
+/// uses `scraper` (CSS selectors); `rest-json` uses a tiny JSONPath
+/// subset. Both modes share the same `@attr` and `:strip-*` syntax
+/// where it makes sense.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ResponseShape {
+    RestHtml,
+    RestJson,
+}
+
+impl Default for ResponseShape {
+    fn default() -> Self {
+        ResponseShape::RestHtml
+    }
 }
 
 impl CorpusPlugin {
@@ -384,9 +472,13 @@ impl CorpusPlugin {
     }
 
     /// Convenience: is this manifest backed by a runnable adapter
-    /// today? `false` for strategies we've parsed but not yet wired.
+    /// today? `false` for strategies we've parsed but not yet wired
+    /// (currently only `hf-dataset-bulk`).
     pub fn is_runnable(&self) -> bool {
-        matches!(self.strategy, CorpusStrategy::Builtin { .. })
+        matches!(
+            self.strategy,
+            CorpusStrategy::Builtin { .. } | CorpusStrategy::HttpFetchPerId(_)
+        )
     }
 }
 
@@ -654,10 +746,10 @@ mod tests {
     }
 
     #[test]
-    fn parses_future_http_fetch_strategy_but_marks_not_runnable() {
-        // Manifest with the future strategy parses fine — we just
-        // don't run it yet. is_runnable() returns false so callers
-        // can filter it out.
+    fn parses_http_fetch_strategy_and_marks_runnable() {
+        // Http-fetch-per-id is implemented by ManifestAdapter, so a
+        // valid manifest with that strategy is now runnable.
+        // body_path is required (a fetch with no body is useless).
         let json = r#"{
             "id": "future",
             "display_name": "Future",
@@ -667,14 +759,30 @@ mod tests {
             "identifier_label": "X",
             "strategy": {
                 "kind": "http-fetch-per-id",
-                "search_by_id": { "url_template": "https://example.com/{id}" }
+                "search_by_id": {
+                    "url_template": "https://example.com/{identifier}",
+                    "shape": "rest-html",
+                    "body_path": "main"
+                }
             }
         }"#;
         let plugin: CorpusPlugin = serde_json::from_str(json).unwrap();
-        // Validation passes (unknown-builtin check only fires for the
-        // Builtin strategy).
         plugin.validate().unwrap();
-        assert!(!plugin.is_runnable());
+        assert!(plugin.is_runnable());
+        // The hf-dataset-bulk variant remains a placeholder and is
+        // therefore NOT runnable yet.
+        let hf_json = r#"{
+            "id": "later",
+            "display_name": "Later",
+            "languages": ["en"],
+            "default_language": "en",
+            "fallback_language": "en",
+            "identifier_label": "X",
+            "strategy": { "kind": "hf-dataset-bulk" }
+        }"#;
+        let later: CorpusPlugin = serde_json::from_str(hf_json).unwrap();
+        later.validate().unwrap();
+        assert!(!later.is_runnable());
     }
 
     #[test]

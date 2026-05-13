@@ -14,6 +14,7 @@ use async_trait::async_trait;
 
 pub mod eurlex;
 pub mod italian_legal;
+pub mod manifest_adapter;
 pub mod plugin;
 
 /// Search hit returned by a corpus adapter — enough to render in a UI
