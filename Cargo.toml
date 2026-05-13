@@ -126,6 +126,15 @@ tokio-stream = "0.1"
 bytes = "1"
 
 # ------------------------------------------------------------------
+# Bulk-archive decoding — DILA OPENDATA + future BOE/GU/Gesetze
+# All these portals publish their legal corpora as tar.gz dumps;
+# tar + flate2 lets us stream-walk an archive without holding it
+# all in RAM.
+# ------------------------------------------------------------------
+flate2 = "1"
+tar = "0.4"
+
+# ------------------------------------------------------------------
 # MCP client — protocol wire types (no official Rust SDK yet)
 # ------------------------------------------------------------------
 # Uses reqwest + serde_json for Streamable HTTP and SSE transports

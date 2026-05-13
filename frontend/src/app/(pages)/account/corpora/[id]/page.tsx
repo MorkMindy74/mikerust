@@ -14,9 +14,21 @@
 
 import { use, useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Loader2, Search, AlertCircle, CheckCircle2, ExternalLink } from "lucide-react";
+import {
+    Loader2,
+    Search,
+    AlertCircle,
+    CheckCircle2,
+    ExternalLink,
+    Download,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+    startCorpusImport,
+    getCorpusImportStatus,
+    type BulkImportStatus,
+} from "@/app/lib/mikeApi";
 
 const API_BASE =
     process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
@@ -65,6 +77,12 @@ interface CorpusSource {
     status_label?: string | null;
 }
 
+interface CorpusLicense {
+    id: string;
+    attribution: string;
+    url?: string | null;
+}
+
 interface CorpusItem {
     id: string;
     display_name: string;
@@ -80,6 +98,7 @@ interface CorpusItem {
     runnable: boolean;
     capabilities: CorpusCapabilities;
     sources: CorpusSource[];
+    license?: CorpusLicense | null;
 }
 
 interface SearchHit {
@@ -118,6 +137,10 @@ export default function GenericCorpusPage({
     const [syncing, setSyncing] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [indexedDocs, setIndexedDocs] = useState<IndexedDoc[]>([]);
+    const [importStatus, setImportStatus] = useState<BulkImportStatus | null>(
+        null,
+    );
+    const [importing, setImporting] = useState(false);
 
     useEffect(() => {
         let cancelled = false;
@@ -151,8 +174,35 @@ export default function GenericCorpusPage({
         if (corpus?.capabilities.documents) {
             void refreshIndexed();
         }
+        if (corpus?.capabilities.bulk_import) {
+            getCorpusImportStatus(corpus.id)
+                .then(setImportStatus)
+                .catch((e) =>
+                    console.warn("[corpora] import-status failed:", e),
+                );
+        }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [corpus?.id]);
+
+    const triggerImport = async () => {
+        if (!corpus?.capabilities.bulk_import) return;
+        setError(null);
+        setImporting(true);
+        try {
+            const stats = await startCorpusImport(corpus.id);
+            setImportStatus({
+                imported: true,
+                last_archive_url: stats.archive_url,
+                last_archive_ts: stats.archive_ts,
+                last_imported_at: new Date().toISOString(),
+                doc_count: stats.inserted,
+            });
+        } catch (e) {
+            setError(String(e));
+        } finally {
+            setImporting(false);
+        }
+    };
 
     const runSearch = async () => {
         setError(null);
@@ -224,7 +274,80 @@ export default function GenericCorpusPage({
                         {corpus.description}
                     </p>
                 )}
+                {corpus.license && (
+                    <p className="mt-2 text-[11px] text-gray-400">
+                        {corpus.license.attribution}
+                        {corpus.license.url && (
+                            <>
+                                {" "}
+                                ·{" "}
+                                <a
+                                    href={corpus.license.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="underline hover:text-gray-600"
+                                >
+                                    {corpus.license.id}
+                                </a>
+                            </>
+                        )}
+                    </p>
+                )}
             </div>
+
+            {/* Bulk import (only for corpora with the capability) */}
+            {corpus.capabilities.bulk_import && (
+                <section className="border border-gray-200 rounded-lg p-4 space-y-2">
+                    <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                            <div className="text-sm font-medium">
+                                {importStatus?.imported
+                                    ? "Snapshot importato"
+                                    : "Importa l'indice del corpus"}
+                            </div>
+                            <div className="text-xs text-gray-500 mt-0.5">
+                                {importStatus?.imported && importStatus.last_archive_ts ? (
+                                    <>
+                                        Snapshot del{" "}
+                                        <span className="font-medium text-gray-700">
+                                            {importStatus.last_archive_ts.slice(0, 4)}
+                                            -
+                                            {importStatus.last_archive_ts.slice(4, 6)}
+                                            -
+                                            {importStatus.last_archive_ts.slice(6, 8)}
+                                        </span>
+                                        {" · "}
+                                        {importStatus.doc_count} documenti indicizzati.
+                                        La versione autoritativa resta la fonte originale.
+                                    </>
+                                ) : (
+                                    <>
+                                        Scarica e indicizza localmente il dump
+                                        completo. Operazione one-shot; ripetila per
+                                        aggiornare allo snapshot più recente.
+                                    </>
+                                )}
+                            </div>
+                        </div>
+                        <Button
+                            onClick={triggerImport}
+                            disabled={importing}
+                            className="shrink-0 bg-black text-white hover:bg-gray-900"
+                        >
+                            {importing ? (
+                                <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                            ) : (
+                                <Download className="h-3.5 w-3.5 mr-1" />
+                            )}
+                            {importing
+                                ? "Import in corso…"
+                                : importStatus?.imported
+                                  ? "Aggiorna"
+                                  : "Importa ora"}
+                        </Button>
+                    </div>
+                </section>
+            )}
 
             {/* Connector status + available/coming-soon sources */}
             {corpus.sources.length > 0 && (

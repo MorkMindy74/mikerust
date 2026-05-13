@@ -54,6 +54,13 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/{id}/search", post(generic_search))
         .route("/{id}/fetch", post(generic_fetch))
         .route("/{id}/documents", get(generic_list_documents))
+        // Bulk import (DILA-style: download tar.gz, walk XML, populate
+        // corpus_documents + FTS5). Synchronous today; the route
+        // blocks until the import finishes. Acceptable for CNIL
+        // (~18 MB, ~10s); larger fondi like LEGI will need async +
+        // progress polling.
+        .route("/{id}/import", post(generic_import))
+        .route("/{id}/import-status", get(generic_import_status))
 }
 
 /// Public projection of a `CorpusPlugin` for the API. Strips the
@@ -188,6 +195,19 @@ async fn generic_search(
     // shapes (e.g. CNIL "SAN-2024-013" went through search_by_id and
     // tried to fetch a URL templated with the human ref, which 404'd
     // because the canonical identifier is the opaque CNILTEXT id).
+    // Bulk-indexed corpora (DILA): query corpus_documents FTS5
+    // directly — there's no live HTTP adapter to call, the data is
+    // already in the local DB.
+    if matches!(
+        plugin.strategy,
+        crate::corpora::plugin::CorpusStrategy::DilaBulkXml(_)
+    ) {
+        let hits = search_corpus_documents(&state.db, &id, q, limit)
+            .await
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        return Ok(Json(json!({ "hits": hits })));
+    }
+
     let has_keyword = state
         .corpus_plugins
         .iter()
@@ -211,6 +231,68 @@ async fn generic_search(
             .map_err(|e| err(StatusCode::BAD_GATEWAY, &e.to_string()))?
     };
     Ok(Json(json!({ "hits": hits })))
+}
+
+/// Run a FTS5 query against `corpus_documents_fts` for a single
+/// corpus. Returns `CorpusHit` rows so the API surface matches what
+/// the adapter-based search returns. Used by the generic /search
+/// route when the corpus uses a bulk-indexed strategy.
+async fn search_corpus_documents(
+    db: &sqlx::SqlitePool,
+    corpus_id: &str,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<crate::corpora::CorpusHit>, sqlx::Error> {
+    // Use sqlite-fts5 MATCH on the joined columns. Rank by relevance
+    // (default rank is bm25). Strip any FTS5-special characters from
+    // the user query so a doubled quote / unbalanced bracket doesn't
+    // cause a syntax error — we just split into terms and AND them.
+    let fts_query: String = query
+        .split_whitespace()
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            // Quote each term to escape FTS5 operators inside it.
+            format!("\"{}\"", w.replace('"', ""))
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    if fts_query.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let rows: Vec<(String, Option<String>, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT cd.identifier, cd.titre_full, cd.titre, cd.date_publi, cd.numero \
+         FROM corpus_documents_fts f \
+         JOIN corpus_documents cd \
+           ON cd.corpus_id = f.corpus_id AND cd.identifier = f.numero \
+         WHERE f.corpus_id = ? AND corpus_documents_fts MATCH ? \
+         ORDER BY rank \
+         LIMIT ?",
+    )
+    .bind(corpus_id)
+    .bind(&fts_query)
+    .bind(limit as i64)
+    .fetch_all(db)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|(identifier, titre_full, titre, date_publi, numero)| {
+            let title = titre_full
+                .filter(|s| !s.is_empty())
+                .or(titre.filter(|s| !s.is_empty()))
+                .or(numero.filter(|s| !s.is_empty()))
+                .unwrap_or_else(|| identifier.clone());
+            crate::corpora::CorpusHit {
+                identifier,
+                title,
+                date: date_publi,
+                url: String::new(),
+                languages_available: Vec::new(),
+            }
+        })
+        .collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -242,15 +324,6 @@ async fn generic_fetch(
             &format!("corpus {id} does not declare capabilities.fetch"),
         ));
     }
-    let Some(adapter) = state.corpus_adapters.get(&id) else {
-        return Err(err(
-            StatusCode::NOT_IMPLEMENTED,
-            &format!(
-                "corpus {id} has no runtime adapter via the generic router \
-                 (likely a builtin corpus — use its dedicated /{id} route instead)"
-            ),
-        ));
-    };
 
     let identifier = body.identifier.trim().to_string();
     if identifier.is_empty() {
@@ -261,6 +334,44 @@ async fn generic_fetch(
         .clone()
         .unwrap_or_else(|| plugin.default_language.clone())
         .to_ascii_lowercase();
+
+    // Bulk-indexed strategy: the doc body is already in
+    // corpus_documents. Skip the adapter dispatch and synthesise
+    // a CorpusDocument from the DB row instead.
+    let fetched: crate::corpora::CorpusDocument = if matches!(
+        plugin.strategy,
+        crate::corpora::plugin::CorpusStrategy::DilaBulkXml(_)
+    ) {
+        match fetch_corpus_document(&state.db, &id, &identifier).await {
+            Ok(Some(doc)) => doc,
+            Ok(None) => {
+                return Err(err(
+                    StatusCode::NOT_FOUND,
+                    &format!(
+                        "corpus {id}: identifier {identifier:?} not in local index — \
+                         run /corpora/{id}/import first"
+                    ),
+                ));
+            }
+            Err(e) => {
+                return Err(err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()));
+            }
+        }
+    } else {
+        let Some(adapter) = state.corpus_adapters.get(&id) else {
+            return Err(err(
+                StatusCode::NOT_IMPLEMENTED,
+                &format!(
+                    "corpus {id} has no runtime adapter via the generic router \
+                     (likely a builtin corpus — use its dedicated /{id} route instead)"
+                ),
+            ));
+        };
+        adapter
+            .fetch(&identifier, Some(&lang), plugin.supports_language_fallback)
+            .await
+            .map_err(|e| err(StatusCode::BAD_GATEWAY, &e.to_string()))?
+    };
 
     // Dedupe by (corpus_id, identifier, language) — same policy the
     // EUR-Lex route uses.
@@ -283,11 +394,6 @@ async fn generic_fetch(
             "corpus_language": lang,
         })));
     }
-
-    let fetched = adapter
-        .fetch(&identifier, Some(&lang), plugin.supports_language_fallback)
-        .await
-        .map_err(|e| err(StatusCode::BAD_GATEWAY, &e.to_string()))?;
 
     // Hash-keyed cache (same layout as chat attachments + EUR-Lex).
     let hash = {
@@ -450,4 +556,136 @@ async fn generic_list_documents(
         })
         .collect();
     Ok(Json(json!({ "documents": docs })))
+}
+
+// ---------------------------------------------------------------------------
+// Bulk-indexed corpus helpers (DILA today)
+// ---------------------------------------------------------------------------
+
+/// Synthesize a `CorpusDocument` from the local `corpus_documents`
+/// row. Returns `Ok(None)` when the identifier isn't in the local
+/// index — caller should hint at running the importer.
+async fn fetch_corpus_document(
+    db: &sqlx::SqlitePool,
+    corpus_id: &str,
+    identifier: &str,
+) -> Result<Option<crate::corpora::CorpusDocument>, sqlx::Error> {
+    let row: Option<(
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        String,
+    )> = sqlx::query_as(
+        "SELECT identifier, titre_full, titre, numero, body \
+         FROM corpus_documents \
+         WHERE corpus_id = ? AND identifier = ?",
+    )
+    .bind(corpus_id)
+    .bind(identifier)
+    .fetch_optional(db)
+    .await?;
+    Ok(row.map(|(id, titre_full, titre, numero, body)| {
+        let title = titre_full
+            .filter(|s| !s.is_empty())
+            .or(titre.filter(|s| !s.is_empty()))
+            .or(numero.filter(|s| !s.is_empty()))
+            .unwrap_or_else(|| id.clone());
+        crate::corpora::CorpusDocument {
+            identifier: id,
+            title,
+            language: String::new(), // DILA is corpus-monolingual; UI fills in
+            fetched_with_fallback: false,
+            bytes: body.into_bytes(),
+            mime: "text/plain; charset=utf-8",
+            source_url: String::new(),
+        }
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// POST /corpora/:id/import — bulk import (DILA tar.gz today)
+// ---------------------------------------------------------------------------
+//
+// Synchronous: the request blocks until the archive is downloaded,
+// extracted, and every XML inserted. Fine for CNIL (~18 MB, ~10s on
+// a typical link); LEGI-scale fondi will need async + progress
+// polling, tracked as a follow-up.
+
+async fn generic_import(
+    State(state): State<Arc<AppState>>,
+    _auth: AuthUser,
+    Path(id): Path<String>,
+) -> ApiResult {
+    use crate::corpora::plugin::CorpusStrategy;
+    let plugin = lookup_plugin(&state, &id)?;
+    if !plugin.capabilities.bulk_import {
+        return Err(err(
+            StatusCode::METHOD_NOT_ALLOWED,
+            &format!("corpus {id} does not declare capabilities.bulk_import"),
+        ));
+    }
+    let spec = match &plugin.strategy {
+        CorpusStrategy::DilaBulkXml(s) => s.clone(),
+        other => {
+            return Err(err(
+                StatusCode::NOT_IMPLEMENTED,
+                &format!(
+                    "corpus {id}: bulk_import is declared but no bulk strategy \
+                     is wired in this router (strategy: {})",
+                    strategy_kind(other)
+                ),
+            ));
+        }
+    };
+    let stats = crate::corpora::dila_bulk::run_import(&spec, &state.db, &id)
+        .await
+        .map_err(|e| err(StatusCode::BAD_GATEWAY, &e.to_string()))?;
+    let value = serde_json::to_value(&stats)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    Ok(Json(value))
+}
+
+// ---------------------------------------------------------------------------
+// GET /corpora/:id/import-status — snapshot date + doc count
+// ---------------------------------------------------------------------------
+
+async fn generic_import_status(
+    State(state): State<Arc<AppState>>,
+    _auth: AuthUser,
+    Path(id): Path<String>,
+) -> ApiResult {
+    let plugin = lookup_plugin(&state, &id)?;
+    if !plugin.capabilities.bulk_import {
+        return Err(err(
+            StatusCode::METHOD_NOT_ALLOWED,
+            &format!("corpus {id} does not declare capabilities.bulk_import"),
+        ));
+    }
+    let info = crate::corpora::dila_bulk::read_import_status(&state.db, &id)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    match info {
+        None => Ok(Json(json!({
+            "imported": false,
+            "doc_count": 0,
+        }))),
+        Some((url, ts, at, n)) => Ok(Json(json!({
+            "imported": true,
+            "last_archive_url": url,
+            "last_archive_ts":  ts,
+            "last_imported_at": at,
+            "doc_count":        n,
+        }))),
+    }
+}
+
+fn strategy_kind(s: &crate::corpora::plugin::CorpusStrategy) -> &'static str {
+    use crate::corpora::plugin::CorpusStrategy;
+    match s {
+        CorpusStrategy::Builtin { .. } => "builtin",
+        CorpusStrategy::HttpFetchPerId(_) => "http-fetch-per-id",
+        CorpusStrategy::DilaBulkXml(_) => "dila-bulk-xml",
+        CorpusStrategy::HfDatasetBulk(_) => "hf-dataset-bulk",
+    }
 }

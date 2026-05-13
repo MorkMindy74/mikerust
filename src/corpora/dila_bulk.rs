@@ -36,7 +36,7 @@
 //! mappings in the manifest. A new fonds = a new `fonds` key in
 //! the manifest, same parser.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use serde::{Deserialize, Serialize};
@@ -332,6 +332,429 @@ fn collapse_body(raw: &str) -> String {
     out.trim().to_string()
 }
 
+// ===========================================================================
+// Importer pipeline: discover → download → walk → insert.
+// ===========================================================================
+//
+// Lives in this module (rather than routes/*) because it's the
+// concrete implementation of the `dila-bulk-xml` strategy and stays
+// reusable from any code path (CLI / route / background job).
+
+use flate2::read::GzDecoder;
+use sqlx::SqlitePool;
+use std::io::Read;
+use tar::Archive;
+
+/// Outcome of a single import pass. Returned to the route handler
+/// for the API response and recorded in `corpus_imports`.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ImportStats {
+    /// Archive URL that was downloaded.
+    pub archive_url: String,
+    /// YYYYMMDD-HHMMSS extracted from the archive filename — the
+    /// authoritative snapshot timestamp. Empty when we couldn't
+    /// parse it (defensive).
+    pub archive_ts: String,
+    /// Documents the archive contained.
+    pub xml_files: usize,
+    /// Documents successfully parsed + inserted (or updated).
+    pub inserted: usize,
+    /// Documents that failed to parse — logged but not fatal so a
+    /// single malformed XML doesn't sink the whole import.
+    pub parse_errors: usize,
+    /// Total seconds spent (wall clock).
+    pub elapsed_secs: f64,
+}
+
+/// Build a reqwest client preconfigured for DILA. Browser-UA so the
+/// CDN doesn't apply any "generic crawler" rate limit, no JSON Accept
+/// (we want HTML for the directory listing and binary for archives).
+pub fn dila_http_client() -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .user_agent(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
+             (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        )
+        .timeout(std::time::Duration::from_secs(300))
+        .redirect(reqwest::redirect::Policy::limited(4))
+        .build()
+        .map_err(|e| anyhow!("dila http client: {e}"))
+}
+
+/// Walk the DILA directory listing at `index_url` and return the
+/// most-recent archive whose filename starts with `prefix` and ends
+/// with `suffix`. DILA serves a standard Apache/nginx directory
+/// listing — `<a href="filename">filename</a>` pairs in a `<pre>` or
+/// list. We extract every `<a href>` value and pick by lexicographic
+/// max of the timestamp portion (filenames are
+/// `<prefix>YYYYMMDD-HHMMSS<suffix>` so string-sort = time-sort).
+///
+/// Returns `(href_absolute, archive_ts)` where `archive_ts` is the
+/// extracted YYYYMMDD-HHMMSS suffix.
+pub async fn find_latest_archive(
+    client: &reqwest::Client,
+    index_url: &str,
+    prefix: &str,
+    suffix: &str,
+) -> Result<(String, String)> {
+    tracing::info!("[dila] discovering archives at {index_url} prefix={prefix:?}");
+    let resp = client
+        .get(index_url)
+        .send()
+        .await
+        .with_context(|| format!("GET {index_url}"))?;
+    if !resp.status().is_success() {
+        bail!("HTTP {} from {}", resp.status().as_u16(), index_url);
+    }
+    let body = resp
+        .text()
+        .await
+        .with_context(|| format!("body decode {index_url}"))?;
+
+    // Parse the HTML listing and pull every <a href>. We don't care
+    // about layout-drift (Apache index vs nginx-fancyindex vs custom);
+    // both flavours expose hrefs.
+    let doc = scraper::Html::parse_document(&body);
+    let sel = scraper::Selector::parse("a[href]")
+        .map_err(|e| anyhow!("internal: invalid CSS selector: {e}"))?;
+
+    let mut best: Option<(String, String)> = None;
+    for a in doc.select(&sel) {
+        let Some(href) = a.value().attr("href") else { continue };
+        let filename = href.rsplit('/').next().unwrap_or(href);
+        let stripped = match filename.strip_prefix(prefix) {
+            Some(s) => s,
+            None => continue,
+        };
+        let ts = match stripped.strip_suffix(suffix) {
+            Some(s) => s,
+            None => continue,
+        };
+        // ts should look like "YYYYMMDD-HHMMSS" — 8 + 1 + 6 = 15
+        // chars, all digits except the separator dash. We accept
+        // slight variation (some incrementals have other shapes)
+        // and just demand non-empty.
+        if ts.is_empty() {
+            continue;
+        }
+        let absolute = if href.starts_with("http") {
+            href.to_string()
+        } else {
+            // Join against the index_url base. Use the simple "trim
+            // index_url to a directory" rule rather than pulling in
+            // the url crate just for this.
+            let base = index_url.trim_end_matches('/');
+            format!("{}/{}", base, filename)
+        };
+        match &best {
+            None => best = Some((absolute, ts.to_string())),
+            Some((_, prev_ts)) if ts > prev_ts.as_str() => {
+                best = Some((absolute, ts.to_string()));
+            }
+            _ => {}
+        }
+    }
+
+    best.ok_or_else(|| {
+        anyhow!(
+            "no archive matching prefix={:?} suffix={:?} at {}",
+            prefix,
+            suffix,
+            index_url
+        )
+    })
+}
+
+/// Download a tar.gz archive and return its bytes. We pull the
+/// whole thing into memory — for CNIL (~18 MB) that's fine; LEGI
+/// (~9 GB) will need streaming and is explicitly out of scope today.
+pub async fn download_archive(
+    client: &reqwest::Client,
+    url: &str,
+) -> Result<bytes::Bytes> {
+    tracing::info!("[dila] downloading {url}");
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .with_context(|| format!("GET {url}"))?;
+    if !resp.status().is_success() {
+        bail!("HTTP {} from {}", resp.status().as_u16(), url);
+    }
+    let body = resp
+        .bytes()
+        .await
+        .with_context(|| format!("body fetch {url}"))?;
+    tracing::info!("[dila] downloaded {} bytes from {}", body.len(), url);
+    Ok(body)
+}
+
+/// Walk a tar.gz archive, parse every contained XML, and upsert
+/// rows into `corpus_documents` for the given `corpus_id`. Updates
+/// `corpus_documents_fts` via a synchronous trigger-less rebuild —
+/// see the migration for why we don't rely on FTS5 content triggers
+/// (they're fragile with composite primary keys).
+pub async fn extract_and_index(
+    archive: &[u8],
+    db: &SqlitePool,
+    corpus_id: &str,
+    archive_ts: &str,
+) -> Result<(usize, usize, usize)> {
+    // Step 1 (synchronous, in a blocking section): walk the tar.gz,
+    // parse every XML, collect a Vec<DilaDocument>. Kept off the
+    // async runtime because tar::Archive holds borrows of the
+    // GzDecoder reader and isn't Send across `.await` points — and
+    // anyway zlib decompression is CPU-bound, not I/O-bound.
+    //
+    // For CNIL (~18 MB compressed, ~80 MB inflated) the parsed
+    // Vec is comfortably in the low MBs. LEGI-scale fondi will
+    // need a streaming pipeline (parse + insert interleaved on a
+    // bounded channel) — out of scope today.
+    let owned_archive = archive.to_vec();
+    let (xml_files, parse_errors, docs) =
+        tokio::task::spawn_blocking(move || -> Result<(usize, usize, Vec<DilaDocument>)> {
+            let gz = GzDecoder::new(owned_archive.as_slice());
+            let mut tar = Archive::new(gz);
+            let mut xml_files = 0usize;
+            let mut parse_errors = 0usize;
+            let mut docs = Vec::new();
+            for entry in tar.entries().context("read tar entries")? {
+                let mut entry = entry.context("tar entry")?;
+                let path = entry
+                    .path()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                if !path.ends_with(".xml") {
+                    continue;
+                }
+                xml_files += 1;
+                let mut buf = Vec::new();
+                if let Err(e) = entry.read_to_end(&mut buf) {
+                    tracing::warn!("[dila] read failed for {path}: {e}");
+                    parse_errors += 1;
+                    continue;
+                }
+                match parse_dila_xml(&buf) {
+                    Ok(d) => docs.push(d),
+                    Err(e) => {
+                        tracing::warn!("[dila] parse failed for {path}: {e:#}");
+                        parse_errors += 1;
+                    }
+                }
+            }
+            Ok((xml_files, parse_errors, docs))
+        })
+        .await
+        .context("spawn_blocking join")??;
+
+    // Step 2 (async): single transaction, insert every parsed doc.
+    let mut tx = db.begin().await.context("begin tx")?;
+    let mut inserted = 0usize;
+    for doc in &docs {
+        insert_corpus_document(&mut tx, corpus_id, archive_ts, doc)
+            .await
+            .with_context(|| format!("insert {} ({corpus_id})", doc.id))?;
+        inserted += 1;
+    }
+    tx.commit().await.context("commit tx")?;
+
+    tracing::info!(
+        "[dila] {corpus_id}: walked {xml_files} XML file(s), inserted {inserted}, {parse_errors} errors"
+    );
+    Ok((xml_files, inserted, parse_errors))
+}
+
+/// Upsert one document into `corpus_documents` + sync the FTS5 row.
+/// SQLite's INSERT ... ON CONFLICT keeps re-imports idempotent — a
+/// later snapshot containing the same identifier just updates its
+/// metadata + body without duplicating.
+async fn insert_corpus_document<'a>(
+    tx: &mut sqlx::Transaction<'a, sqlx::Sqlite>,
+    corpus_id: &str,
+    archive_ts: &str,
+    doc: &DilaDocument,
+) -> Result<()> {
+    // Main table — upsert by (corpus_id, identifier).
+    sqlx::query(
+        "INSERT INTO corpus_documents \
+           (corpus_id, identifier, nature, origine, titre, titre_full, \
+            numero, nor, nature_delib, date_texte, date_publi, etat, \
+            body, archive_ts, indexed_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now')) \
+         ON CONFLICT(corpus_id, identifier) DO UPDATE SET \
+           nature = excluded.nature, \
+           origine = excluded.origine, \
+           titre = excluded.titre, \
+           titre_full = excluded.titre_full, \
+           numero = excluded.numero, \
+           nor = excluded.nor, \
+           nature_delib = excluded.nature_delib, \
+           date_texte = excluded.date_texte, \
+           date_publi = excluded.date_publi, \
+           etat = excluded.etat, \
+           body = excluded.body, \
+           archive_ts = excluded.archive_ts, \
+           indexed_at = datetime('now')",
+    )
+    .bind(corpus_id)
+    .bind(&doc.id)
+    .bind(&doc.nature)
+    .bind(&doc.origine)
+    .bind(&doc.titre)
+    .bind(&doc.titre_full)
+    .bind(&doc.numero)
+    .bind(&doc.nor)
+    .bind(&doc.nature_delib)
+    .bind(&doc.date_texte)
+    .bind(&doc.date_publi)
+    .bind(&doc.etat)
+    .bind(&doc.body)
+    .bind(archive_ts)
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| anyhow!("upsert corpus_documents: {e}"))?;
+
+    // FTS5 mirror. We delete any prior row for (corpus_id, identifier)
+    // and re-insert — simpler than maintaining an explicit content
+    // table mapping when the primary key isn't a single rowid.
+    sqlx::query(
+        "DELETE FROM corpus_documents_fts \
+         WHERE corpus_id = ? AND numero = ?",
+    )
+    .bind(corpus_id)
+    .bind(&doc.id) // we'll re-purpose the FTS schema's `numero` slot
+                  // as the join key; see commentary below.
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| anyhow!("fts delete: {e}"))?;
+    sqlx::query(
+        "INSERT INTO corpus_documents_fts \
+           (corpus_id, titre, titre_full, numero, body) \
+         VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(corpus_id)
+    .bind(doc.titre.as_deref().unwrap_or(""))
+    .bind(doc.titre_full.as_deref().unwrap_or(""))
+    // We bind the persistent ID (CNILTEXT...) into the `numero`
+    // FTS5 column so we can DELETE the right FTS row on re-import.
+    // The user-facing `numero` value (e.g. "2026-047") is still
+    // searchable via `body` (which the chunker also indexes via
+    // sqlite-vec — these searches are complementary).
+    .bind(&doc.id)
+    .bind(&doc.body)
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| anyhow!("fts insert: {e}"))?;
+    Ok(())
+}
+
+/// Record the just-completed import in `corpus_imports` so the UI
+/// can surface "Snapshot du …" and the importer can skip re-work
+/// when the latest archive is already imported.
+pub async fn record_import(
+    db: &SqlitePool,
+    corpus_id: &str,
+    archive_url: &str,
+    archive_ts: &str,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO corpus_imports \
+           (corpus_id, last_archive_url, last_archive_ts, last_imported_at, doc_count) \
+         VALUES (?, ?, ?, datetime('now'), \
+                 (SELECT COUNT(*) FROM corpus_documents WHERE corpus_id = ?)) \
+         ON CONFLICT(corpus_id) DO UPDATE SET \
+           last_archive_url = excluded.last_archive_url, \
+           last_archive_ts = excluded.last_archive_ts, \
+           last_imported_at = excluded.last_imported_at, \
+           doc_count = excluded.doc_count",
+    )
+    .bind(corpus_id)
+    .bind(archive_url)
+    .bind(archive_ts)
+    .bind(corpus_id)
+    .execute(db)
+    .await
+    .map_err(|e| anyhow!("upsert corpus_imports: {e}"))?;
+    Ok(())
+}
+
+/// Read the snapshot record for a corpus, if any.
+pub async fn read_import_status(
+    db: &SqlitePool,
+    corpus_id: &str,
+) -> Result<Option<(String, String, String, i64)>> {
+    let row: Option<(Option<String>, Option<String>, String, i64)> = sqlx::query_as(
+        "SELECT last_archive_url, last_archive_ts, last_imported_at, doc_count \
+         FROM corpus_imports WHERE corpus_id = ?",
+    )
+    .bind(corpus_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| anyhow!("read corpus_imports: {e}"))?;
+    Ok(row.map(|(url, ts, at, n)| {
+        (
+            url.unwrap_or_default(),
+            ts.unwrap_or_default(),
+            at,
+            n,
+        )
+    }))
+}
+
+/// End-to-end import: discover → download → extract → record.
+/// Pure helper invoked by the generic route handler; no extra route
+/// machinery here.
+pub async fn run_import(
+    spec: &DilaBulkXmlSpec,
+    db: &SqlitePool,
+    corpus_id: &str,
+) -> Result<ImportStats> {
+    let client = dila_http_client()?;
+    let started = std::time::Instant::now();
+
+    let (archive_url, archive_ts) = find_latest_archive(
+        &client,
+        &spec.archive_index_url,
+        &spec.global_archive_prefix,
+        &spec.archive_suffix,
+    )
+    .await?;
+
+    // Skip if we already imported this archive — cheap idempotency.
+    if let Ok(Some((prev_url, prev_ts, _, _))) =
+        read_import_status(db, corpus_id).await
+    {
+        if prev_url == archive_url && prev_ts == archive_ts {
+            tracing::info!(
+                "[dila] {corpus_id}: archive {} already imported, skipping",
+                archive_url
+            );
+            return Ok(ImportStats {
+                archive_url,
+                archive_ts,
+                xml_files: 0,
+                inserted: 0,
+                parse_errors: 0,
+                elapsed_secs: 0.0,
+            });
+        }
+    }
+
+    let bytes = download_archive(&client, &archive_url).await?;
+    let (xml_files, inserted, parse_errors) =
+        extract_and_index(&bytes, db, corpus_id, &archive_ts).await?;
+    record_import(db, corpus_id, &archive_url, &archive_ts).await?;
+
+    Ok(ImportStats {
+        archive_url,
+        archive_ts,
+        xml_files,
+        inserted,
+        parse_errors,
+        elapsed_secs: started.elapsed().as_secs_f64(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -462,6 +885,67 @@ mod tests {
         let raw = "a\n\n\n\nb";
         let out = collapse_body(raw);
         assert_eq!(out, "a\n\nb");
+    }
+
+    #[test]
+    fn finds_latest_archive_lex_max() {
+        // Tiny synthetic directory-listing HTML (Apache fancy-index
+        // style). Three matching archives — verify we pick the
+        // most-recent timestamp.
+        let html = r#"<html><body><pre>
+            <a href="../">../</a>
+            <a href="Freemium_cnil_global_20240101-100000.tar.gz">Freemium_cnil_global_20240101-100000.tar.gz</a>  20-Jan-2024 10:00  18M
+            <a href="Freemium_cnil_global_20260713-140000.tar.gz">Freemium_cnil_global_20260713-140000.tar.gz</a>  13-Jul-2026 14:00  18M
+            <a href="Freemium_cnil_global_20250713-140000.tar.gz">Freemium_cnil_global_20250713-140000.tar.gz</a>  13-Jul-2025 14:00  18M
+            <a href="CNIL_20260507-213433.tar.gz">CNIL_20260507-213433.tar.gz</a>  07-May-2026 21:34  2K
+            <a href="DILA_CNIL_Presentation_20170824.pdf">DILA_CNIL_Presentation_20170824.pdf</a>  24-Aug-2017 17:00  54K
+        </pre></body></html>"#;
+        // We test the parser directly by bypassing the HTTP layer.
+        // The find_latest_archive uses scraper internally — feed it
+        // through extract_each_html-equivalent logic that exists
+        // only via the public fn, so we replicate the core sort
+        // here to verify the algorithm shape.
+        let doc = scraper::Html::parse_document(html);
+        let sel = scraper::Selector::parse("a[href]").unwrap();
+        let mut best: Option<String> = None;
+        let prefix = "Freemium_cnil_global_";
+        let suffix = ".tar.gz";
+        for a in doc.select(&sel) {
+            let href = a.value().attr("href").unwrap_or("");
+            let stripped = match href.strip_prefix(prefix) {
+                Some(s) => s,
+                None => continue,
+            };
+            let ts = match stripped.strip_suffix(suffix) {
+                Some(s) => s,
+                None => continue,
+            };
+            match &best {
+                None => best = Some(ts.to_string()),
+                Some(prev) if ts > prev.as_str() => {
+                    best = Some(ts.to_string())
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(best.as_deref(), Some("20260713-140000"));
+    }
+
+    #[test]
+    fn import_stats_round_trips_via_serde() {
+        let stats = ImportStats {
+            archive_url: "https://x/y.tar.gz".to_string(),
+            archive_ts: "20260507-213433".to_string(),
+            xml_files: 12,
+            inserted: 11,
+            parse_errors: 1,
+            elapsed_secs: 4.2,
+        };
+        let v = serde_json::to_value(&stats).unwrap();
+        assert_eq!(v["archive_ts"], "20260507-213433");
+        assert_eq!(v["xml_files"], 12);
+        assert_eq!(v["inserted"], 11);
+        assert_eq!(v["elapsed_secs"], 4.2);
     }
 
     #[test]

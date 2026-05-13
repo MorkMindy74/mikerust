@@ -108,6 +108,12 @@ export interface CorpusSource {
     status_label?: string | null;
 }
 
+export interface CorpusLicense {
+    id: string;
+    attribution: string;
+    url?: string | null;
+}
+
 export interface CorpusItem {
     id: string;
     display_name: string;
@@ -123,6 +129,40 @@ export interface CorpusItem {
     runnable: boolean;
     capabilities: CorpusCapabilities;
     sources: CorpusSource[];
+    license?: CorpusLicense | null;
+}
+
+export interface BulkImportStats {
+    archive_url: string;
+    archive_ts: string;
+    xml_files: number;
+    inserted: number;
+    parse_errors: number;
+    elapsed_secs: number;
+}
+
+export interface BulkImportStatus {
+    imported: boolean;
+    last_archive_url?: string;
+    last_archive_ts?: string;
+    last_imported_at?: string;
+    doc_count: number;
+}
+
+export async function startCorpusImport(
+    corpusId: string,
+): Promise<BulkImportStats> {
+    return apiRequest<BulkImportStats>(`/corpora/${corpusId}/import`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+    });
+}
+
+export async function getCorpusImportStatus(
+    corpusId: string,
+): Promise<BulkImportStatus> {
+    return apiRequest<BulkImportStatus>(`/corpora/${corpusId}/import-status`);
 }
 
 /**

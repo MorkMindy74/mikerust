@@ -130,6 +130,35 @@ pub struct CorpusPlugin {
     /// for single-source corpora like EUR-Lex.
     #[serde(default)]
     pub sources: Vec<CorpusSource>,
+
+    /// Upstream license + attribution metadata. Required by open-data
+    /// providers like DILA (Etalab 2.0) and reused by the UI to render
+    /// a "Source: …" footer / badge in the corpus panel and on
+    /// citation pills. Must be present on any corpus that imports
+    /// data the user redistributes (via `.mikeprj` export, etc.).
+    #[serde(default)]
+    pub license: Option<CorpusLicense>,
+}
+
+/// Upstream license info for a corpus. The producer's attribution
+/// requirements are encoded here so the UI can render them
+/// consistently without per-corpus chrome. Compatible licenses today:
+/// `etalab-2.0`, `cc-by-4.0`, `cc-by-sa-4.0`, `cc0-1.0`, `public-domain`.
+/// Unknown values are accepted (forward-compat) but the UI renders
+/// them verbatim.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CorpusLicense {
+    /// Short license id, used to look up an info-link locally in
+    /// the UI and to surface in `.mikeprj` exports. Lowercase.
+    pub id: String,
+    /// One-line attribution text the UI shows under the corpus
+    /// header. Should follow the producer's recommended template
+    /// — e.g. for Etalab 2.0: "Source: DILA — Licence Ouverte 2.0".
+    pub attribution: String,
+    /// Link to the full license text (or to the producer's
+    /// reuse policy page).
+    #[serde(default)]
+    pub url: Option<String>,
 }
 
 /// Boolean map of operations a corpus exposes. Each field is a
@@ -265,6 +294,13 @@ pub enum CorpusStrategy {
     /// `manifest_adapter.rs` for the runtime.
     #[serde(rename = "http-fetch-per-id")]
     HttpFetchPerId(HttpFetchPerIdSpec),
+
+    /// Bulk download of DILA OPENDATA tar.gz archives. Covers any
+    /// fonds DILA publishes today (CNIL, LEGI, JORF, CASS, KALI) and
+    /// uses the same XML schema across all of them — see
+    /// `src/corpora/dila_bulk.rs` for the parser + importer.
+    #[serde(rename = "dila-bulk-xml")]
+    DilaBulkXml(crate::corpora::dila_bulk::DilaBulkXmlSpec),
 
     /// Future: bulk metadata import from a Hugging Face dataset
     /// (parquet projection + filtered rows). What the current
@@ -477,7 +513,9 @@ impl CorpusPlugin {
     pub fn is_runnable(&self) -> bool {
         matches!(
             self.strategy,
-            CorpusStrategy::Builtin { .. } | CorpusStrategy::HttpFetchPerId(_)
+            CorpusStrategy::Builtin { .. }
+                | CorpusStrategy::HttpFetchPerId(_)
+                | CorpusStrategy::DilaBulkXml(_)
         )
     }
 }
