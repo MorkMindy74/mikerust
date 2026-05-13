@@ -337,20 +337,9 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                     title={tSidebar("semplificaTitle")}
                                     className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 flex items-center gap-2 rounded-md"
                                 >
-                                    {/* Semplifica brand logo — served from
-                                        frontend/public/semplifica/logo.png at
-                                        runtime. Sized to align visually with the
-                                        other 16px icons in this menu. Plain
-                                        <img> (not next/image) because the menu
-                                        rerenders frequently and the logo is
-                                        tiny — the optimizer overhead isn't
-                                        worth it here. */}
-                                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                                    <img
-                                        src="/semplifica/logo.png"
-                                        alt=""
-                                        className="h-4 w-auto"
-                                    />
+                                    {/* Logo removed for now per design feedback —
+                                        the asset stays in /public/semplifica/
+                                        for future use (about / splash / etc.). */}
                                     <span className="flex-1">
                                         {tSidebar("semplifica")}
                                     </span>
