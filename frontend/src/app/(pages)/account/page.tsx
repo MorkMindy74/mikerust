@@ -9,6 +9,8 @@ import { LogOut, Check, Fingerprint, KeyRound, ShieldCheck } from "lucide-react"
 import { useAuth } from "@/contexts/AuthContext";
 import { useUserProfile } from "@/contexts/UserProfileContext";
 import { LanguageSwitcher } from "@/app/components/shared/LanguageSwitcher";
+import { DomainSelect } from "@/app/components/shared/DomainControls";
+import { DEFAULT_DOMAIN, type Domain } from "@/app/components/shared/types";
 import { apiBase } from "@/lib/apiBase";
 
 function getToken() {
@@ -20,9 +22,10 @@ function getToken() {
 export default function AccountPage() {
     const router = useRouter();
     const { user, signOut } = useAuth();
-    const { profile, updateDisplayName } = useUserProfile();
+    const { profile, updateDisplayName, updateDefaultDomain } = useUserProfile();
     const t = useTranslations("Account");
     const tCommon = useTranslations("Common");
+    const tDomains = useTranslations("Domains");
 
     // Profile
     const [displayName, setDisplayName] = useState("");
@@ -168,6 +171,19 @@ export default function AccountPage() {
                     </div>
                     <div>
                         <LanguageSwitcher />
+                    </div>
+                    {/* Default domain — pre-selected in workflow / project /
+                        document create dialogs. Stored on user_settings via
+                        PUT /user/default-domain (migration 0019). */}
+                    <div className="flex items-center gap-3">
+                        <span className="text-sm font-medium">{tDomains("label")}</span>
+                        <DomainSelect
+                            value={(profile?.defaultDomain as Domain | null | undefined) ?? DEFAULT_DOMAIN}
+                            onChange={(next) => {
+                                void updateDefaultDomain(next);
+                            }}
+                            className="w-56 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-sm"
+                        />
                     </div>
                 </div>
             </section>

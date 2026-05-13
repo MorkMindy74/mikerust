@@ -10,6 +10,7 @@ import React, {
 } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { apiBase, apiBaseReady } from "@/lib/apiBase";
+import type { Domain } from "@/app/components/shared/types";
 
 // LLM credentials and per-provider config, sourced exclusively from the
 // backend (`/user/llm-settings`). Stored server-side in user_settings
@@ -42,6 +43,14 @@ interface UserProfile {
     claudeApiKey: string | null;
     geminiApiKey: string | null;
     llm: LLMConfig;
+    /**
+     * Preferred professional vertical used to pre-select the domain
+     * field in the workflow / project / document create dialogs.
+     * `null` means "no explicit choice yet" — call sites then fall
+     * back to the canonical `legal` default that matches the per-row
+     * schema default from migration 0018.
+     */
+    defaultDomain: Domain | null;
 }
 
 interface UserProfileContextType {
@@ -65,6 +74,12 @@ interface UserProfileContextType {
      * re-render without a full reload.
      */
     setSelectedModel: (id: string) => Promise<void>;
+    /**
+     * Persist the user's default domain via PUT /user/default-domain
+     * and update the in-memory profile so dependents (NewWorkflowModal
+     * etc.) re-render with the new pre-selection.
+     */
+    updateDefaultDomain: (d: Domain) => Promise<boolean>;
     reloadProfile: () => Promise<void>;
     incrementMessageCredits: () => Promise<boolean>;
 }
@@ -150,6 +165,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
             claudeApiKey: null,
             geminiApiKey: null,
             llm: defaultLlmConfig(),
+            defaultDomain: null,
         };
     }, []);
 
@@ -165,9 +181,10 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
             // port — this is one of the earliest fetches on cold start.
             await apiBaseReady;
             const base = apiBase();
-            const [statusRes, llmRes] = await Promise.all([
+            const [statusRes, llmRes, domainRes] = await Promise.all([
                 fetch(`${base}/auth/status`, { headers }),
                 fetch(`${base}/user/llm-settings`, { headers }),
+                fetch(`${base}/user/default-domain`, { headers }),
             ]);
             if (!statusRes.ok) throw new Error("status error");
             const status = await statusRes.json();
@@ -182,6 +199,10 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
             p.llm = llmFromBackend(llmJson);
             p.claudeApiKey = p.llm.claudeApiKey;
             p.geminiApiKey = p.llm.geminiApiKey;
+            if (domainRes.ok) {
+                const dj = (await domainRes.json()) as { default_domain: string | null };
+                p.defaultDomain = (dj.default_domain as Domain | null) ?? null;
+            }
             setProfile(p);
         } catch {
             setProfile(defaultProfile());
@@ -283,6 +304,34 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
         }
     }, []);
 
+    const updateDefaultDomain = useCallback(
+        async (next: Domain): Promise<boolean> => {
+            try {
+                const token = typeof window !== "undefined"
+                    ? localStorage.getItem("mike_auth_token")
+                    : null;
+                if (!token) return false;
+                await apiBaseReady;
+                const res = await fetch(`${apiBase()}/user/default-domain`, {
+                    method: "PUT",
+                    headers: {
+                        "Content-Type": "application/json",
+                        Authorization: `Bearer ${token}`,
+                    },
+                    body: JSON.stringify({ default_domain: next }),
+                });
+                if (!res.ok) return false;
+                setProfile((prev) =>
+                    prev ? { ...prev, defaultDomain: next } : prev,
+                );
+                return true;
+            } catch {
+                return false;
+            }
+        },
+        [],
+    );
+
     const reloadProfile = useCallback(async () => {
         if (user) await loadProfile(user.id);
     }, [user, loadProfile]);
@@ -304,6 +353,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 updateModelPreference,
                 updateApiKey,
                 setSelectedModel,
+                updateDefaultDomain,
                 reloadProfile,
                 incrementMessageCredits,
             }}

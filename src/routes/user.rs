@@ -21,6 +21,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/profile", get(get_profile).put(update_profile))
         .route("/llm-settings", get(get_llm_settings).put(update_llm_settings))
         .route("/locale", get(get_locale).put(update_locale))
+        .route("/default-domain", get(get_default_domain).put(update_default_domain))
         .route("/account", delete(delete_account))
         .route("/mcp-servers", get(list_mcp_servers).post(upsert_mcp_server))
         .route("/mcp-servers/probe", axum::routing::post(probe_mcp_server))
@@ -76,6 +77,65 @@ async fn update_locale(
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
     Ok(Json(json!({ "ok": true, "locale": normalized })))
+}
+
+// ---------------------------------------------------------------------------
+// GET /user/default-domain  →  { default_domain: "legal" | … | null }
+// PUT /user/default-domain  body { default_domain: "<canonical id>" }
+//
+// User preference for the default professional vertical used by the
+// create dialogs (workflow / project / document). Stored on the same
+// `user_settings` row as locale. NULL means "no preference yet" — the
+// frontend then falls back to the canonical `legal` default that
+// matches the per-row schema default from migration 0018. Canonical
+// IDs come from `crate::domain::DOMAINS` (English snake_case keys
+// like `legal`, `medical`, `real_estate`). UI translation is done at
+// display time via the i18n `Domains.values.*` namespace; only the
+// raw English ID travels over the wire and lives in the DB.
+// ---------------------------------------------------------------------------
+async fn get_default_domain(
+    State(state): State<Arc<AppState>>,
+    auth: AuthUser,
+) -> ApiResult {
+    let row: Option<(Option<String>,)> = sqlx::query_as(
+        "SELECT default_domain FROM user_settings WHERE user_id = ?",
+    )
+    .bind(&auth.user_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    let d = row.and_then(|(d,)| d);
+    Ok(Json(json!({ "default_domain": d })))
+}
+
+#[derive(Deserialize)]
+struct UpdateDefaultDomainBody {
+    default_domain: String,
+}
+
+async fn update_default_domain(
+    State(state): State<Arc<AppState>>,
+    auth: AuthUser,
+    Json(body): Json<UpdateDefaultDomainBody>,
+) -> ApiResult {
+    if !crate::domain::is_valid(&body.default_domain) {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "default_domain must be a canonical English ID (e.g. legal, medical, finance, real_estate, hr, insurance, ip, compliance, others)",
+        ));
+    }
+    sqlx::query(
+        "INSERT INTO user_settings (user_id, default_domain, updated_at) \
+         VALUES (?, ?, datetime('now')) \
+         ON CONFLICT(user_id) DO UPDATE SET default_domain = excluded.default_domain, \
+             updated_at = datetime('now')",
+    )
+    .bind(&auth.user_id)
+    .bind(&body.default_domain)
+    .execute(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    Ok(Json(json!({ "ok": true, "default_domain": body.default_domain })))
 }
 
 // ---------------------------------------------------------------------------

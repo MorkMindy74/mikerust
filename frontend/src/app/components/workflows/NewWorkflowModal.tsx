@@ -8,6 +8,7 @@ import type { MikeWorkflow, Domain } from "../shared/types";
 import { DEFAULT_DOMAIN } from "../shared/types";
 import { DomainSelect } from "../shared/DomainControls";
 import { PRACTICE_OPTIONS } from "./practices";
+import { useUserProfile } from "@/contexts/UserProfileContext";
 
 interface Props {
     open: boolean;
@@ -21,11 +22,18 @@ export function NewWorkflowModal({ open, onClose, onCreated, editWorkflow, onUpd
     const tWf = useTranslations("Workflows");
     const tDomains = useTranslations("Domains");
     const tCommon = useTranslations("Common");
+    const { profile } = useUserProfile();
+    // User's saved default domain (from /user/default-domain, see
+    // migration 0019). Fall back to the canonical 'legal' default when
+    // the user hasn't picked one yet, so the modal still opens with a
+    // sensible pre-selection on first launch.
+    const userDefaultDomain: Domain =
+        (profile?.defaultDomain as Domain | null | undefined) ?? DEFAULT_DOMAIN;
     const [title, setTitle] = useState("");
     const [type, setType] = useState<"assistant" | "tabular">("assistant");
     const [practice, setPractice] = useState<string>("");
     const [customPractice, setCustomPractice] = useState("");
-    const [domain, setDomain] = useState<Domain>(DEFAULT_DOMAIN);
+    const [domain, setDomain] = useState<Domain>(userDefaultDomain);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
     const customInputRef = useRef<HTMLInputElement>(null);
@@ -33,6 +41,17 @@ export function NewWorkflowModal({ open, onClose, onCreated, editWorkflow, onUpd
     const isEditing = !!editWorkflow;
     const isOthers = practice === "Others";
     const effectivePractice = isOthers ? (customPractice.trim() || null) : (practice || null);
+
+    // Open-in-create-mode → sync the domain field to the user's
+    // current default. `useState(userDefaultDomain)` only captures the
+    // value at first render; if the profile loads after the modal
+    // mounts, or the user later changes their default in Settings, we
+    // want the next open to reflect that.
+    useEffect(() => {
+        if (open && !editWorkflow) {
+            setDomain(userDefaultDomain);
+        }
+    }, [open, editWorkflow, userDefaultDomain]);
 
     useEffect(() => {
         if (open && editWorkflow) {
@@ -96,7 +115,10 @@ export function NewWorkflowModal({ open, onClose, onCreated, editWorkflow, onUpd
         setType("assistant");
         setPractice("");
         setCustomPractice("");
-        setDomain(DEFAULT_DOMAIN);
+        // Reset to the user's saved default, not the hardcoded canonical
+        // 'legal' — otherwise a non-legal user would see their domain
+        // disappear every time they create a workflow.
+        setDomain(userDefaultDomain);
         setError("");
     }
 
