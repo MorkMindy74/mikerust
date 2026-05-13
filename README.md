@@ -271,6 +271,7 @@ preserved, only the dispatcher mechanics are in scope. See
 - [docs/CORPORA.md](docs/CORPORA.md) — EUR-Lex + national legal-corpora plan + API survey
 - [docs/EURLEX_REGISTRATION.md](docs/EURLEX_REGISTRATION.md) — EUR-Lex V1 (no auth) + V2 SOAP registration steps
 - [docs/SESSION_RECAP.md](docs/SESSION_RECAP.md) — historical session notes
+- [docs/UPSTREAM_SYNC.md](docs/UPSTREAM_SYNC.md) — policy + audit log for syncing fixes from upstream `willchen96/mike`
 - For the pristine upstream README, see [`willchen96/mike`][upstream] directly
 
 ## License

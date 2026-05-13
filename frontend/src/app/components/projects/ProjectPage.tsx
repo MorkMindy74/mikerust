@@ -1,5 +1,14 @@
 "use client";
 
+// NOTE: this file has grown to ~1860 lines, well past the upstream
+// Mike baseline of ~520. Upstream f39f175 (PR #64) splits the project
+// page into ProjectAssistantTab / ProjectReviewsTab / ProjectPageParts.
+// We've deferred that refactor because the divergence is large and
+// MikeRust-specific sections (DocVersionHistory, hash-cache document
+// ops, corpus integration hooks) would need careful preservation. See
+// docs/UPSTREAM_SYNC.md for the cherry-pick reasoning and the upstream
+// pattern reference.
+
 import { useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
