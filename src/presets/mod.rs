@@ -19,6 +19,7 @@
 //! parsing (one broken JSON does not stop the rest from loading).
 
 pub mod column;
+pub mod model;
 pub mod workflow;
 
 use std::path::{Path, PathBuf};

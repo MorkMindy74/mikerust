@@ -283,6 +283,36 @@ by the user's `docs/insurance-workflows-plan.md`):
   (104 lines) — single source of truth is now the JSON files on
   disk under `config/`.
 
+### Added — LLM model catalogue (evening)
+
+- **`config/model.json`** — single source of truth for the LLM
+  provider/model/region catalogue. Four providers (Anthropic, Google
+  Gemini, OpenAI, Mistral) with their model lists, capability flags
+  (`supports_vision`, `supports_tools`, `supports_prompt_cache`, …),
+  and Gemini's 30-region matrix (11 Europe, 6 US, 6 Asia, plus
+  Canada, South America, Oceania and the Middle East). Preview models
+  carry a `preview: true` flag so consumers can force `region=global`
+  automatically (preview deployments are global-only by spec across
+  all three vendors).
+- **`src/presets/model.rs` + `GET /models`** — typed loader and
+  read-only route serving the catalogue. Same fail-soft policy as the
+  workflow / column-preset registries: a missing or malformed
+  `model.json` logs a warning and falls back to an empty catalogue
+  rather than blocking startup.
+- **Settings → Modelli LLM rewrite** — text inputs for model and
+  region replaced with catalogue-driven `<select>` dropdowns. Picking
+  a preview Gemini model auto-snaps the region back to "global" and
+  disables the region selector. A "Custom" option preserves any
+  pre-existing model id that isn't in the catalogue so configuration
+  isn't silently lost on a catalogue refresh.
+- **Gated active-provider toggle** — the four provider buttons in the
+  "Provider attivo" group are now disabled (greyed out, lock icon,
+  tooltip explaining why) for providers that don't have an API key
+  saved. The local provider stays enabled as long as the base URL is
+  configured. Clearing a saved key for the currently-active provider
+  automatically falls back to the local provider so the chat picker
+  doesn't try to use a credentialless cloud endpoint on the next turn.
+
 ### Added — branding & docs
 
 - **`NOTICE.md`** — trademark policy alongside AGPL-3.0: the Semplifica

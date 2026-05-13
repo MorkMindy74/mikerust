@@ -4,6 +4,7 @@ pub mod corpora;
 pub mod documents;
 pub mod eurlex;
 pub mod italian_legal;
+pub mod models;
 pub mod presets;
 pub mod projects;
 pub mod sync;

@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Check, Eye, EyeOff, Server, Cpu, ShieldCheck } from "lucide-react";
+import { Check, Eye, EyeOff, Server, Cpu, ShieldCheck, Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useUserProfile } from "@/contexts/UserProfileContext";
@@ -10,10 +10,10 @@ import { apiBase } from "@/lib/apiBase";
 
 // Per-provider settings shape used in the form.
 //
-// Important: API keys are NEVER kept in form state — see `secretInputs`
-// below. The state only knows whether a saved key exists on the backend
-// (`*Saved` flags) so the UI can render "•••• salvata" without the key
-// ever being visible to the page's React tree.
+// API keys are NEVER kept in form state — see `secretInputs` below. The
+// state only knows whether a saved key exists on the backend (`*Saved`
+// flags) so the UI can render "chiave salvata" without the key ever
+// being visible to the page's React tree.
 interface LLMSettings {
     openaiSaved: boolean;
     openaiModel: string;
@@ -28,18 +28,6 @@ interface LLMSettings {
     activeProvider: "openai" | "claude" | "gemini" | "local";
 }
 
-const GEMINI_REGION_IDS = [
-    "global",
-    "europe-west1",
-    "europe-west4",
-    "europe-west8",
-    "europe-southwest1",
-    "us-central1",
-    "us-east4",
-    "asia-southeast1",
-    "asia-northeast1",
-] as const;
-
 const DEFAULTS: LLMSettings = {
     openaiSaved: false,
     openaiModel: "gpt-4o",
@@ -53,6 +41,33 @@ const DEFAULTS: LLMSettings = {
     localModel: "",
     activeProvider: "local",
 };
+
+// Catalogue shapes — mirror `src/presets/model.rs` over the wire.
+interface CatalogueModel {
+    id: string;
+    display_name: string;
+    family?: string;
+    tier?: string;
+    preview?: boolean;
+    legacy?: boolean;
+    supports_vision?: boolean;
+    supports_tools?: boolean;
+}
+interface CatalogueRegion {
+    id: string;
+    display_name: string;
+    is_default?: boolean;
+}
+interface CatalogueProvider {
+    id: string;
+    display_name: string;
+    supports_regions: boolean;
+    regions: CatalogueRegion[];
+    models: CatalogueModel[];
+}
+interface ModelCatalogue {
+    providers: CatalogueProvider[];
+}
 
 function getToken() {
     return typeof window !== "undefined"
@@ -115,14 +130,25 @@ async function loadSettings(): Promise<LLMSettings> {
     }
 }
 
+async function loadCatalogue(): Promise<ModelCatalogue | null> {
+    if (typeof window === "undefined") return null;
+    const token = getToken();
+    if (!token) return null;
+    try {
+        const res = await fetch(`${apiBase()}/models`, {
+            headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) return null;
+        return (await res.json()) as ModelCatalogue;
+    } catch {
+        return null;
+    }
+}
+
 // Send a partial update. Backend uses COALESCE — fields we don't
 // include keep their existing value. We only include API keys when the
 // user has actually re-typed them (see callers); everything else is
 // always sent because those fields are visible and editable.
-//
-// Returns the parsed error body (or `null` on success) so the caller
-// can surface it. Previously the save was fire-and-forget, which hid
-// 401/500 responses behind a green checkmark.
 async function saveSettings(body: Record<string, unknown>): Promise<string | null> {
     const token = getToken();
     if (!token) {
@@ -137,8 +163,6 @@ async function saveSettings(body: Record<string, unknown>): Promise<string | nul
         },
         body: JSON.stringify(body),
     });
-    // Stale token from a previous DB / process. Clear local auth state so
-    // the next render boots us back to /login instead of looping on 401.
     if (res.status === 401 && typeof window !== "undefined") {
         localStorage.removeItem("mike_auth_token");
         localStorage.removeItem("mike_auth_user");
@@ -154,26 +178,31 @@ async function saveSettings(body: Record<string, unknown>): Promise<string | nul
 
 type Provider = "openai" | "claude" | "gemini" | "local";
 
+// Map our backend provider ids onto the catalogue provider ids.
+// Backend uses the short keys (claude, gemini) while the catalogue
+// uses the vendor names (anthropic, google) — keep both in sync here
+// so a future rename only touches one map.
+const CATALOGUE_PROVIDER_ID: Record<
+    "openai" | "claude" | "gemini",
+    string
+> = {
+    openai: "openai",
+    claude: "anthropic",
+    gemini: "google",
+};
+
 export default function ModelsAndApiKeysPage() {
     const [settings, setSettings] = useState<LLMSettings>(DEFAULTS);
+    const [catalogue, setCatalogue] = useState<ModelCatalogue | null>(null);
     const [saved, setSaved] = useState(false);
     const [saveError, setSaveError] = useState<string | null>(null);
     const [loaded, setLoaded] = useState(false);
     const t = useTranslations("Models");
     const tCommon = useTranslations("Common");
-    const tRegions = useTranslations("Models.geminiRegions");
-    // Re-fetch the global LLM config after a successful save so the chat
-    // ModelToggle (which reads from this context) picks up the newly
-    // configured provider — otherwise the user has to reload to see
-    // their just-added Gemini / Claude / OpenAI key reflected.
     const { reloadProfile } = useUserProfile();
 
-    // Plaintext API keys live OUTSIDE React state — they're only set when
-    // the user types into the field and read once at save time. The DOM
-    // input is a normal controlled `<input>` whose internal value is kept
-    // by the browser; we read it via ref. This way the React tree never
-    // holds the secret, which simplifies redaction in dev tools and
-    // prevents accidental leaks via e.g. memoized children.
+    // Plaintext API keys live OUTSIDE React state — see notes in the
+    // original SecretField comment block.
     const openaiRef = useRef<HTMLInputElement>(null);
     const claudeRef = useRef<HTMLInputElement>(null);
     const geminiRef = useRef<HTMLInputElement>(null);
@@ -181,9 +210,10 @@ export default function ModelsAndApiKeysPage() {
 
     useEffect(() => {
         let cancelled = false;
-        loadSettings().then((s) => {
+        Promise.all([loadSettings(), loadCatalogue()]).then(([s, c]) => {
             if (cancelled) return;
             setSettings(s);
+            setCatalogue(c);
             setLoaded(true);
         });
         return () => {
@@ -194,12 +224,35 @@ export default function ModelsAndApiKeysPage() {
     const set = (patch: Partial<LLMSettings>) =>
         setSettings((prev) => ({ ...prev, ...patch }));
 
+    // Lookup helpers — kept memoised because the catalogue can have a
+    // few hundred entries (regions × models × providers).
+    const providerById = useMemo(() => {
+        const map = new Map<string, CatalogueProvider>();
+        for (const p of catalogue?.providers ?? []) map.set(p.id, p);
+        return map;
+    }, [catalogue]);
+
+    // Provider is "configured" when an API key is saved (for cloud
+    // providers) OR when the local base URL is filled in (for the
+    // local provider — the key is optional there). Used both to gate
+    // the "active provider" toggle and to pre-empt confusion: clicking
+    // "set as active" on a provider with no key would just mean the
+    // chat picker silently uses the wrong endpoint.
+    const isConfigured = (p: Provider): boolean => {
+        switch (p) {
+            case "openai":
+                return settings.openaiSaved;
+            case "claude":
+                return settings.claudeSaved;
+            case "gemini":
+                return settings.geminiSaved;
+            case "local":
+                return !!settings.localBaseUrl;
+        }
+    };
+
     const handleSave = async () => {
-        // Build the patch body. API keys: only include when the user
-        // typed something — otherwise omit so the backend keeps the
-        // existing value (COALESCE semantics).
         const body: Record<string, unknown> = {
-            // Models / region / base URL — always editable, always sent.
             openai_model: settings.openaiModel || null,
             main_model: settings.claudeModel || null,
             gemini_model: settings.geminiModel || null,
@@ -223,17 +276,11 @@ export default function ModelsAndApiKeysPage() {
 
         const err = await saveSettings(body);
         if (err) {
-            // Don't fake-show "saved" when the backend rejected the request.
-            // We also DON'T mark the api-key fields as saved or wipe the
-            // input, so the user can retry with the typed value still
-            // available.
             setSaveError(err);
             setSaved(false);
             return;
         }
 
-        // Success path: clear typed values from the DOM and update the
-        // chip flags from the in-memory state.
         if (openaiRef.current) openaiRef.current.value = "";
         if (claudeRef.current) claudeRef.current.value = "";
         if (geminiRef.current) geminiRef.current.value = "";
@@ -247,9 +294,6 @@ export default function ModelsAndApiKeysPage() {
             localSaved: prev.localSaved || !!localTyped,
         }));
 
-        // Refresh the shared LLM config so the chat picker, sidebar, and
-        // anything else reading from UserProfileContext see the change
-        // immediately.
         await reloadProfile();
 
         setSaveError(null);
@@ -257,9 +301,6 @@ export default function ModelsAndApiKeysPage() {
         setTimeout(() => setSaved(false), 2000);
     };
 
-    // Explicitly clear a stored key. Sends an empty string so the
-    // backend writes "" → effectively cleared (we read `!!value` to
-    // decide "is a key set?").
     const clearKey = async (provider: Provider) => {
         const field =
             provider === "openai"
@@ -269,18 +310,31 @@ export default function ModelsAndApiKeysPage() {
                   : provider === "gemini"
                     ? "gemini_api_key"
                     : "local_api_key";
-        await saveSettings({ [field]: "" });
-        setSettings((prev) => ({
-            ...prev,
-            ...(provider === "openai" && { openaiSaved: false }),
-            ...(provider === "claude" && { claudeSaved: false }),
-            ...(provider === "gemini" && { geminiSaved: false }),
-            ...(provider === "local" && { localSaved: false }),
-        }));
+        const err = await saveSettings({ [field]: "" });
+        if (err) {
+            setSaveError(err);
+            return;
+        }
+        setSettings((prev) => {
+            const next = {
+                ...prev,
+                ...(provider === "openai" && { openaiSaved: false }),
+                ...(provider === "claude" && { claudeSaved: false }),
+                ...(provider === "gemini" && { geminiSaved: false }),
+                ...(provider === "local" && { localSaved: false }),
+            };
+            // If the active provider just lost its key, fall back to
+            // "local" so the chat picker doesn't try to use a
+            // now-credentialless cloud provider on the next turn.
+            if (prev.activeProvider === provider && provider !== "local") {
+                next.activeProvider = "local";
+            }
+            return next;
+        });
         await reloadProfile();
     };
 
-    const PROVIDERS: { id: LLMSettings["activeProvider"]; label: string }[] = [
+    const PROVIDERS: { id: Provider; label: string }[] = [
         { id: "openai", label: t("openai") },
         { id: "claude", label: t("anthropic") },
         { id: "gemini", label: t("gemini") },
@@ -295,24 +349,42 @@ export default function ModelsAndApiKeysPage() {
 
     return (
         <div className="space-y-8 max-w-xl">
-            {/* Active provider */}
+            {/* Active provider — disabled buttons for providers without a saved key */}
             <section>
                 <h2 className="text-2xl font-medium font-serif mb-4">{t("activeProvider")}</h2>
                 <div className="grid grid-cols-2 gap-2">
-                    {PROVIDERS.map((p) => (
-                        <button
-                            key={p.id}
-                            onClick={() => set({ activeProvider: p.id })}
-                            className={`text-left px-4 py-3 rounded-lg border text-sm font-medium transition-colors ${
-                                settings.activeProvider === p.id
-                                    ? "border-black bg-black text-white"
-                                    : "border-gray-200 hover:border-gray-400 text-gray-700"
-                            }`}
-                        >
-                            {p.label}
-                        </button>
-                    ))}
+                    {PROVIDERS.map((p) => {
+                        const enabled = isConfigured(p.id);
+                        const active = settings.activeProvider === p.id;
+                        return (
+                            <button
+                                key={p.id}
+                                type="button"
+                                onClick={() =>
+                                    enabled && set({ activeProvider: p.id })
+                                }
+                                disabled={!enabled}
+                                aria-pressed={active}
+                                title={enabled ? undefined : t("providerNotConfigured")}
+                                className={`flex items-center justify-between gap-2 text-left px-4 py-3 rounded-lg border text-sm font-medium transition-colors ${
+                                    active
+                                        ? "border-black bg-black text-white"
+                                        : enabled
+                                            ? "border-gray-200 hover:border-gray-400 text-gray-700"
+                                            : "border-gray-100 bg-gray-50 text-gray-400 cursor-not-allowed"
+                                }`}
+                            >
+                                <span>{p.label}</span>
+                                {!enabled && <Lock className="h-3.5 w-3.5 shrink-0" />}
+                            </button>
+                        );
+                    })}
                 </div>
+                {!catalogue && (
+                    <p className="mt-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                        {t("noCatalogue")}
+                    </p>
+                )}
             </section>
 
             {/* OpenAI */}
@@ -329,14 +401,11 @@ export default function ModelsAndApiKeysPage() {
                         keySaved={settings.openaiSaved}
                         onClear={() => clearKey("openai")}
                     />
-                    <div>
-                        <label className="text-sm text-gray-600 block mb-1">{t("model")}</label>
-                        <Input
-                            value={settings.openaiModel}
-                            onChange={(e) => set({ openaiModel: e.target.value })}
-                            placeholder={t("modelPlaceholder")}
-                        />
-                    </div>
+                    <ModelSelect
+                        provider={providerById.get(CATALOGUE_PROVIDER_ID.openai)}
+                        value={settings.openaiModel}
+                        onChange={(v) => set({ openaiModel: v })}
+                    />
                 </div>
             </section>
 
@@ -354,14 +423,11 @@ export default function ModelsAndApiKeysPage() {
                         keySaved={settings.claudeSaved}
                         onClear={() => clearKey("claude")}
                     />
-                    <div>
-                        <label className="text-sm text-gray-600 block mb-1">{t("model")}</label>
-                        <Input
-                            value={settings.claudeModel}
-                            onChange={(e) => set({ claudeModel: e.target.value })}
-                            placeholder={t("modelPlaceholder")}
-                        />
-                    </div>
+                    <ModelSelect
+                        provider={providerById.get(CATALOGUE_PROVIDER_ID.claude)}
+                        value={settings.claudeModel}
+                        onChange={(v) => set({ claudeModel: v })}
+                    />
                 </div>
             </section>
 
@@ -379,37 +445,37 @@ export default function ModelsAndApiKeysPage() {
                         keySaved={settings.geminiSaved}
                         onClear={() => clearKey("gemini")}
                     />
-                    <div>
-                        <label className="text-sm text-gray-600 block mb-1">{t("model")}</label>
-                        <Input
-                            value={settings.geminiModel}
-                            onChange={(e) => set({ geminiModel: e.target.value })}
-                            placeholder={t("modelPlaceholder")}
-                        />
-                    </div>
-                    <div>
-                        <label className="text-sm text-gray-600 block mb-1">
-                            {t("geminiRegion")}
-                        </label>
-                        <select
-                            value={settings.geminiRegion}
-                            onChange={(e) => set({ geminiRegion: e.target.value })}
-                            className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm hover:border-gray-400 focus:outline-none transition-colors"
-                        >
-                            {GEMINI_REGION_IDS.map((r) => (
-                                <option key={r} value={r}>
-                                    {tRegions(r as never)}
-                                </option>
-                            ))}
-                        </select>
-                        <p className="mt-1 text-xs text-gray-400">
-                            {t("geminiRegionHint")}
-                        </p>
-                    </div>
+                    <ModelSelect
+                        provider={providerById.get(CATALOGUE_PROVIDER_ID.gemini)}
+                        value={settings.geminiModel}
+                        onChange={(modelId) => {
+                            // Preview models are global-only by spec: force
+                            // the region back to "global" automatically when
+                            // the user picks one.
+                            const p = providerById.get(
+                                CATALOGUE_PROVIDER_ID.gemini,
+                            );
+                            const m = p?.models.find((mm) => mm.id === modelId);
+                            const patch: Partial<LLMSettings> = {
+                                geminiModel: modelId,
+                            };
+                            if (m?.preview) patch.geminiRegion = "global";
+                            set(patch);
+                        }}
+                    />
+                    <RegionSelect
+                        provider={providerById.get(CATALOGUE_PROVIDER_ID.gemini)}
+                        value={settings.geminiRegion}
+                        onChange={(v) => set({ geminiRegion: v })}
+                        forcedToGlobal={isPreviewModel(
+                            providerById.get(CATALOGUE_PROVIDER_ID.gemini),
+                            settings.geminiModel,
+                        )}
+                    />
                 </div>
             </section>
 
-            {/* Local / OpenAI-compatible */}
+            {/* Local / OpenAI-compatible — no catalogue: the user types the model name */}
             <section>
                 <div className="flex items-center gap-2 mb-1">
                     <Server className="h-4 w-4 text-gray-500" />
@@ -456,6 +522,113 @@ export default function ModelsAndApiKeysPage() {
                     </p>
                 )}
             </div>
+        </div>
+    );
+}
+
+function isPreviewModel(
+    provider: CatalogueProvider | undefined,
+    modelId: string,
+): boolean {
+    if (!provider) return false;
+    return !!provider.models.find((m) => m.id === modelId)?.preview;
+}
+
+interface ModelSelectProps {
+    provider: CatalogueProvider | undefined;
+    value: string;
+    onChange: (v: string) => void;
+}
+
+// Renders a `<select>` of models for `provider`. If `value` is not in
+// the catalogue (e.g. a leftover custom id from before the catalogue
+// existed, or one removed in a config refresh) we prepend a synthetic
+// "{value} — custom" option so the user doesn't silently lose their
+// setting. Falls back to a free-form text input when the provider is
+// missing from the catalogue entirely.
+function ModelSelect({ provider, value, onChange }: ModelSelectProps) {
+    const t = useTranslations("Models");
+    if (!provider) {
+        return (
+            <div>
+                <label className="text-sm text-gray-600 block mb-1">{t("model")}</label>
+                <Input
+                    value={value}
+                    onChange={(e) => onChange(e.target.value)}
+                    placeholder={t("modelPlaceholder")}
+                />
+            </div>
+        );
+    }
+    const inCatalogue = provider.models.some((m) => m.id === value);
+    return (
+        <div>
+            <label className="text-sm text-gray-600 block mb-1">{t("model")}</label>
+            <select
+                value={value}
+                onChange={(e) => onChange(e.target.value)}
+                className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm hover:border-gray-400 focus:outline-none transition-colors"
+            >
+                {!value && (
+                    <option value="" disabled>
+                        {t("modelSelectPlaceholder")}
+                    </option>
+                )}
+                {!inCatalogue && value && (
+                    <option value={value}>{`${value} — ${t("customModel")}`}</option>
+                )}
+                {provider.models.map((m) => {
+                    const suffix = m.preview
+                        ? ` (${t("modelPreview")})`
+                        : m.legacy
+                            ? ` (${t("modelLegacy")})`
+                            : "";
+                    return (
+                        <option key={m.id} value={m.id}>
+                            {m.display_name}
+                            {suffix}
+                        </option>
+                    );
+                })}
+            </select>
+        </div>
+    );
+}
+
+interface RegionSelectProps {
+    provider: CatalogueProvider | undefined;
+    value: string;
+    onChange: (v: string) => void;
+    forcedToGlobal: boolean;
+}
+
+// Region dropdown — only renders when the catalogue says the provider
+// supports regions. Disabled (and forced to "global") when the chosen
+// model is a preview model, because preview deployments are global-only.
+function RegionSelect({ provider, value, onChange, forcedToGlobal }: RegionSelectProps) {
+    const t = useTranslations("Models");
+    if (!provider || !provider.supports_regions) return null;
+    const effective = forcedToGlobal ? "global" : value;
+    return (
+        <div>
+            <label className="text-sm text-gray-600 block mb-1">
+                {t("geminiRegion")}
+            </label>
+            <select
+                value={effective}
+                onChange={(e) => onChange(e.target.value)}
+                disabled={forcedToGlobal}
+                className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm hover:border-gray-400 focus:outline-none transition-colors disabled:bg-gray-50 disabled:text-gray-500 disabled:cursor-not-allowed"
+            >
+                {provider.regions.map((r) => (
+                    <option key={r.id} value={r.id}>
+                        {r.display_name}
+                    </option>
+                ))}
+            </select>
+            <p className="mt-1 text-xs text-gray-400">
+                {forcedToGlobal ? t("previewGlobalOnly") : t("geminiRegionHint")}
+            </p>
         </div>
     );
 }

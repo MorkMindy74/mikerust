@@ -160,6 +160,12 @@ pub struct AppState {
     /// this via `/column-presets` to suggest a name/format/prompt
     /// triple when the user starts typing a column title.
     pub column_presets: Arc<Vec<crate::presets::column::ColumnPreset>>,
+
+    /// LLM provider/model/region catalogue loaded from
+    /// `config/model.json`. Served as-is via `GET /models` to drive
+    /// the Settings → Modelli LLM page. Empty when the file is missing
+    /// or malformed — the page will just show empty dropdowns.
+    pub model_catalogue: Arc<crate::presets::model::ModelCatalogue>,
 }
 
 impl AppState {
@@ -289,6 +295,32 @@ impl AppState {
             column_presets_dir.display()
         );
 
+        // LLM model catalogue. Same fail-soft policy: a missing/broken
+        // `config/model.json` logs a warning and falls back to an empty
+        // catalogue. The Settings → Modelli LLM page will render empty
+        // dropdowns rather than fail to mount.
+        let model_catalogue_path = crate::presets::model::catalogue_path();
+        let model_catalogue = match crate::presets::model::load_catalogue(
+            &model_catalogue_path,
+        ) {
+            Ok(c) => {
+                tracing::info!(
+                    "[model-catalogue] loaded {} provider(s) from {}",
+                    c.providers.len(),
+                    model_catalogue_path.display()
+                );
+                c
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "[model-catalogue] load failed from {}: {:#}",
+                    model_catalogue_path.display(),
+                    e
+                );
+                crate::presets::model::ModelCatalogue::empty()
+            }
+        };
+
         Ok(Self {
             db,
             sessions,
@@ -304,6 +336,7 @@ impl AppState {
             corpus_import_progress: Arc::new(RwLock::new(HashMap::new())),
             workflow_presets: Arc::new(workflow_presets),
             column_presets: Arc::new(column_presets),
+            model_catalogue: Arc::new(model_catalogue),
         })
     }
 
