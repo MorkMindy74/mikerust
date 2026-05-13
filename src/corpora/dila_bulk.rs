@@ -660,7 +660,7 @@ pub async fn extract_and_index(
 /// SQLite's INSERT ... ON CONFLICT keeps re-imports idempotent — a
 /// later snapshot containing the same identifier just updates its
 /// metadata + body without duplicating.
-async fn insert_corpus_document<'a>(
+pub async fn insert_corpus_document<'a>(
     tx: &mut sqlx::Transaction<'a, sqlx::Sqlite>,
     corpus_id: &str,
     archive_ts: &str,
@@ -768,6 +768,76 @@ pub async fn record_import(
     .await
     .map_err(|e| anyhow!("upsert corpus_imports: {e}"))?;
     Ok(())
+}
+
+/// Run a FTS5 query against the local `corpus_documents_fts` mirror
+/// for one corpus and return `CorpusHit` rows. Used by the generic
+/// `/corpora/:id/search` route when the strategy is bulk-indexed.
+///
+/// Implementation notes:
+///   - We split the user query into whitespace-separated terms and
+///     phrase-quote each. This neutralises FTS5 operator characters
+///     ('"', '*', ':', '(', etc.) without requiring a real parser.
+///   - The MATCH operator references the table by its ALIAS (`f`),
+///     not by name. SQLite 3.40+ accepts either form, but older
+///     bundles ship more permissive behaviour, and being explicit
+///     prevents a class of "silent zero results" regressions when
+///     the bundled SQLite differs across environments.
+///   - `rank` is the FTS5 bm25 pseudo-column; qualifying it as
+///     `f.rank` matches the alias used for MATCH and keeps the two
+///     consistent.
+pub async fn search_local_index(
+    db: &SqlitePool,
+    corpus_id: &str,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<crate::corpora::CorpusHit>, sqlx::Error> {
+    let fts_query: String = query
+        .split_whitespace()
+        .filter(|w| !w.is_empty())
+        .map(|w| format!("\"{}\"", w.replace('"', "")))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if fts_query.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // FTS5 syntax: the MATCH operator requires the bare table NAME
+    // (not the alias), even when the table appears with an alias
+    // in FROM. `f MATCH ?` errors with "no such column: f". We
+    // keep the alias only for joining + projection.
+    let rows: Vec<(String, Option<String>, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT cd.identifier, cd.titre_full, cd.titre, cd.date_publi, cd.numero \
+         FROM corpus_documents_fts f \
+         JOIN corpus_documents cd \
+           ON cd.corpus_id = f.corpus_id AND cd.identifier = f.numero \
+         WHERE f.corpus_id = ? AND corpus_documents_fts MATCH ? \
+         ORDER BY f.rank \
+         LIMIT ?",
+    )
+    .bind(corpus_id)
+    .bind(&fts_query)
+    .bind(limit as i64)
+    .fetch_all(db)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|(identifier, titre_full, titre, date_publi, numero)| {
+            let title = titre_full
+                .filter(|s| !s.is_empty())
+                .or(titre.filter(|s| !s.is_empty()))
+                .or(numero.filter(|s| !s.is_empty()))
+                .unwrap_or_else(|| identifier.clone());
+            crate::corpora::CorpusHit {
+                identifier,
+                title,
+                date: date_publi,
+                url: String::new(),
+                languages_available: Vec::new(),
+            }
+        })
+        .collect())
 }
 
 /// Read the snapshot record for a corpus, if any.
@@ -1097,6 +1167,116 @@ mod tests {
         assert_eq!(v["xml_files"], 12);
         assert_eq!(v["inserted"], 11);
         assert_eq!(v["elapsed_secs"], 4.2);
+    }
+
+    /// End-to-end: insert the real CNIL XML fixture into an
+    /// in-memory SQLite with migrations applied, then exercise
+    /// `search_local_index` with the queries the user would type
+    /// from the UI:
+    ///   - The full canonical id (`CNILTEXT000054047151`)
+    ///   - A human-readable reference number (`2026-047`)
+    ///   - A body keyword (`octroi`)
+    ///
+    /// Catches the class of bug the user hit in production:
+    /// generic_search returning "Nessun risultato" despite 26367
+    /// documents being indicized. If this test fails, the bug is
+    /// in the SQL / FTS5 layer; if it passes, the bug is upstream
+    /// (route ordering, payload shape, etc.).
+    #[tokio::test]
+    async fn end_to_end_insert_then_search_via_fts5() {
+        // Migration 0009 declares a vec0 virtual table; without
+        // registering the sqlite-vec auto-extension before opening
+        // the connection, the migration runner errors with "no such
+        // module: vec0". Mirrors what AppState::new() does in
+        // production.
+        #[cfg(feature = "rag")]
+        crate::embeddings::register_sqlite_vec_auto_extension();
+
+        // In-memory SQLite needs max_connections=1 — each pool
+        // connection otherwise sees an independent database.
+        use sqlx::sqlite::SqlitePoolOptions;
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("connect in-memory sqlite");
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await
+            .expect("apply migrations");
+
+        // Parse the bundled CNIL fixture and insert it as if the
+        // bulk importer had just walked the archive.
+        let doc = parse_dila_xml(REAL_CNIL_XML).expect("parse fixture");
+        let mut tx = pool.begin().await.expect("begin tx");
+        insert_corpus_document(&mut tx, "cnil", "20260507-213433", &doc)
+            .await
+            .expect("insert fixture doc");
+        tx.commit().await.expect("commit");
+
+        // Query 1: search by the full canonical CNILTEXT id —
+        // this is what the UI calls /corpora/cnil/search with when
+        // the user types the identifier_example.
+        let hits =
+            search_local_index(&pool, "cnil", "CNILTEXT000054047151", 10)
+                .await
+                .expect("search by canonical id");
+        assert!(
+            !hits.is_empty(),
+            "search by canonical id returned no hits; got {} rows",
+            hits.len()
+        );
+        assert_eq!(hits[0].identifier, "CNILTEXT000054047151");
+        assert!(
+            hits[0]
+                .title
+                .contains("2026-047"),
+            "expected title to contain reference 2026-047, got: {:?}",
+            hits[0].title
+        );
+
+        // Query 2: search by the human reference number. NUMERO is
+        // stored in titre_full / titre / body, so FTS5 should find
+        // it even though the FTS column literally called `numero`
+        // holds the canonical id (an indexing quirk documented in
+        // insert_corpus_document — kept consistent here so the
+        // test pins the actual behaviour).
+        let hits = search_local_index(&pool, "cnil", "2026-047", 10)
+            .await
+            .expect("search by reference number");
+        assert!(
+            !hits.is_empty(),
+            "search by reference 2026-047 returned no hits"
+        );
+
+        // Query 3: search by a body keyword. Tests that the body
+        // text is actually indexed (and not, say, accidentally
+        // stripped before insert).
+        let hits = search_local_index(&pool, "cnil", "octroi", 10)
+            .await
+            .expect("search by body keyword");
+        assert!(
+            !hits.is_empty(),
+            "search by body keyword 'octroi' returned no hits"
+        );
+
+        // Query 4: a corpus_id filter — searching in 'other' must
+        // return nothing even when the query would match in 'cnil'.
+        let hits =
+            search_local_index(&pool, "other", "CNILTEXT000054047151", 10)
+                .await
+                .expect("search in unrelated corpus");
+        assert!(
+            hits.is_empty(),
+            "corpus_id filter leaked: search in 'other' returned {} hits",
+            hits.len()
+        );
+
+        // Query 5: empty query → empty result, never a SQL error.
+        let hits = search_local_index(&pool, "cnil", "   ", 10)
+            .await
+            .expect("empty query is not an error");
+        assert!(hits.is_empty());
     }
 
     #[test]

@@ -188,9 +188,10 @@ async fn generic_search(
         plugin.strategy,
         crate::corpora::plugin::CorpusStrategy::DilaBulkXml(_)
     ) {
-        let hits = search_corpus_documents(&state.db, &id, q, limit)
-            .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        let hits =
+            crate::corpora::dila_bulk::search_local_index(&state.db, &id, q, limit)
+                .await
+                .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
         return Ok(Json(json!({ "hits": hits })));
     }
 
@@ -239,67 +240,9 @@ async fn generic_search(
     Ok(Json(json!({ "hits": hits })))
 }
 
-/// Run a FTS5 query against `corpus_documents_fts` for a single
-/// corpus. Returns `CorpusHit` rows so the API surface matches what
-/// the adapter-based search returns. Used by the generic /search
-/// route when the corpus uses a bulk-indexed strategy.
-async fn search_corpus_documents(
-    db: &sqlx::SqlitePool,
-    corpus_id: &str,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<crate::corpora::CorpusHit>, sqlx::Error> {
-    // Use sqlite-fts5 MATCH on the joined columns. Rank by relevance
-    // (default rank is bm25). Strip any FTS5-special characters from
-    // the user query so a doubled quote / unbalanced bracket doesn't
-    // cause a syntax error — we just split into terms and AND them.
-    let fts_query: String = query
-        .split_whitespace()
-        .filter(|w| !w.is_empty())
-        .map(|w| {
-            // Quote each term to escape FTS5 operators inside it.
-            format!("\"{}\"", w.replace('"', ""))
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
-
-    if fts_query.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let rows: Vec<(String, Option<String>, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT cd.identifier, cd.titre_full, cd.titre, cd.date_publi, cd.numero \
-         FROM corpus_documents_fts f \
-         JOIN corpus_documents cd \
-           ON cd.corpus_id = f.corpus_id AND cd.identifier = f.numero \
-         WHERE f.corpus_id = ? AND corpus_documents_fts MATCH ? \
-         ORDER BY rank \
-         LIMIT ?",
-    )
-    .bind(corpus_id)
-    .bind(&fts_query)
-    .bind(limit as i64)
-    .fetch_all(db)
-    .await?;
-
-    Ok(rows
-        .into_iter()
-        .map(|(identifier, titre_full, titre, date_publi, numero)| {
-            let title = titre_full
-                .filter(|s| !s.is_empty())
-                .or(titre.filter(|s| !s.is_empty()))
-                .or(numero.filter(|s| !s.is_empty()))
-                .unwrap_or_else(|| identifier.clone());
-            crate::corpora::CorpusHit {
-                identifier,
-                title,
-                date: date_publi,
-                url: String::new(),
-                languages_available: Vec::new(),
-            }
-        })
-        .collect())
-}
+// search_local_index lives in src/corpora/dila_bulk.rs (so it's
+// testable end-to-end with a fixture); routes/corpora.rs above
+// delegates to it directly.
 
 // ---------------------------------------------------------------------------
 // POST /corpora/:id/fetch  — { identifier, language? }
