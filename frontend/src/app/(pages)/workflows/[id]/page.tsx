@@ -10,10 +10,6 @@ import { WFEditColumnModal } from "@/app/components/workflows/WFEditColumnModal"
 import { WFColumnViewModal } from "@/app/components/workflows/WFColumnViewModal";
 import { AddColumnModal } from "@/app/components/tabular/AddColumnModal";
 import type { ColumnConfig, MikeWorkflow } from "@/app/components/shared/types";
-import {
-    BUILT_IN_IDS,
-    BUILT_IN_WORKFLOWS,
-} from "@/app/components/workflows/builtinWorkflows";
 import { formatIcon, formatLabel } from "@/app/components/tabular/columnFormat";
 import { RenameableTitle } from "@/app/components/shared/RenameableTitle";
 // dynamic import keeps Tiptap (browser-only) out of the SSR bundle
@@ -45,11 +41,12 @@ export default function WorkflowDetailPage({ params }: Props) {
     const [loading, setLoading] = useState(true);
     const [notFound, setNotFound] = useState(false);
 
-    const isBuiltin = BUILT_IN_IDS.has(id);
+    // Built-in workflows now arrive from the backend with `is_system: true`
+    // (the /workflow GET-by-id handler short-circuits to the in-memory
+    // preset registry before hitting the DB). So `readOnly` derives
+    // exclusively from the loaded workflow's flags — no hardcoded ID set.
     const readOnly =
-        isBuiltin ||
-        (workflow?.is_system ?? false) ||
-        workflow?.allow_edit === false;
+        (workflow?.is_system ?? false) || workflow?.allow_edit === false;
     const canShare = !readOnly && (workflow?.is_owner ?? true);
 
     // Editor state
@@ -89,19 +86,10 @@ export default function WorkflowDetailPage({ params }: Props) {
     // Load workflow
     // ---------------------------------------------------------------------------
     useEffect(() => {
-        if (isBuiltin) {
-            const wf = BUILT_IN_WORKFLOWS.find((w) => w.id === id) ?? null;
-            if (!wf) {
-                setNotFound(true);
-            } else {
-                setWorkflow(wf);
-                setPromptMd(wf.prompt_md ?? "");
-                setColumns(wf.columns_config ?? []);
-            }
-            setLoading(false);
-            return;
-        }
-
+        // Single code path — the backend's GET /workflow/:id returns
+        // built-ins from the in-memory preset registry and user rows
+        // from the DB indistinguishably. The frontend only cares about
+        // the `is_system` flag for edit gating.
         getWorkflow(id)
             .then((wf) => {
                 setWorkflow(wf);
@@ -114,7 +102,7 @@ export default function WorkflowDetailPage({ params }: Props) {
             })
             .catch(() => setNotFound(true))
             .finally(() => setLoading(false));
-    }, [id, isBuiltin]);
+    }, [id]);
 
     // ---------------------------------------------------------------------------
     // Debounced auto-save for prompt

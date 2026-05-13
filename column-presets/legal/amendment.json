@@ -1,0 +1,8 @@
+{
+    "name": "Amendment",
+    "match_pattern": "\\bamendment\\b|\\bvariation\\b",
+    "match_flags": "i",
+    "format": "text",
+    "domain": "legal",
+    "prompt": "Summarize the amendment provisions: how amendments may be made, who must consent, and any formality requirements such as writing or signature."
+}

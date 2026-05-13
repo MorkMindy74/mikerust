@@ -7,6 +7,7 @@ pub mod llm;
 pub mod mcp;
 pub mod mikeprj;
 pub mod pdf;
+pub mod presets;
 pub mod routes;
 pub mod storage;
 pub mod sync;
@@ -150,6 +151,7 @@ pub async fn run_server_with_channels(
         // Alias used by the upstream-Mike frontend for standalone documents.
         .nest("/single-documents", routes::documents::router())
         .nest("/workflow",  routes::workflows::router())
+        .nest("/column-presets", routes::presets::router())
         .nest("/tabular-review", routes::tabular_reviews::router())
         .nest("/sync",     routes::sync::router())
         .nest("/eurlex",   routes::eurlex::router())

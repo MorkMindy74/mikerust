@@ -5,10 +5,13 @@ import { useTranslations } from "next-intl";
 import { createPortal } from "react-dom";
 import { ChevronDown, Plus, X } from "lucide-react";
 import type { ColumnConfig, ColumnFormat } from "../shared/types";
-import { generateTabularColumnPrompt } from "@/app/lib/mikeApi";
+import {
+    generateTabularColumnPrompt,
+    listColumnPresets,
+    type ColumnPresetDTO,
+} from "@/app/lib/mikeApi";
 import { FORMAT_OPTIONS, formatLabel, formatIcon } from "../tabular/columnFormat";
 import { TAG_COLORS } from "../tabular/pillUtils";
-import { getPresetConfig, PROMPT_PRESETS } from "../tabular/columnPresets";
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -44,6 +47,47 @@ export function WFEditColumnModal({ column, onClose, onSave, onDelete }: Props) 
     const [generating, setGenerating] = useState(false);
     const [presetsOpen, setPresetsOpen] = useState(false);
     const presetsRef = useRef<HTMLDivElement>(null);
+
+    // Column presets fetched from /column-presets. Regex is rebuilt at
+    // use-time from the wire-format `match_pattern` + `match_flags`.
+    const [presets, setPresets] = useState<ColumnPresetDTO[]>([]);
+    useEffect(() => {
+        let cancelled = false;
+        listColumnPresets()
+            .then((list) => {
+                if (!cancelled) setPresets(list);
+            })
+            .catch(() => {
+                /* leave empty on error */
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    function getPresetConfig(name: string): {
+        prompt: string;
+        format: ColumnFormat;
+        tags?: string[];
+    } | null {
+        const trimmed = name.trim();
+        if (!trimmed || presets.length === 0) return null;
+        for (const p of presets) {
+            try {
+                const rx = new RegExp(p.match_pattern, p.match_flags || "");
+                if (rx.test(trimmed)) {
+                    return {
+                        prompt: p.prompt,
+                        format: p.format as ColumnFormat,
+                        tags: p.tags ?? undefined,
+                    };
+                }
+            } catch {
+                /* invalid regex in JSON — skip */
+            }
+        }
+        return null;
+    }
 
     useEffect(() => {
         setDraft({
@@ -179,12 +223,12 @@ export function WFEditColumnModal({ column, onClose, onSave, onDelete }: Props) 
                                         >
                                             No Preset
                                         </button>
-                                        {PROMPT_PRESETS.map((preset) => (
+                                        {presets.map((preset) => (
                                             <button
                                                 key={preset.name}
                                                 type="button"
                                                 onClick={() => {
-                                                    update({ name: preset.name, prompt: preset.prompt, format: preset.format, tags: preset.tags ?? [], tagInput: "" });
+                                                    update({ name: preset.name, prompt: preset.prompt, format: preset.format as ColumnFormat, tags: preset.tags ?? [], tagInput: "" });
                                                     setPresetsOpen(false);
                                                 }}
                                                 className="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 transition-colors"

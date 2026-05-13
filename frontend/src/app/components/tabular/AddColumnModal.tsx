@@ -5,10 +5,13 @@ import { useTranslations } from "next-intl";
 import { createPortal } from "react-dom";
 import { ChevronDown, Plus, X } from "lucide-react";
 import type { ColumnConfig, ColumnFormat } from "../shared/types";
-import { generateTabularColumnPrompt } from "@/app/lib/mikeApi";
+import {
+    generateTabularColumnPrompt,
+    listColumnPresets,
+    type ColumnPresetDTO,
+} from "@/app/lib/mikeApi";
 import { FORMAT_OPTIONS, formatLabel, formatIcon } from "./columnFormat";
 import { TAG_COLORS } from "./pillUtils";
-import { getPresetConfig, PROMPT_PRESETS } from "./columnPresets";
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -52,6 +55,54 @@ export function AddColumnModal({ open, existingCount, onClose, onAdd, editingCol
         null,
     );
     const presetsRef = useRef<HTMLDivElement>(null);
+
+    // Column presets are fetched once when the modal opens. The regex is
+    // rebuilt at use-time from `match_pattern` + `match_flags` (the wire
+    // format keeps them split so the JSON stays portable). Failure is
+    // silent — the dropdown just stays empty, no behaviour change for
+    // users who never expand it.
+    const [presets, setPresets] = useState<ColumnPresetDTO[]>([]);
+    useEffect(() => {
+        if (!open) return;
+        let cancelled = false;
+        listColumnPresets()
+            .then((list) => {
+                if (!cancelled) setPresets(list);
+            })
+            .catch(() => {
+                /* leave empty */
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [open]);
+
+    /** Auto-suggest a preset when the user types a column name —
+     *  walks the loaded list, returns the first preset whose regex
+     *  matches the typed title. Null when nothing matches. */
+    function getPresetConfig(name: string): {
+        prompt: string;
+        format: ColumnFormat;
+        tags?: string[];
+    } | null {
+        const trimmed = name.trim();
+        if (!trimmed || presets.length === 0) return null;
+        for (const p of presets) {
+            try {
+                const rx = new RegExp(p.match_pattern, p.match_flags || "");
+                if (rx.test(trimmed)) {
+                    return {
+                        prompt: p.prompt,
+                        format: p.format as ColumnFormat,
+                        tags: p.tags ?? undefined,
+                    };
+                }
+            } catch {
+                /* invalid pattern in JSON — skip and continue */
+            }
+        }
+        return null;
+    }
 
     useEffect(() => {
         if (!open) return;
@@ -285,7 +336,7 @@ export function AddColumnModal({ open, existingCount, onClose, onAdd, editingCol
                                                 >
                                                     No Preset
                                                 </button>
-                                                {PROMPT_PRESETS.map(
+                                                {presets.map(
                                                     (preset) => (
                                                         <button
                                                             key={preset.name}
@@ -296,7 +347,7 @@ export function AddColumnModal({ open, existingCount, onClose, onAdd, editingCol
                                                                     {
                                                                         name: preset.name,
                                                                         prompt: preset.prompt,
-                                                                        format: preset.format,
+                                                                        format: preset.format as ColumnFormat,
                                                                         tags:
                                                                             preset.tags ??
                                                                             [],

@@ -1,0 +1,106 @@
+//! JSON-driven preset registries for system-shipped workflows and
+//! column shortcuts.
+//!
+//! The two registries are loaded once at startup from on-disk directories
+//! (`workflow-presets/<domain>/*.json` and `column-presets/<domain>/*.json`)
+//! and held in `AppState`. They are NEVER written to the DB — the
+//! `/workflow` list endpoint merges them with the user's own rows at
+//! response time, so adding a new preset is as simple as dropping a
+//! JSON file into the right directory and restarting the app.
+//!
+//! Built-in workflows are non-editable from the UI: the existing
+//! workflow update/delete handlers use `WHERE user_id = ? AND id = ?`
+//! filters, so a row with `user_id IS NULL` is effectively read-only
+//! through the API. The frontend additionally surfaces `is_system:
+//! true` to grey out the edit/delete affordances.
+//!
+//! Mirrors the corpus-plugin pattern in `crate::corpora::plugin` —
+//! same ancestor-walking directory resolution, same fail-soft
+//! parsing (one broken JSON does not stop the rest from loading).
+
+pub mod column;
+pub mod workflow;
+
+use std::path::{Path, PathBuf};
+
+/// Resolve the on-disk directory for a preset family. Lookup order:
+///
+///   1. `MIKE_<KIND>_PRESETS_DIR` env var (absolute path).
+///   2. Walk ancestors from CWD looking for `<kind>-presets/`.
+///   3. Walk ancestors from the current executable's path.
+///   4. Fallback to `./<kind>-presets`.
+///
+/// `kind` is the lowercase prefix used both in the env var and in the
+/// directory name — `"workflow"` resolves to `MIKE_WORKFLOW_PRESETS_DIR`
+/// and `workflow-presets/`; `"column"` resolves to
+/// `MIKE_COLUMN_PRESETS_DIR` and `column-presets/`.
+pub fn presets_dir(kind: &str) -> PathBuf {
+    let env_var = format!("MIKE_{}_PRESETS_DIR", kind.to_ascii_uppercase());
+    let dir_name = format!("{kind}-presets");
+
+    if let Ok(dir) = std::env::var(&env_var) {
+        return PathBuf::from(dir);
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        if let Some(found) = walk_ancestors_for(&cwd, &dir_name) {
+            return found;
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(found) = walk_ancestors_for(&exe, &dir_name) {
+            return found;
+        }
+    }
+    PathBuf::from(format!("./{dir_name}"))
+}
+
+fn walk_ancestors_for(start: &Path, dir_name: &str) -> Option<PathBuf> {
+    for anc in start.ancestors() {
+        let candidate = anc.join(dir_name);
+        if candidate.is_dir() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// Collect every `.json` file under `root`, recursing into subdirectories
+/// one level deep so domain-organised layouts like
+/// `workflow-presets/legal/*.json` and `workflow-presets/insurance/*.json`
+/// work without configuration. Hidden directories (starting with `.`)
+/// and any non-`.json` files are skipped.
+pub fn collect_json_files(root: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    if !root.is_dir() {
+        return Ok(out);
+    }
+    for entry in std::fs::read_dir(root)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("json") {
+            out.push(path);
+        } else if path.is_dir() {
+            let name = path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("");
+            if name.starts_with('.') {
+                continue;
+            }
+            // One-level recursion is enough for the `<domain>/<slug>.json`
+            // layout we ship today. Deeper trees can be added later if a
+            // jurisdiction needs sub-folders (e.g. country → sector).
+            for sub in std::fs::read_dir(&path)? {
+                let sub = sub?;
+                let sub_path = sub.path();
+                if sub_path.is_file()
+                    && sub_path.extension().and_then(|s| s.to_str()) == Some("json")
+                {
+                    out.push(sub_path);
+                }
+            }
+        }
+    }
+    out.sort();
+    Ok(out)
+}

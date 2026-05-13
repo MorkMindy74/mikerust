@@ -115,10 +115,30 @@ async fn list_workflows(
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
-    let workflows: Vec<Value> = rows
+    let mut workflows: Vec<Value> = rows
         .into_iter()
         .map(|r| row_to_json(r, &auth.user_id))
         .collect();
+
+    // Merge in-memory workflow presets (system-shipped from
+    // workflow-presets/<domain>/*.json). They appear with
+    // `is_system: true` and a null `user_id` so the existing
+    // edit/delete gating on the frontend kicks in. Apply the same
+    // `type` and `domain` filters used for the DB query so the
+    // user's selection slices both registries consistently.
+    for preset in state.workflow_presets.iter() {
+        if let Some(ref t) = type_filter {
+            if &preset.kind != t {
+                continue;
+            }
+        }
+        if let Some(ref d) = domain_filter {
+            if &preset.domain != d {
+                continue;
+            }
+        }
+        workflows.push(preset.to_api_json());
+    }
 
     Ok(Json(json!({ "workflows": workflows })))
 }
@@ -213,6 +233,12 @@ async fn get_workflow(
     auth: AuthUser,
     Path(id): Path<String>,
 ) -> ApiResult {
+    // Workflow presets are not stored in the DB — short-circuit the
+    // lookup so the workflow detail page can fetch a built-in by id.
+    if let Some(preset) = state.workflow_presets.iter().find(|p| p.id == id) {
+        return Ok(Json(preset.to_api_json()));
+    }
+
     let row: Option<WorkflowRow> = sqlx::query_as(&format!(
         "SELECT {SELECT_COLS} FROM workflows WHERE id = ? AND user_id = ?"
     ))

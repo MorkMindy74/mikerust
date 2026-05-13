@@ -1,0 +1,8 @@
+{
+    "name": "Change of Control",
+    "match_pattern": "\\bchange of control\\b",
+    "match_flags": "i",
+    "format": "text",
+    "domain": "legal",
+    "prompt": "Identify any change of control provisions. Summarize the trigger events, consequences, consent requirements, and any related termination or acceleration rights. Be concise."
+}

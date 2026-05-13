@@ -1,0 +1,8 @@
+{
+    "name": "Parties",
+    "match_pattern": "\\bpart(y|ies)\\b",
+    "match_flags": "i",
+    "format": "bulleted_list",
+    "domain": "legal",
+    "prompt": "List all parties to this agreement. For each party, state their full legal name, entity type, and defined role, e.g.:\n• ABC Corp, a Delaware corporation (\"Company\")\n• John Smith (\"Shareholder\")\nOne party per bullet. No additional commentary."
+}

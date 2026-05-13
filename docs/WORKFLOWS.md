@@ -545,28 +545,72 @@ display name. Rebuild the frontend (or wait for the dev-mode HMR pass).
 
 ### 11.2 Ship a built-in workflow for your domain
 
-Edit
-[`frontend/src/app/components/workflows/builtinWorkflows.ts`](../frontend/src/app/components/workflows/builtinWorkflows.ts)
-and append a new entry to the `BUILT_IN_WORKFLOWS` array following the
-shape of the existing ones. Keep `is_system: true`, `user_id: null`,
-and use a stable `id` prefixed with `builtin-` (the prefix is the
-convention; the loader treats anything in this array as system-shipped).
+Built-in workflows live as **JSON preset files** under
+[`workflow-presets/<domain>/`](../workflow-presets/), loaded once at
+startup by the backend and merged into the `/workflow` API response
+with `is_system: true`. The on-disk JSON is the single source of truth
+— no DB row is written, no rebuild required. To add one:
 
-Re-launch the app. Your new workflow appears alongside the legal
-built-ins in the workflow list. If you're sharing your build with
-colleagues, this is how they get the workflow without having to type
-it themselves.
+1. Pick the right domain subfolder (`legal/`, `medical/`, `insurance/`,
+   etc.). Create the folder if it doesn't exist yet.
+2. Write a new file `<slug>.json` shaped like the existing ones:
 
-### 11.3 Long-term — a workflows-plugin manifest
+   ```json
+   {
+     "id": "builtin-<slug>",
+     "title": "My New Workflow",
+     "type": "tabular",
+     "domain": "insurance",
+     "practice": "Others — Insurance",
+     "prompt_md": "## Goal …",
+     "columns_config": [
+       { "index": 0, "name": "Parties", "format": "text", "prompt": "…" }
+     ]
+   }
+   ```
+3. Restart `tauri dev` (or `cargo run`). The new preset appears
+   alongside the existing ones in the workflow list, gated to the
+   selected domain by the standard domain filter chip.
 
-Right now built-ins are TypeScript constants. The plugin system used
-for legal-corpus connectors (see
-[`docs/CORPUS_PLUGINS.md`](CORPUS_PLUGINS.md)) is a natural template
-for a future workflows plugin format: drop a JSON file into
-`workflow-plugins/` and have it merge into the registry at startup.
-This is on the roadmap but not yet implemented. If you'd find it
-useful, open an issue —
-[github.com/SemplificaAI/MikeRust/issues](https://github.com/SemplificaAI/MikeRust/issues).
+**Built-in workflows are read-only from the UI.** The
+`update_workflow` / `delete_workflow` handlers use
+`WHERE user_id = ?` filters, and presets have `user_id = NULL`, so
+the API naturally refuses edits. The frontend additionally surfaces
+`is_system: true` to grey out the edit/delete affordances. Users
+**can** hide a built-in (the `user_hidden_workflows` table scopes
+hiding per-user) or **duplicate** it to get an editable custom copy.
+
+### 11.3 Ship a column-preset shortcut
+
+Same story for column presets — they live under
+[`column-presets/<domain>/<slug>.json`](../column-presets/) and feed
+the "presets dropdown" in the AddColumnModal. Each file shape:
+
+```json
+{
+    "name": "Parties",
+    "match_pattern": "\\bpart(y|ies)\\b",
+    "match_flags": "i",
+    "format": "bulleted_list",
+    "domain": "legal",
+    "prompt": "List all parties to this agreement. …"
+}
+```
+
+The regex (`match_pattern` + `match_flags`) auto-suggests this preset
+when the user types a column title matching the pattern. Restart the
+app to pick up new files.
+
+### 11.4 Override the preset directory
+
+Both registries respect environment variables for non-standard layouts:
+
+- `MIKE_WORKFLOW_PRESETS_DIR=/path/to/dir` — points the workflow loader
+  at an absolute path instead of walking ancestors.
+- `MIKE_COLUMN_PRESETS_DIR=/path/to/dir` — same for column presets.
+
+Useful when packaging the app or running in containers where the
+working directory diverges from the source tree.
 
 ---
 

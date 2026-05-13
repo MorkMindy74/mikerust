@@ -982,6 +982,37 @@ export async function unhideWorkflow(workflowId: string): Promise<void> {
     await apiRequest(`/workflow/hidden/${workflowId}`, { method: "DELETE" });
 }
 
+// ---------------------------------------------------------------------------
+// Column presets — fetched from /column-presets at runtime.
+// Mirror of `ColumnPreset` in the backend (`src/presets/column.rs`):
+// the regex is split into pattern + flags so the JSON stays portable
+// and we rebuild `new RegExp(pattern, flags)` at consumer side.
+// ---------------------------------------------------------------------------
+
+export interface ColumnPresetDTO {
+    name: string;
+    match_pattern: string;
+    match_flags: string;
+    prompt: string;
+    format:
+        | "text"
+        | "bulleted_list"
+        | "number"
+        | "currency"
+        | "yes_no"
+        | "date"
+        | "tag"
+        | "percentage"
+        | "monetary_amount";
+    domain: string;
+    tags?: string[] | null;
+}
+
+export async function listColumnPresets(): Promise<ColumnPresetDTO[]> {
+    const data = await apiRequest<{ column_presets: ColumnPresetDTO[] }>("/column-presets");
+    return data?.column_presets ?? [];
+}
+
 export async function shareWorkflow(
     workflowId: string,
     payload: { emails: string[]; allow_edit: boolean },

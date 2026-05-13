@@ -1,0 +1,8 @@
+{
+    "name": "Warranties",
+    "match_pattern": "\\bwarrant(y|ies|ing)\\b|\\brepresentations?\\b",
+    "match_flags": "i",
+    "format": "text",
+    "domain": "legal",
+    "prompt": "Identify and describe key representations and warranties provided by any party, including the scope of such assurances and any specific time periods or conditions applicable to them. In particular highlight any non-standard warranties."
+}

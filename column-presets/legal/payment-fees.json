@@ -1,0 +1,8 @@
+{
+    "name": "Payment & Fees",
+    "match_pattern": "\\bpayment\\b|\\bfees?\\b",
+    "match_flags": "i",
+    "format": "text",
+    "domain": "legal",
+    "prompt": "State the key payment obligations concisely: amount, timing, and currency, e.g. \"USD 10,000 payable within 30 days of invoice\". Note any late payment consequences."
+}

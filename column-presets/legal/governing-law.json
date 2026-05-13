@@ -1,0 +1,8 @@
+{
+    "name": "Governing Law",
+    "match_pattern": "\\bgoverning law\\b|\\bjurisdiction\\b",
+    "match_flags": "i",
+    "format": "text",
+    "domain": "legal",
+    "prompt": "State only the governing law of this agreement using the short-form jurisdiction name, e.g. \"New York Law\", \"English Law\", \"Indian Law\", \"PRC Law\". No other text."
+}

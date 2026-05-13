@@ -14,7 +14,6 @@ import {
     uploadStandaloneDocument,
 } from "@/app/lib/mikeApi";
 import { FileDirectory } from "../shared/FileDirectory";
-import { BUILT_IN_WORKFLOWS } from "../workflows/builtinWorkflows";
 
 interface Props {
     open: boolean;
@@ -80,12 +79,11 @@ export function AddNewTRModal({
         if (!open) return;
 
         setLoadingWorkflows(true);
-        const builtinTabular = BUILT_IN_WORKFLOWS.filter(
-            (w) => w.type === "tabular",
-        );
+        // /workflow now returns merged custom + system-shipped tabular
+        // presets, so a single fetch covers everything.
         listWorkflows("tabular")
-            .then((custom) => setWorkflows([...builtinTabular, ...custom]))
-            .catch(() => setWorkflows(builtinTabular))
+            .then((all) => setWorkflows(all))
+            .catch(() => setWorkflows([]))
             .finally(() => setLoadingWorkflows(false));
 
         if (isProjectMode) {

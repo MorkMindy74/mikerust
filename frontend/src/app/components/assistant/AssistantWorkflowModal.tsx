@@ -8,7 +8,6 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { MikeWorkflow } from "../shared/types";
 import { listWorkflows } from "@/app/lib/mikeApi";
-import { BUILT_IN_WORKFLOWS } from "../workflows/builtinWorkflows";
 
 interface Props {
     open: boolean;
@@ -52,14 +51,11 @@ export function AssistantWorkflowModal({
             setSearch("");
             return;
         }
-        const builtins = BUILT_IN_WORKFLOWS.filter(
-            (w) => w.type === "assistant",
-        );
-        setWorkflows(builtins);
+        // /workflow now returns merged custom + system-shipped presets,
+        // so a single fetch covers everything — no client-side merge.
         setLoading(true);
         listWorkflows("assistant")
-            .then((custom) => {
-                const all = [...builtins, ...custom];
+            .then((all) => {
                 setWorkflows(all);
                 if (initialWorkflowId) {
                     const match = all.find((w) => w.id === initialWorkflowId);
@@ -67,17 +63,14 @@ export function AssistantWorkflowModal({
                 }
             })
             .catch(() => {
-                if (initialWorkflowId) {
-                    const match = builtins.find((w) => w.id === initialWorkflowId);
-                    if (match) setSelected(match);
-                }
+                setWorkflows([]);
             })
             .finally(() => setLoading(false));
-        // Pre-select from builtins immediately if possible
-        if (initialWorkflowId) {
-            const match = builtins.find((w) => w.id === initialWorkflowId);
-            if (match) setSelected(match);
-        }
+        // Pre-selection from `initialWorkflowId` is handled inside the
+        // `.then()` above — the previous codepath also tried a sync
+        // match against an in-memory built-ins array, but those now
+        // arrive through the same API call so a separate sync match
+        // would always race against the fetch.
     }, [open, initialWorkflowId]);
 
     if (!open) return null;

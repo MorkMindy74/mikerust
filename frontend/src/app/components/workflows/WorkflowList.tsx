@@ -21,7 +21,6 @@ import {
     unhideWorkflow,
 } from "@/app/lib/mikeApi";
 import type { MikeWorkflow } from "../shared/types";
-import { BUILT_IN_WORKFLOWS, BUILT_IN_IDS } from "./builtinWorkflows";
 import { DisplayWorkflowModal } from "./DisplayWorkflowModal";
 import { NewWorkflowModal } from "./NewWorkflowModal";
 import { ToolbarTabs } from "../shared/ToolbarTabs";
@@ -138,18 +137,25 @@ export function WorkflowList() {
         return () => document.removeEventListener("mousedown", handleClick);
     }, []);
 
-    const hiddenBuiltins = BUILT_IN_WORKFLOWS.filter((wf) =>
-        hiddenBuiltinIds.includes(wf.id),
+    // `custom` is misnamed for historical reasons — since the backend
+    // now merges system-shipped presets into the /workflow response,
+    // this state holds EVERY workflow (both `is_system: true` from the
+    // workflow-presets/* JSON files and `is_system: false` user rows
+    // from the DB). The `is_system` flag drives the tab partitioning
+    // below; no more client-side merge with a TS constant.
+    const hiddenBuiltins = custom.filter(
+        (wf) => wf.is_system && hiddenBuiltinIds.includes(wf.id),
     );
-    const visibleBuiltins = BUILT_IN_WORKFLOWS.filter(
-        (wf) => !hiddenBuiltinIds.includes(wf.id),
+    const visibleBuiltins = custom.filter(
+        (wf) => wf.is_system && !hiddenBuiltinIds.includes(wf.id),
     );
-    const all = [...visibleBuiltins, ...custom];
+    const customOnly = custom.filter((wf) => !wf.is_system);
+    const all = [...visibleBuiltins, ...customOnly];
     const byTab =
         activeTab === "builtin"
             ? visibleBuiltins
             : activeTab === "custom"
-              ? custom
+              ? customOnly
               : activeTab === "hidden"
                 ? hiddenBuiltins
                 : all;
@@ -198,8 +204,14 @@ export function WorkflowList() {
         const ids = [...selectedIds];
         setActionsOpen(false);
         setSelectedIds([]);
-        const builtinIds = ids.filter((id) => BUILT_IN_IDS.has(id));
-        const customIds = ids.filter((id) => !BUILT_IN_IDS.has(id));
+        // Partition by `is_system` from the loaded state rather than a
+        // hardcoded ID set — system workflows are hidden (not deleted),
+        // user workflows are deleted.
+        const systemSet = new Set(
+            custom.filter((w) => w.is_system).map((w) => w.id),
+        );
+        const builtinIds = ids.filter((id) => systemSet.has(id));
+        const customIds = ids.filter((id) => !systemSet.has(id));
         if (builtinIds.length > 0) {
             setHiddenBuiltinIds((prev) => [
                 ...prev,

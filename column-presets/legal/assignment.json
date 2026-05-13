@@ -1,0 +1,8 @@
+{
+    "name": "Assignment",
+    "match_pattern": "\\bassign(ment|ability)?\\b",
+    "match_flags": "i",
+    "format": "yes_no",
+    "domain": "legal",
+    "prompt": "Is assignment of this agreement permitted without the other party's consent?"
+}

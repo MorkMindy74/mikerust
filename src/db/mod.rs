@@ -146,6 +146,20 @@ pub struct AppState {
     pub corpus_import_progress: Arc<
         RwLock<HashMap<String, Arc<RwLock<crate::corpora::dila_bulk::ImportProgress>>>>,
     >,
+
+    /// System-shipped workflow templates loaded from
+    /// `workflow-presets/<domain>/*.json` at startup. Merged into the
+    /// `/workflow` list response with `is_system: true` so the UI
+    /// greys out edit/delete affordances. Read-only: the underlying
+    /// JSON files are the single source of truth. Use the existing
+    /// `user_hidden_workflows` table to scope per-user hiding.
+    pub workflow_presets: Arc<Vec<crate::presets::workflow::WorkflowPreset>>,
+
+    /// Column shortcut catalogue loaded from
+    /// `column-presets/<domain>/*.json`. The AddColumnModal queries
+    /// this via `/column-presets` to suggest a name/format/prompt
+    /// triple when the user starts typing a column title.
+    pub column_presets: Arc<Vec<crate::presets::column::ColumnPreset>>,
 }
 
 impl AppState {
@@ -235,6 +249,46 @@ impl AppState {
             corpus_adapters.len()
         );
 
+        // Workflow + column preset registries. Same fail-soft policy as
+        // corpus plugins: a broken JSON or missing directory logs a
+        // warning and the registry stays empty rather than blocking
+        // startup. Both are read-only at runtime — the JSON files on
+        // disk are the single source of truth.
+        let workflow_presets_dir = crate::presets::presets_dir("workflow");
+        let workflow_presets = crate::presets::workflow::load_workflow_presets(
+            &workflow_presets_dir,
+        )
+        .unwrap_or_else(|e| {
+            tracing::warn!(
+                "[workflow-presets] load failed from {}: {:#}",
+                workflow_presets_dir.display(),
+                e
+            );
+            Vec::new()
+        });
+        tracing::info!(
+            "[workflow-presets] {} preset(s) loaded from {}",
+            workflow_presets.len(),
+            workflow_presets_dir.display()
+        );
+
+        let column_presets_dir = crate::presets::presets_dir("column");
+        let column_presets =
+            crate::presets::column::load_column_presets(&column_presets_dir)
+                .unwrap_or_else(|e| {
+                    tracing::warn!(
+                        "[column-presets] load failed from {}: {:#}",
+                        column_presets_dir.display(),
+                        e
+                    );
+                    Vec::new()
+                });
+        tracing::info!(
+            "[column-presets] {} preset(s) loaded from {}",
+            column_presets.len(),
+            column_presets_dir.display()
+        );
+
         Ok(Self {
             db,
             sessions,
@@ -248,6 +302,8 @@ impl AppState {
             corpus_plugins: Arc::new(corpus_plugins),
             corpus_adapters: Arc::new(corpus_adapters),
             corpus_import_progress: Arc::new(RwLock::new(HashMap::new())),
+            workflow_presets: Arc::new(workflow_presets),
+            column_presets: Arc::new(column_presets),
         })
     }
 
