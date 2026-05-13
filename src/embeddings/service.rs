@@ -927,51 +927,15 @@ pub fn ensure_onnxruntime_dylib_path() {
     }
 
     let (dir, file) = onnxruntime_subdir_and_filename();
-
-    fn try_dir(
-        base: &std::path::Path,
-        sub: &str,
-        file: &str,
-    ) -> Option<PathBuf> {
-        let candidate = base
-            .join("libs")
-            .join("onnxruntime")
-            .join(sub)
-            .join(file);
-        if candidate.is_file() {
-            Some(candidate)
-        } else {
-            None
-        }
-    }
-
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|x| x.to_path_buf()));
     let cwd = std::env::current_dir().ok();
 
-    let mut resolved: Option<PathBuf> = None;
-    for base in exe_dir.iter().chain(cwd.iter()) {
-        if let Some(p) = try_dir(base, dir, file) {
-            resolved = Some(p);
-            break;
-        }
-    }
-    if resolved.is_none() {
-        for base in cwd.iter().chain(exe_dir.iter()) {
-            for anc in base.ancestors() {
-                if let Some(p) = try_dir(anc, dir, file) {
-                    resolved = Some(p);
-                    break;
-                }
-            }
-            if resolved.is_some() {
-                break;
-            }
-        }
-    }
+    let starts: Vec<PathBuf> =
+        exe_dir.into_iter().chain(cwd.into_iter()).collect();
 
-    match resolved {
+    match find_onnxruntime_dylib(&starts, dir, file) {
         Some(path) => {
             tracing::info!(
                 "[rag] loading onnxruntime from {} (load-dynamic)",
@@ -994,6 +958,47 @@ pub fn ensure_onnxruntime_dylib_path() {
             );
         }
     }
+}
+
+/// Pure search helper for the onnxruntime dynamic library. Given a
+/// list of `starts` (typically the executable's directory and the
+/// process cwd) plus the target subdirectory and filename, returns
+/// the first matching path found by:
+///   1. Direct lookup at `<start>/libs/onnxruntime/<sub>/<file>` for
+///      every start.
+///   2. Ancestor walk: for every ancestor of every start, check
+///      `<ancestor>/libs/onnxruntime/<sub>/<file>`.
+///
+/// No env-var access, no `current_exe()` / `current_dir()` calls —
+/// fully deterministic from the inputs, so tests can drive it with
+/// any directory layout.
+#[cfg(feature = "rag")]
+pub fn find_onnxruntime_dylib(
+    starts: &[PathBuf],
+    sub: &str,
+    file: &str,
+) -> Option<PathBuf> {
+    fn candidate(base: &std::path::Path, sub: &str, file: &str) -> PathBuf {
+        base.join("libs").join("onnxruntime").join(sub).join(file)
+    }
+
+    // Phase 1: direct lookup at every start.
+    for base in starts {
+        let c = candidate(base, sub, file);
+        if c.is_file() {
+            return Some(c);
+        }
+    }
+    // Phase 2: ancestor walk.
+    for base in starts {
+        for anc in base.ancestors() {
+            let c = candidate(anc, sub, file);
+            if c.is_file() {
+                return Some(c);
+            }
+        }
+    }
+    None
 }
 
 #[cfg(not(feature = "rag"))]
@@ -1132,5 +1137,215 @@ mod tests {
         match g { SearchScope::Global => {}, _ => panic!("global mismatch") }
         match s { SearchScope::ProjectShared(p) => assert_eq!(p, "proj-1"), _ => panic!() }
         match st { SearchScope::ProjectStrict(p) => assert_eq!(p, "proj-1"), _ => panic!() }
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // ONNX Runtime load-dynamic plumbing
+    // ─────────────────────────────────────────────────────────────────
+    //
+    // We test the pure `find_onnxruntime_dylib` helper rather than the
+    // env-mutating `ensure_onnxruntime_dylib_path()` wrapper — the
+    // latter relies on `current_exe()` / `current_dir()` / `set_var`
+    // which we can't safely manipulate from a parallel test runner
+    // without races. The pure helper is fed an explicit `starts`
+    // slice, so each test owns its own tempdir and there's no shared
+    // state to coordinate.
+
+    #[test]
+    fn onnxruntime_subdir_and_filename_matches_compile_target() {
+        let (sub, file) = onnxruntime_subdir_and_filename();
+        // The subdir must be one we ship in libs/onnxruntime/.
+        let valid_subs = [
+            "win-x64",
+            "win-arm64",
+            "linux-x64",
+            "linux-aarch64",
+            "macos-x64",
+            "macos-arm64",
+        ];
+        assert!(
+            valid_subs.contains(&sub),
+            "unexpected platform subdir: {sub}"
+        );
+        // The filename must match the conventional dynamic-library name
+        // for the host OS — anything else and the runtime loader will
+        // miss the file we shipped.
+        #[cfg(target_os = "windows")]
+        assert_eq!(file, "onnxruntime.dll");
+        #[cfg(target_os = "linux")]
+        assert_eq!(file, "libonnxruntime.so");
+        #[cfg(target_os = "macos")]
+        assert_eq!(file, "libonnxruntime.dylib");
+    }
+
+    #[test]
+    fn find_onnxruntime_dylib_returns_none_when_missing() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        // Tempdir is empty — no libs/onnxruntime/ tree at all.
+        let got = find_onnxruntime_dylib(
+            &[tmp.path().to_path_buf()],
+            "win-x64",
+            "onnxruntime.dll",
+        );
+        assert!(got.is_none(), "expected None, got {:?}", got);
+    }
+
+    #[test]
+    fn find_onnxruntime_dylib_finds_dll_at_start_level() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dll_dir = tmp.path().join("libs").join("onnxruntime").join("win-x64");
+        std::fs::create_dir_all(&dll_dir).expect("create dirs");
+        let dll = dll_dir.join("onnxruntime.dll");
+        std::fs::write(&dll, b"fake dll").expect("write fake dll");
+
+        let got = find_onnxruntime_dylib(
+            &[tmp.path().to_path_buf()],
+            "win-x64",
+            "onnxruntime.dll",
+        );
+        assert_eq!(got.as_deref(), Some(dll.as_path()));
+    }
+
+    #[test]
+    fn find_onnxruntime_dylib_walks_ancestors() {
+        // Simulate the Tauri-dev layout: workspace root has
+        // libs/onnxruntime/, but the process is "running" from a
+        // deep subfolder like target/debug/. The function should walk
+        // up the tree and find the DLL at the workspace root.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workspace = tmp.path();
+        let dll_dir = workspace
+            .join("libs")
+            .join("onnxruntime")
+            .join("linux-x64");
+        std::fs::create_dir_all(&dll_dir).expect("create dirs");
+        let dll = dll_dir.join("libonnxruntime.so");
+        std::fs::write(&dll, b"fake so").expect("write fake so");
+
+        // "Start" from a deeply nested folder several levels under
+        // the workspace root — mimicking the path of an executable
+        // bundled under target/debug/.
+        let deep = workspace
+            .join("target")
+            .join("debug")
+            .join("bundle");
+        std::fs::create_dir_all(&deep).expect("create deep dir");
+
+        let got = find_onnxruntime_dylib(
+            &[deep],
+            "linux-x64",
+            "libonnxruntime.so",
+        );
+        assert_eq!(got.as_deref(), Some(dll.as_path()));
+    }
+
+    #[test]
+    fn find_onnxruntime_dylib_prefers_direct_start_over_ancestor() {
+        // If both the start directory AND a higher ancestor have a
+        // matching DLL, the direct hit at the start level wins — we
+        // assume the caller chose `starts` deliberately (e.g. exe_dir
+        // before cwd), so an ancestor-walked match should only kick
+        // in when no start-level hit exists.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let outer = tmp.path();
+        let inner = outer.join("subproject");
+        std::fs::create_dir_all(&inner).expect("inner");
+
+        let outer_dll_dir = outer.join("libs").join("onnxruntime").join("win-x64");
+        std::fs::create_dir_all(&outer_dll_dir).expect("outer dirs");
+        std::fs::write(
+            outer_dll_dir.join("onnxruntime.dll"),
+            b"outer dll",
+        )
+        .expect("write outer");
+
+        let inner_dll_dir = inner.join("libs").join("onnxruntime").join("win-x64");
+        std::fs::create_dir_all(&inner_dll_dir).expect("inner dirs");
+        let inner_dll = inner_dll_dir.join("onnxruntime.dll");
+        std::fs::write(&inner_dll, b"inner dll").expect("write inner");
+
+        let got = find_onnxruntime_dylib(
+            &[inner.clone()],
+            "win-x64",
+            "onnxruntime.dll",
+        );
+        assert_eq!(
+            got.as_deref(),
+            Some(inner_dll.as_path()),
+            "direct-level hit should win over ancestor"
+        );
+    }
+
+    #[test]
+    fn find_onnxruntime_dylib_ignores_wrong_platform_subdir() {
+        // A linux-x64 DLL placed in the tree must not match a search
+        // for win-x64. Otherwise cross-built distributions would pick
+        // the wrong library at runtime.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dll_dir = tmp.path().join("libs").join("onnxruntime").join("linux-x64");
+        std::fs::create_dir_all(&dll_dir).expect("create dirs");
+        std::fs::write(dll_dir.join("libonnxruntime.so"), b"lx").expect("write");
+
+        let got = find_onnxruntime_dylib(
+            &[tmp.path().to_path_buf()],
+            "win-x64",
+            "onnxruntime.dll",
+        );
+        assert!(got.is_none(), "must not cross-match platforms");
+    }
+
+    #[test]
+    fn find_onnxruntime_dylib_rejects_directory_with_matching_name() {
+        // Defensive: if somebody creates a *directory* named
+        // `onnxruntime.dll` at the expected path (e.g. by extracting
+        // an archive incorrectly), `is_file()` must reject it instead
+        // of returning a "match" that can't actually be loaded.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let bogus = tmp
+            .path()
+            .join("libs")
+            .join("onnxruntime")
+            .join("win-x64")
+            .join("onnxruntime.dll");
+        std::fs::create_dir_all(&bogus).expect("create dir-as-file");
+
+        let got = find_onnxruntime_dylib(
+            &[tmp.path().to_path_buf()],
+            "win-x64",
+            "onnxruntime.dll",
+        );
+        assert!(got.is_none(), "directory must not be accepted as a DLL");
+    }
+
+    #[test]
+    fn build_execution_providers_default_is_cpu_only() {
+        // Default `rag` build (no extra `rag-*` features) has no EPs
+        // registered explicitly — ort falls back to the implicit CPU
+        // provider. This is the contract every accel feature builds
+        // on, so guard it explicitly.
+        #[cfg(not(any(
+            feature = "rag-acl",
+            feature = "rag-azure",
+            feature = "rag-cann",
+            feature = "rag-coreml",
+            feature = "rag-cuda",
+            feature = "rag-directml",
+            feature = "rag-migraphx",
+            feature = "rag-nnapi",
+            feature = "rag-onednn",
+            feature = "rag-openvino",
+            feature = "rag-qnn",
+            feature = "rag-rknpu",
+            feature = "rag-rocm",
+            feature = "rag-tensorrt",
+            feature = "rag-tvm",
+            feature = "rag-vitis",
+            feature = "rag-webgpu",
+            feature = "rag-xnnpack",
+        )))]
+        {
+            let eps = build_execution_providers();
+            assert!(eps.is_empty(), "expected zero EPs in plain rag build");
+        }
     }
 }
