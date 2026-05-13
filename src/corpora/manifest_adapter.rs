@@ -234,10 +234,68 @@ impl ManifestAdapter {
         if !status.is_success() {
             bail!("HTTP {} from {url}", status.as_u16());
         }
-        resp.text()
+        let body = resp
+            .text()
             .await
-            .with_context(|| format!("body decode {url}"))
+            .with_context(|| format!("body decode {url}"))?;
+
+        // Anti-bot challenge detection. We can't solve JS-PoW
+        // challenges (Cloudflare, AWS WAF) from Rust, so the only
+        // useful thing the engine can do is fail loudly. A silent
+        // "fetch succeeded, body was a challenge HTML" would
+        // poison the cache with garbage and confuse the user.
+        // Same pattern as src/corpora/eurlex.rs's WAF detector,
+        // generalised here for any declarative corpus.
+        if let Some(provider) = detect_anti_bot_challenge(&body) {
+            tracing::warn!(
+                "[manifest] {url}: {} anti-bot challenge intercepted — \
+                 declarative engine cannot solve JS challenges",
+                provider
+            );
+            bail!(
+                "{provider} anti-bot challenge from {url}. The declarative \
+                 HTTP engine cannot solve the JS proof-of-work it requires. \
+                 This source needs an authenticated access path (e.g. official \
+                 API with OAuth2 / API key) or a different connector — declarative \
+                 HTML scraping won't work here."
+            );
+        }
+        Ok(body)
     }
+}
+
+/// Returns Some(provider-label) when `body` matches a known anti-bot
+/// challenge page signature, None otherwise. Markers picked from the
+/// HTML those challenges return:
+///   - Cloudflare: `cf-chl-` script id, `cf_chl_opt` global,
+///     `cdn-cgi/challenge-platform` script src, "Just a moment..." /
+///     localised equivalents.
+///   - AWS WAF: `awswafcookiedomainlist`, `gokuProps`,
+///     `aws-waf-token` cookie marker.
+///   - Akamai Bot Manager: `_abck` cookie, `bm-verify`.
+/// Conservative: returns None on ambiguous responses; we'd rather
+/// pass an empty-ish HTML through than false-positive a real page.
+fn detect_anti_bot_challenge(body: &str) -> Option<&'static str> {
+    let lower = body.to_ascii_lowercase();
+    if lower.contains("cdn-cgi/challenge-platform")
+        || lower.contains("cf_chl_opt")
+        || lower.contains("cf-chl-")
+        || (lower.contains("cloudflare") && lower.contains("verifica di sicurezza"))
+        || (lower.contains("cloudflare") && lower.contains("checking your browser"))
+        || (lower.contains("cloudflare") && lower.contains("just a moment"))
+    {
+        return Some("Cloudflare");
+    }
+    if lower.contains("awswafcookiedomainlist")
+        || lower.contains("gokuprops")
+        || lower.contains("aws-waf-token")
+    {
+        return Some("AWS WAF");
+    }
+    if lower.contains("_abck=") && lower.contains("bm-verify") {
+        return Some("Akamai Bot Manager");
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -738,6 +796,38 @@ mod tests {
             }
             _ => panic!("unexpected post order: {:?}", posts),
         }
+    }
+
+    #[test]
+    fn anti_bot_detection_cloudflare_challenge_page() {
+        let body = r#"<!DOCTYPE html><html><head>
+            <title>Just a moment...</title></head><body>
+            <h1>www.legifrance.gouv.fr</h1>
+            <h2>Esecuzione della verifica di sicurezza</h2>
+            <script src="/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page/v1/p"></script>
+            <a href="https://www.cloudflare.com/?utm_source=challenge">Cloudflare</a>
+            </body></html>"#;
+        assert_eq!(detect_anti_bot_challenge(body), Some("Cloudflare"));
+    }
+
+    #[test]
+    fn anti_bot_detection_aws_waf_challenge() {
+        let body =
+            r#"<html><body><script>window.gokuProps={"x":"y"};awsWafCookieDomainList=["..."]</script></body></html>"#;
+        assert_eq!(detect_anti_bot_challenge(body), Some("AWS WAF"));
+    }
+
+    #[test]
+    fn anti_bot_detection_passes_real_html_through() {
+        // A normal article page — no challenge markers — must NOT
+        // trigger a false positive. We check both a French legal
+        // page that mentions "cloudflare" in passing AND a totally
+        // unrelated body.
+        let normal = "<html><body><h1>Délibération SAN-2024-013</h1><p>contenu</p></body></html>";
+        assert_eq!(detect_anti_bot_challenge(normal), None);
+        let mentions_cf =
+            "<html><body><p>Mike runs behind Cloudflare in production.</p></body></html>";
+        assert_eq!(detect_anti_bot_challenge(mentions_cf), None);
     }
 
     #[test]

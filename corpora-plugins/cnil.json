@@ -6,7 +6,7 @@
         "it": "CNIL — Garante francese",
         "en": "CNIL (France)"
     },
-    "description": "Délibérations CNIL (sanctions, mises en demeure, avis, recommandations) servies depuis Légifrance — l'identifiant pérenne est de la forme `CNILTEXT000054047151`. Cherche par référence humaine (SAN-2024-013, MED-2024-007, ...) ou mots-clés ; les résultats remontent l'identifiant CNILTEXT à utiliser pour le fetch.",
+    "description": "Délibérations CNIL (sanctions, mises en demeure, avis, recommandations) servies depuis Légifrance. ⚠️ Légifrance est protégé par un challenge anti-bot Cloudflare que l'engine déclaratif ne peut pas résoudre (pas de moteur JS). Pour un accès robuste, l'API officielle PISTE (OAuth2) sera nécessaire — connecteur dédié à venir. Le manifest actuel sert d'exemple de configuration ; les requêtes échoueront avec un message clair tant que l'auth n'est pas en place.",
     "homepage": "https://www.legifrance.gouv.fr/liste/cnil",
     "languages": ["fr"],
     "default_language": "fr",
