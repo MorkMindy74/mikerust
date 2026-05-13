@@ -171,6 +171,30 @@ async fn generic_search(
             &format!("corpus {id} does not declare capabilities.search"),
         ));
     }
+
+    let q = body.query.trim();
+    if q.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "query is empty"));
+    }
+    let lang = body.language.as_deref();
+    let limit = body.limit.unwrap_or(20).min(100);
+
+    // Bulk-indexed corpora (DILA): query corpus_documents FTS5
+    // directly — there's no live HTTP adapter, the data is already
+    // in the local DB. MUST short-circuit BEFORE the
+    // corpus_adapters lookup below, otherwise the registry-miss
+    // branch would 501 every bulk corpus.
+    if matches!(
+        plugin.strategy,
+        crate::corpora::plugin::CorpusStrategy::DilaBulkXml(_)
+    ) {
+        let hits = search_corpus_documents(&state.db, &id, q, limit)
+            .await
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        return Ok(Json(json!({ "hits": hits })));
+    }
+
+    // Remaining strategies need a runtime adapter in the registry.
     let Some(adapter) = state.corpus_adapters.get(&id) else {
         return Err(err(
             StatusCode::NOT_IMPLEMENTED,
@@ -181,13 +205,6 @@ async fn generic_search(
         ));
     };
 
-    let q = body.query.trim();
-    if q.is_empty() {
-        return Err(err(StatusCode::BAD_REQUEST, "query is empty"));
-    }
-    let lang = body.language.as_deref();
-    let limit = body.limit.unwrap_or(20).min(100);
-
     // Routing policy: if `capabilities.search` is true we MUST honour
     // it. Prefer the keyword search (it handles human references AND
     // free text); fall back to identifier probe only when the manifest
@@ -196,18 +213,6 @@ async fn generic_search(
     // shapes (e.g. CNIL "SAN-2024-013" went through search_by_id and
     // tried to fetch a URL templated with the human ref, which 404'd
     // because the canonical identifier is the opaque CNILTEXT id).
-    // Bulk-indexed corpora (DILA): query corpus_documents FTS5
-    // directly — there's no live HTTP adapter to call, the data is
-    // already in the local DB.
-    if matches!(
-        plugin.strategy,
-        crate::corpora::plugin::CorpusStrategy::DilaBulkXml(_)
-    ) {
-        let hits = search_corpus_documents(&state.db, &id, q, limit)
-            .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
-        return Ok(Json(json!({ "hits": hits })));
-    }
 
     let has_keyword = state
         .corpus_plugins
