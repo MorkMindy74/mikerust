@@ -610,6 +610,8 @@
         "tabBuiltin": "Predefiniti",
         "tabCustom": "Personalizzati",
         "tabHidden": "Nascosti",
+        "originSelf": "Mio",
+        "originShared": "Condiviso",
         "customTitle": "Workflow personalizzati",
         "customHint": "Crea prompt riutilizzabili e modelli di revisione tabellare adatti al tuo studio.",
         "hiddenTitle": "Workflow nascosti",

@@ -570,18 +570,18 @@ export function WorkflowList() {
                                     {wf.is_system ? (
                                         <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-600">
                                             <MikeIcon size={14} />
-                                            Mike
+                                            MikeRust
                                         </span>
                                     ) : wf.user_id === user?.id ? (
                                         <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-600">
                                             <User className="h-3.5 w-3.5 text-gray-500" />
-                                            Myself
+                                            {t("originSelf")}
                                         </span>
                                     ) : (
                                         <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-600 truncate max-w-full">
                                             <User className="h-3.5 w-3.5 text-gray-400 shrink-0" />
                                             <span className="truncate">
-                                                {wf.shared_by_name ?? "Shared"}
+                                                {wf.shared_by_name ?? t("originShared")}
                                             </span>
                                         </span>
                                     )}

@@ -90,25 +90,12 @@ export function AssistantWorkflowModal({
 
     if (!open) return null;
 
-    // Build the set of domains that have ≥1 assistant workflow so the
-    // combo only offers populated slices. Sorted alphabetically for a
-    // stable order. Falls back to [userDefault] when the fetch hasn't
-    // returned yet so the combo isn't empty during the skeleton phase.
-    const availableDomains: Domain[] = (() => {
-        const s = new Set<Domain>();
-        for (const w of workflows) {
-            s.add(((w.domain as Domain | undefined) ?? "legal") as Domain);
-        }
-        const arr = [...s].sort();
-        return arr.length > 0 ? arr : [userDefaultDomain];
-    })();
-
-    const effectiveDomain: Domain = availableDomains.includes(domainFilter)
-        ? domainFilter
-        : (availableDomains[0] ?? userDefaultDomain);
-
+    // Combo offers the full 9-domain canonical set; the user can
+    // switch even toward an empty slice. The visible list is then
+    // narrowed by the selected domain — empty result is allowed and
+    // surfaced via the "no matches" empty state below.
     const filteredWorkflows = workflows
-        .filter((w) => ((w.domain as Domain | undefined) ?? "legal") === effectiveDomain)
+        .filter((w) => ((w.domain as Domain | undefined) ?? "legal") === domainFilter)
         .filter((w) =>
             search ? w.title.toLowerCase().includes(search.toLowerCase()) : true,
         );
@@ -185,14 +172,18 @@ export function AssistantWorkflowModal({
                                     </button>
                                 )}
                             </div>
-                            {availableDomains.length > 1 && (
-                                <DomainSelect
-                                    value={effectiveDomain}
-                                    onChange={setDomainFilter}
-                                    restrictTo={availableDomains}
-                                    className="rounded-md border border-gray-200 bg-white px-2 py-1 text-xs"
-                                />
-                            )}
+                            {/* Always rendered, full 9-domain set —
+                                the user expects to switch on the fly
+                                even toward an empty slice. The list
+                                below shows zero entries when no
+                                assistant workflow exists for the
+                                selected domain (and the empty-state
+                                copy below tells them so). */}
+                            <DomainSelect
+                                value={domainFilter}
+                                onChange={setDomainFilter}
+                                className="rounded-md border border-gray-200 bg-white px-2 py-1 text-xs"
+                            />
                         </div>
 
                         {loading ? (

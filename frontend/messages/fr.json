@@ -610,6 +610,8 @@
         "tabBuiltin": "Intégrés",
         "tabCustom": "Personnalisés",
         "tabHidden": "Masqués",
+        "originSelf": "Moi",
+        "originShared": "Partagé",
         "customTitle": "Workflows personnalisés",
         "customHint": "Construisez des prompts réutilisables et des modèles de revues tabulaires adaptés à votre pratique.",
         "hiddenTitle": "Workflows masqués",

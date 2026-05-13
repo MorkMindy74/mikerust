@@ -94,23 +94,11 @@ export function AddColumnModal({ open, existingCount, onClose, onAdd, editingCol
         };
     }, [open, userDefaultDomain]);
 
-    // Domains that have ≥1 column preset. Falls back to [userDefault]
-    // during the loading skeleton so the combo isn't empty on cold
-    // start. The visible preset list and the auto-match are both
-    // narrowed to the selected domain.
-    const availableDomains: Domain[] = (() => {
-        const s = new Set<Domain>();
-        for (const p of presets) {
-            s.add(((p.domain as Domain | undefined) ?? "legal") as Domain);
-        }
-        const arr = [...s].sort();
-        return arr.length > 0 ? arr : [userDefaultDomain];
-    })();
-    const effectiveDomain: Domain = availableDomains.includes(domainFilter)
-        ? domainFilter
-        : (availableDomains[0] ?? userDefaultDomain);
+    // Combo offers the full 9-domain canonical set; the visible preset
+    // list and the auto-match are both narrowed to the selected slice.
+    // Empty result is fine — the user can switch back via the combo.
     const visiblePresets = presets.filter(
-        (p) => ((p.domain as Domain | undefined) ?? "legal") === effectiveDomain,
+        (p) => ((p.domain as Domain | undefined) ?? "legal") === domainFilter,
     );
 
     /** Auto-suggest a preset when the user types a column name —
@@ -362,19 +350,16 @@ export function AddColumnModal({ open, existingCount, onClose, onAdd, editingCol
                                         </button>
                                         {presetsOpenIndex === index && (
                                             <div className="absolute left-0 right-0 top-full mt-1 z-50 rounded-xl border border-gray-100 bg-white shadow-lg overflow-hidden flex flex-col max-h-72">
-                                                {availableDomains.length > 1 && (
-                                                    <div
-                                                        className="px-3 py-2 border-b border-gray-100 bg-gray-50 flex items-center"
-                                                        onClick={(e) => e.stopPropagation()}
-                                                    >
-                                                        <DomainSelect
-                                                            value={effectiveDomain}
-                                                            onChange={setDomainFilter}
-                                                            restrictTo={availableDomains}
-                                                            className="rounded-md border border-gray-200 bg-white px-2 py-1 text-xs flex-1"
-                                                        />
-                                                    </div>
-                                                )}
+                                                <div
+                                                    className="px-3 py-2 border-b border-gray-100 bg-gray-50 flex items-center"
+                                                    onClick={(e) => e.stopPropagation()}
+                                                >
+                                                    <DomainSelect
+                                                        value={domainFilter}
+                                                        onChange={setDomainFilter}
+                                                        className="rounded-md border border-gray-200 bg-white px-2 py-1 text-xs flex-1"
+                                                    />
+                                                </div>
                                                 <div className="overflow-y-auto flex-1">
                                                     <button
                                                         type="button"

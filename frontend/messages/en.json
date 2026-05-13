@@ -610,6 +610,8 @@
         "tabBuiltin": "Built-in",
         "tabCustom": "Custom",
         "tabHidden": "Hidden",
+        "originSelf": "Myself",
+        "originShared": "Shared",
         "customTitle": "Custom Workflows",
         "customHint": "Build reusable prompts and tabular review templates tailored to your practice.",
         "hiddenTitle": "Hidden Workflows",

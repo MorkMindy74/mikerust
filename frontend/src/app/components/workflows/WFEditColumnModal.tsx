@@ -81,19 +81,11 @@ export function WFEditColumnModal({ column, onClose, onSave, onDelete }: Props) 
         setDomainFilter(userDefaultDomain);
     }, [userDefaultDomain]);
 
-    const availableDomains: Domain[] = (() => {
-        const s = new Set<Domain>();
-        for (const p of presets) {
-            s.add(((p.domain as Domain | undefined) ?? "legal") as Domain);
-        }
-        const arr = [...s].sort();
-        return arr.length > 0 ? arr : [userDefaultDomain];
-    })();
-    const effectiveDomain: Domain = availableDomains.includes(domainFilter)
-        ? domainFilter
-        : (availableDomains[0] ?? userDefaultDomain);
+    // Combo offers the full 9-domain canonical set; both the visible
+    // preset list and the auto-match are narrowed to the selected
+    // domain. Empty result is fine — the user can switch via the combo.
     const visiblePresets = presets.filter(
-        (p) => ((p.domain as Domain | undefined) ?? "legal") === effectiveDomain,
+        (p) => ((p.domain as Domain | undefined) ?? "legal") === domainFilter,
     );
 
     function getPresetConfig(name: string): {
@@ -247,19 +239,16 @@ export function WFEditColumnModal({ column, onClose, onSave, onDelete }: Props) 
                                 </button>
                                 {presetsOpen && (
                                     <div className="absolute left-0 right-0 top-full mt-1 z-50 rounded-xl border border-gray-100 bg-white shadow-lg overflow-hidden flex flex-col max-h-72">
-                                        {availableDomains.length > 1 && (
-                                            <div
-                                                className="px-3 py-2 border-b border-gray-100 bg-gray-50 flex items-center"
-                                                onClick={(e) => e.stopPropagation()}
-                                            >
-                                                <DomainSelect
-                                                    value={effectiveDomain}
-                                                    onChange={setDomainFilter}
-                                                    restrictTo={availableDomains}
-                                                    className="rounded-md border border-gray-200 bg-white px-2 py-1 text-xs flex-1"
-                                                />
-                                            </div>
-                                        )}
+                                        <div
+                                            className="px-3 py-2 border-b border-gray-100 bg-gray-50 flex items-center"
+                                            onClick={(e) => e.stopPropagation()}
+                                        >
+                                            <DomainSelect
+                                                value={domainFilter}
+                                                onChange={setDomainFilter}
+                                                className="rounded-md border border-gray-200 bg-white px-2 py-1 text-xs flex-1"
+                                            />
+                                        </div>
                                         <div className="overflow-y-auto flex-1">
                                             <button
                                                 type="button"

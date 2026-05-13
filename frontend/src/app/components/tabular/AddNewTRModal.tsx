@@ -216,22 +216,11 @@ export function AddNewTRModal({
     const selectedProject = projects.find((p) => p.id === selectedProjectId);
     const selectedWorkflow = workflows.find((w) => w.id === selectedWorkflowId);
 
-    // Domains that have ≥1 tabular workflow available. Falls back to
-    // [userDefault] during the loading skeleton so the combo isn't
-    // empty before the API responds.
-    const availableDomains: Domain[] = (() => {
-        const s = new Set<Domain>();
-        for (const w of workflows) {
-            s.add(((w.domain as Domain | undefined) ?? "legal") as Domain);
-        }
-        const arr = [...s].sort();
-        return arr.length > 0 ? arr : [userDefaultDomain];
-    })();
-    const effectiveDomain: Domain = availableDomains.includes(domainFilter)
-        ? domainFilter
-        : (availableDomains[0] ?? userDefaultDomain);
+    // Combo offers the full 9-domain canonical set; user picks any,
+    // even toward an empty slice. The template list is then narrowed
+    // by the selected domain — empty result is acceptable.
     const visibleWorkflows = workflows.filter(
-        (w) => ((w.domain as Domain | undefined) ?? "legal") === effectiveDomain,
+        (w) => ((w.domain as Domain | undefined) ?? "legal") === domainFilter,
     );
 
     // What to show in the directory depends on mode and toggle state
@@ -340,26 +329,21 @@ export function AddNewTRModal({
                                 </button>
                                 {workflowDropdownOpen && !loadingWorkflows && (
                                     <div className="absolute left-0 top-full z-20 mt-1 w-full rounded-xl border border-gray-100 bg-white shadow-lg overflow-hidden flex flex-col max-h-72">
-                                        {/* Domain combo — only rendered
-                                            when more than one vertical
-                                            has tabular templates. Clicks
-                                            inside don't close the
-                                            dropdown so the user can
-                                            switch slice without losing
-                                            their place. */}
-                                        {availableDomains.length > 1 && (
-                                            <div
-                                                className="px-3 py-2 border-b border-gray-100 bg-gray-50 flex items-center gap-2"
-                                                onClick={(e) => e.stopPropagation()}
-                                            >
-                                                <DomainSelect
-                                                    value={effectiveDomain}
-                                                    onChange={setDomainFilter}
-                                                    restrictTo={availableDomains}
-                                                    className="rounded-md border border-gray-200 bg-white px-2 py-1 text-xs flex-1"
-                                                />
-                                            </div>
-                                        )}
+                                        {/* Domain combo always visible.
+                                            Full 9-domain set so the user
+                                            can switch slice even toward
+                                            an empty one. Clicks inside
+                                            don't close the dropdown. */}
+                                        <div
+                                            className="px-3 py-2 border-b border-gray-100 bg-gray-50 flex items-center gap-2"
+                                            onClick={(e) => e.stopPropagation()}
+                                        >
+                                            <DomainSelect
+                                                value={domainFilter}
+                                                onChange={setDomainFilter}
+                                                className="rounded-md border border-gray-200 bg-white px-2 py-1 text-xs flex-1"
+                                            />
+                                        </div>
                                         <div className="overflow-y-auto flex-1">
                                             <button
                                                 type="button"
