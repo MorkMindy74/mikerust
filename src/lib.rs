@@ -140,6 +140,7 @@ pub async fn run_server_with_bio_tx(
         .nest("/sync",     routes::sync::router())
         .nest("/eurlex",   routes::eurlex::router())
         .nest("/italian-legal", routes::italian_legal::router())
+        .nest("/corpora",  routes::corpora::router())
         .layer(cors)
         .with_state(state);
 

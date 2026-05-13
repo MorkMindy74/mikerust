@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod chat;
+pub mod corpora;
 pub mod documents;
 pub mod eurlex;
 pub mod italian_legal;

@@ -1,0 +1,20 @@
+{
+    "id": "italian-legal",
+    "display_name": "Italian Legal Corpus",
+    "display_name_locale": {
+        "it": "Italia legale",
+        "en": "Italian Legal Corpus"
+    },
+    "description": "Italian legal acts from the dossier-legal/italian-legal-corpus Hugging Face dataset (Normattiva legislation and Corte Costituzionale rulings). Bulk metadata import + on-demand row fetch.",
+    "homepage": "https://huggingface.co/datasets/dossier-legal/italian-legal-corpus",
+    "languages": ["it"],
+    "default_language": "it",
+    "supports_language_fallback": false,
+    "identifier_label": "URN",
+    "identifier_example": "urn:nir:stato:legge:2023-12-29;213",
+    "enabled_by_default": true,
+    "strategy": {
+        "kind": "builtin",
+        "builtin_id": "italian-legal-hf"
+    }
+}

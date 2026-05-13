@@ -116,6 +116,14 @@ pub struct AppState {
     /// the status endpoint. Cleared when the user removes the folder.
     #[cfg(feature = "rag")]
     pub scans: Arc<RwLock<HashMap<String, ScanProgressHandle>>>,
+
+    /// JSON-driven corpus plugin registry, loaded once at startup from
+    /// `MIKE_CORPUS_PLUGINS_DIR` (or `./corpora-plugins` by default).
+    /// Read by the `/corpora` endpoint and by the chat library-inventory
+    /// builder. Empty when no manifest directory exists — the hardcoded
+    /// EUR-Lex / Italian routes still work, the registry is purely
+    /// metadata for discovery and UI.
+    pub corpus_plugins: Arc<Vec<crate::corpora::plugin::CorpusPlugin>>,
 }
 
 impl AppState {
@@ -172,6 +180,30 @@ impl AppState {
         let embeddings: Option<Arc<EmbeddingService>> =
             Some(Arc::new(EmbeddingService::new(db.clone())));
 
+        // Load corpus plugin manifests from disk. Failures are
+        // non-fatal: we log and continue with an empty registry — the
+        // hardcoded EUR-Lex / Italian routes still serve their requests
+        // regardless of what's in the registry.
+        let plugins_dir = crate::corpora::plugin::plugins_dir();
+        let corpus_plugins = match crate::corpora::plugin::load_plugins(&plugins_dir) {
+            Ok(p) => {
+                tracing::info!(
+                    "[corpus-plugins] {} manifest(s) loaded from {}",
+                    p.len(),
+                    plugins_dir.display()
+                );
+                p
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "[corpus-plugins] load failed from {}: {:#}",
+                    plugins_dir.display(),
+                    e
+                );
+                Vec::new()
+            }
+        };
+
         Ok(Self {
             db,
             sessions,
@@ -182,6 +214,7 @@ impl AppState {
             embeddings,
             #[cfg(feature = "rag")]
             scans: Arc::new(RwLock::new(HashMap::new())),
+            corpus_plugins: Arc::new(corpus_plugins),
         })
     }
 
