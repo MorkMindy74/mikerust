@@ -106,6 +106,141 @@ pub struct CorpusPlugin {
     /// How MikeRust actually fetches and indexes documents from
     /// this corpus. Discriminated union — see `CorpusStrategy`.
     pub strategy: CorpusStrategy,
+
+    /// Which generic operations this corpus supports. Drives both
+    /// route mounting on the backend (a missing capability 404s)
+    /// and UI control visibility on the frontend (hide buttons
+    /// for operations the corpus can't perform).
+    ///
+    /// All-true would be wrong for most real corpora: EUR-Lex has
+    /// no bulk_import (every doc is fetched on demand), Italian
+    /// Legal has bulk_import (HF parquet) but no embed_progress
+    /// at the corpus level (uses /sync/embed-progress instead).
+    /// So we deliberately default each to `false` and force every
+    /// manifest to enumerate what it actually supports — that way
+    /// adding a new capability doesn't silently enable it on old
+    /// manifests.
+    #[serde(default)]
+    pub capabilities: Capabilities,
+
+    /// Optional sub-sources inside the corpus that the user can
+    /// enable/disable independently. Used by Italian Legal to
+    /// expose Normattiva / Corte Cost / OpenGA / Cassazione as
+    /// separately-toggleable inside the same corpus. Empty / absent
+    /// for single-source corpora like EUR-Lex.
+    #[serde(default)]
+    pub sources: Vec<CorpusSource>,
+}
+
+/// Boolean map of operations a corpus exposes. Each field is a
+/// generic operation the runtime knows how to dispatch (via the
+/// `strategy.builtin_id` adapter for builtin corpora, eventually
+/// via declarative URL templates for future strategies). The
+/// router uses these to decide whether to mount the corresponding
+/// `/corpora/:id/<op>` route; the UI uses them to render/hide
+/// controls.
+///
+/// Adding a new capability: extend this struct + bump
+/// `Capabilities::default()` carefully (defaults are false to
+/// avoid silently enabling new operations on old manifests).
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct Capabilities {
+    /// Free-text or identifier search returning a list of
+    /// `CorpusHit`. Maps to the trait's `search_by_id` /
+    /// `search_by_keyword` depending on input shape (the dispatcher
+    /// picks).
+    #[serde(default)]
+    pub search: bool,
+
+    /// Fetch the full content of a document by its corpus-native
+    /// identifier. Maps to the trait's `fetch`.
+    #[serde(default)]
+    pub fetch: bool,
+
+    /// `GET /corpora/:id/documents` — list documents the user has
+    /// already synced for this corpus. Generic DB-backed; no
+    /// adapter call.
+    #[serde(default)]
+    pub documents: bool,
+
+    /// `DELETE /corpora/:id/documents/:doc_id` — remove a synced doc.
+    /// Implies `documents`.
+    #[serde(default)]
+    pub documents_delete: bool,
+
+    /// `POST /corpora/:id/documents/:doc_id/resync` — re-run indexing
+    /// for a previously-fetched doc whose text is still on disk.
+    /// Implies `documents`.
+    #[serde(default)]
+    pub documents_resync: bool,
+
+    /// `GET /corpora/:id/embed-progress` — per-corpus embedding
+    /// progress polling. EUR-Lex needs this because synchronous fetch
+    /// + embed of a single act takes long enough that the UI polls.
+    /// Italian Legal doesn't (its bulk import has its own progress
+    /// endpoint).
+    #[serde(default)]
+    pub embed_progress: bool,
+
+    /// `POST /corpora/:id/import` — one-shot bulk import (e.g. HF
+    /// parquet metadata download). Italian Legal uses this. EUR-Lex
+    /// doesn't (no bulk dataset).
+    #[serde(default)]
+    pub bulk_import: bool,
+
+    /// `GET|PUT /corpora/:id/config` — per-user enable/disable +
+    /// default_language + fallback_en. Generic, lives in the
+    /// `corpus_settings` table. Almost every corpus has this.
+    #[serde(default)]
+    pub user_config: bool,
+}
+
+/// One sub-source inside a corpus. Lets the corpus expose multiple
+/// data origins under a single id (e.g. Italian Legal: Normattiva +
+/// Corte Cost + OpenGA + Cassazione). Users toggle each one
+/// independently via the settings UI; `corpus_settings.sources_enabled`
+/// (future column, TBD) persists the selection.
+///
+/// `available: false` means the source is *declared* in the manifest
+/// but not yet wired in the runtime — UI shows it disabled with the
+/// `status_label` ("in arrivo" / "coming soon") so the user knows
+/// it's on the roadmap.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CorpusSource {
+    /// Stable source key, scoped to the parent corpus. Same regex
+    /// rules as the corpus id (`^[a-z][a-z0-9\-]*$`).
+    pub id: String,
+
+    /// Human display name for this source. Not localised — the
+    /// source names are usually proper nouns (Normattiva, Corte
+    /// Costituzionale, Légifrance) that don't translate.
+    pub display_name: String,
+
+    /// Optional short qualifier rendered next to the name, e.g.
+    /// volume hint ("~125K") or scope hint ("(incrementale)").
+    #[serde(default)]
+    pub subtitle: Option<String>,
+
+    /// Longer description shown under the row when the source is
+    /// "in arrivo" — explains why it's not available yet and what
+    /// would unlock it.
+    #[serde(default)]
+    pub description: Option<String>,
+
+    /// Whether the source is wired in the runtime today. When false
+    /// the UI dims the checkbox and renders `status_label`.
+    pub available: bool,
+
+    /// When `available: true`, whether the source is on by default
+    /// the first time the user opens the settings panel. Ignored
+    /// when `available: false`.
+    #[serde(default)]
+    pub default_enabled: bool,
+
+    /// Free-text label shown next to a non-available source. Common
+    /// values: "in arrivo", "coming soon", "V2 roadmap".
+    #[serde(default)]
+    pub status_label: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -193,6 +328,48 @@ impl CorpusPlugin {
                     KNOWN_BUILTINS.join(", ")
                 );
             }
+        }
+
+        // Source-level invariants.
+        let mut seen_source_ids: std::collections::HashSet<&str> =
+            std::collections::HashSet::new();
+        for src in &self.sources {
+            if !is_valid_corpus_id(&src.id) {
+                bail!(
+                    "corpus {} source {:?}: invalid id, must match ^[a-z][a-z0-9\\-]*$",
+                    self.id,
+                    src.id
+                );
+            }
+            if !seen_source_ids.insert(src.id.as_str()) {
+                bail!(
+                    "corpus {}: duplicate source id {:?}",
+                    self.id,
+                    src.id
+                );
+            }
+            if !src.available && src.default_enabled {
+                bail!(
+                    "corpus {} source {:?}: default_enabled=true but available=false",
+                    self.id,
+                    src.id
+                );
+            }
+        }
+
+        // Capability-implication checks: documents_delete and
+        // documents_resync don't make sense without documents.
+        if self.capabilities.documents_delete && !self.capabilities.documents {
+            bail!(
+                "corpus {}: capabilities.documents_delete=true requires documents=true",
+                self.id
+            );
+        }
+        if self.capabilities.documents_resync && !self.capabilities.documents {
+            bail!(
+                "corpus {}: capabilities.documents_resync=true requires documents=true",
+                self.id
+            );
         }
         Ok(())
     }
@@ -525,6 +702,198 @@ mod tests {
         assert_eq!(out[0].id, "ok");
         // suppress unused warning on the TempDir guard
         let _ = write_temp;
+    }
+
+    #[test]
+    fn capabilities_default_to_all_false() {
+        // A manifest without a capabilities block parses fine and
+        // every operation is opt-in.
+        let json = r#"{
+            "id": "x",
+            "display_name": "X",
+            "languages": ["en"],
+            "default_language": "en",
+            "fallback_language": "en",
+            "identifier_label": "X",
+            "strategy": { "kind": "builtin", "builtin_id": "eurlex" }
+        }"#;
+        let p: CorpusPlugin = serde_json::from_str(json).unwrap();
+        p.validate().unwrap();
+        assert!(!p.capabilities.search);
+        assert!(!p.capabilities.fetch);
+        assert!(!p.capabilities.documents);
+        assert!(!p.capabilities.bulk_import);
+    }
+
+    #[test]
+    fn capabilities_round_trip() {
+        let json = r#"{
+            "id": "x",
+            "display_name": "X",
+            "languages": ["en"],
+            "default_language": "en",
+            "fallback_language": "en",
+            "identifier_label": "X",
+            "strategy": { "kind": "builtin", "builtin_id": "eurlex" },
+            "capabilities": {
+                "search": true,
+                "fetch": true,
+                "documents": true,
+                "documents_delete": true,
+                "documents_resync": true,
+                "embed_progress": true,
+                "user_config": true
+            }
+        }"#;
+        let p: CorpusPlugin = serde_json::from_str(json).unwrap();
+        p.validate().unwrap();
+        assert!(p.capabilities.search);
+        assert!(p.capabilities.documents);
+        assert!(p.capabilities.documents_delete);
+        assert!(!p.capabilities.bulk_import); // unset → false
+    }
+
+    #[test]
+    fn rejects_documents_delete_without_documents() {
+        let json = r#"{
+            "id": "x",
+            "display_name": "X",
+            "languages": ["en"],
+            "default_language": "en",
+            "fallback_language": "en",
+            "identifier_label": "X",
+            "strategy": { "kind": "builtin", "builtin_id": "eurlex" },
+            "capabilities": { "documents_delete": true }
+        }"#;
+        let p: CorpusPlugin = serde_json::from_str(json).unwrap();
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_documents_resync_without_documents() {
+        let json = r#"{
+            "id": "x",
+            "display_name": "X",
+            "languages": ["en"],
+            "default_language": "en",
+            "fallback_language": "en",
+            "identifier_label": "X",
+            "strategy": { "kind": "builtin", "builtin_id": "eurlex" },
+            "capabilities": { "documents_resync": true }
+        }"#;
+        let p: CorpusPlugin = serde_json::from_str(json).unwrap();
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn sources_parse_and_validate() {
+        let json = r#"{
+            "id": "italian-legal",
+            "display_name": "Italia legale",
+            "languages": ["it"],
+            "default_language": "it",
+            "fallback_language": "it",
+            "identifier_label": "URN",
+            "strategy": { "kind": "builtin", "builtin_id": "italian-legal-hf" },
+            "sources": [
+                {
+                    "id": "normattiva",
+                    "display_name": "Normattiva",
+                    "available": true,
+                    "default_enabled": true
+                },
+                {
+                    "id": "openga",
+                    "display_name": "OpenGA",
+                    "subtitle": "(~125K)",
+                    "description": "Already in HF dataset; needs opt-in filter.",
+                    "available": false,
+                    "status_label": "in arrivo"
+                }
+            ]
+        }"#;
+        let p: CorpusPlugin = serde_json::from_str(json).unwrap();
+        p.validate().unwrap();
+        assert_eq!(p.sources.len(), 2);
+        assert!(p.sources[0].available);
+        assert!(p.sources[0].default_enabled);
+        assert!(!p.sources[1].available);
+        assert_eq!(
+            p.sources[1].status_label.as_deref(),
+            Some("in arrivo")
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_source_ids() {
+        let json = r#"{
+            "id": "x",
+            "display_name": "X",
+            "languages": ["en"],
+            "default_language": "en",
+            "fallback_language": "en",
+            "identifier_label": "X",
+            "strategy": { "kind": "builtin", "builtin_id": "eurlex" },
+            "sources": [
+                { "id": "dup", "display_name": "A", "available": true },
+                { "id": "dup", "display_name": "B", "available": true }
+            ]
+        }"#;
+        let p: CorpusPlugin = serde_json::from_str(json).unwrap();
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_default_enabled_on_unavailable_source() {
+        let json = r#"{
+            "id": "x",
+            "display_name": "X",
+            "languages": ["en"],
+            "default_language": "en",
+            "fallback_language": "en",
+            "identifier_label": "X",
+            "strategy": { "kind": "builtin", "builtin_id": "eurlex" },
+            "sources": [
+                { "id": "future", "display_name": "F", "available": false, "default_enabled": true }
+            ]
+        }"#;
+        let p: CorpusPlugin = serde_json::from_str(json).unwrap();
+        assert!(p.validate().is_err());
+    }
+
+    /// Integration check: every JSON file we ship in
+    /// `corpora-plugins/` at the repo root must parse and validate.
+    /// Catches regressions where the schema evolves but a real
+    /// manifest hasn't been updated.
+    #[test]
+    fn shipped_manifests_load_and_validate() {
+        let repo_root = std::env::var("CARGO_MANIFEST_DIR")
+            .map(PathBuf::from)
+            .expect("CARGO_MANIFEST_DIR set under cargo test");
+        let dir = repo_root.join("corpora-plugins");
+        if !dir.exists() {
+            // Tolerate the case where the test runs from a checkout
+            // without the plugins folder (e.g. submodule consumers).
+            return;
+        }
+        let plugins = load_plugins(&dir).expect("load shipped plugins");
+        assert!(
+            !plugins.is_empty(),
+            "expected at least one manifest in {}",
+            dir.display()
+        );
+        // Each shipped manifest is already validated by load_plugins;
+        // we also assert their ids are unique (the loader dedups, but
+        // we want a hard failure if duplication ever sneaks in here).
+        let mut seen: std::collections::HashSet<&str> =
+            std::collections::HashSet::new();
+        for p in &plugins {
+            assert!(
+                seen.insert(p.id.as_str()),
+                "shipped manifest duplicate id: {}",
+                p.id
+            );
+        }
     }
 
     #[test]

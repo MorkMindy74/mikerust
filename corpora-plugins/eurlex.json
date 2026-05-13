@@ -21,5 +21,15 @@
     "strategy": {
         "kind": "builtin",
         "builtin_id": "eurlex"
+    },
+    "capabilities": {
+        "search": true,
+        "fetch": true,
+        "documents": true,
+        "documents_delete": true,
+        "documents_resync": true,
+        "embed_progress": true,
+        "bulk_import": false,
+        "user_config": true
     }
 }

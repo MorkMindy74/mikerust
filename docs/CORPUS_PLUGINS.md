@@ -33,14 +33,16 @@ environment variable (useful for tests or alternative installations).
 
 ## Schema
 
+### Top-level fields
+
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `id` | string | ✅ | Stable corpus key. Matches `^[a-z][a-z0-9\-]*$`. Persisted in `documents.corpus_id`. |
 | `display_name` | string | ✅ | Default English name shown in the UI when the user's locale has no override. |
-| `display_name_locale` | `{ [locale]: string }` | ❌ | Per-locale override map. Locale keys are ISO-639-1 lowercase. |
+| `display_name_locale` | `{ [locale]: string }` | ❌ | Per-locale override map. Locale keys are ISO-639-1 lowercase. The content of the manifest (`display_name`, `description`, source labels) is the source-of-truth — UI i18n only covers chrome ("Search", "Sync", section headings). |
 | `description` | string | ❌ | One-line description for the corpus picker. |
 | `homepage` | string | ❌ | Source-site URL. UI renders "open externally" link. |
-| `languages` | `string[]` | ✅ | ISO-639-1 lowercase codes the corpus is served in. |
+| `languages` | `string[]` | ✅ | ISO-639-1 lowercase codes the corpus is served in. **Not** localised — codes are data; UI maps them to native language names via a universal table. |
 | `default_language` | string | ✅ | Initial language when the user opens the panel. Must be in `languages`. |
 | `supports_language_fallback` | bool | ❌ (default `true`) | When true and primary language returns nothing, the adapter tries `fallback_language`. |
 | `fallback_language` | string | ❌ (required if `supports_language_fallback`) | Must be in `languages`. |
@@ -48,6 +50,49 @@ environment variable (useful for tests or alternative installations).
 | `identifier_example` | string | ❌ | Example for placeholder text or onboarding hints. |
 | `enabled_by_default` | bool | ❌ (default `true`) | First-time enabled state in user settings. Users can toggle later. |
 | `strategy` | object | ✅ | Discriminated union; see [Strategies](#strategies). |
+| `capabilities` | object | ❌ (default all false) | Which generic operations this corpus supports; see [Capabilities](#capabilities). |
+| `sources` | array | ❌ | Sub-sources inside this corpus that the user can toggle independently; see [Sources](#sources). |
+
+### Capabilities
+
+A flat boolean map declaring which generic operations the corpus exposes.
+The backend mounts (or 404s) the `/corpora/:id/<op>` route accordingly;
+the frontend hides UI controls for operations set to `false`. **Every
+flag defaults to `false`** so that adding a new capability later doesn't
+silently activate it on legacy manifests.
+
+| Field | Maps to (when `strategy.kind == "builtin"`) | Notes |
+|---|---|---|
+| `search` | `LegalCorpusAdapter::search_by_id` or `search_by_keyword` (dispatcher picks based on input shape) | Free-text and identifier-lookup both go through this single endpoint. |
+| `fetch` | `LegalCorpusAdapter::fetch` | Single-doc download by identifier. |
+| `documents` | generic — DB-backed listing on `documents` filtered by `corpus_id` | No adapter call. Required if you want any of the next two. |
+| `documents_delete` | generic — DB `DELETE` + ref-counted cache cleanup | Validation rejects manifest if `true` while `documents == false`. |
+| `documents_resync` | generic — re-runs indexing from on-disk cached text | Validation rejects manifest if `true` while `documents == false`. |
+| `embed_progress` | adapter-specific — usually wired to `active_embed` state | Used for long sync embeddings (EUR-Lex). Italian Legal uses `/sync/embed-progress` globally instead. |
+| `bulk_import` | adapter-specific — one-shot bulk metadata download (e.g. HF parquet projection) | Only Italian Legal today. |
+| `user_config` | generic — `corpus_settings` table | `GET|PUT /corpora/:id/config`. Almost every corpus has this. |
+
+For future declarative strategies (`http-fetch-per-id`), capabilities
+become objects with URL templates rather than booleans. See
+[Strategies](#strategies).
+
+### Sources
+
+Optional array of sub-categories the user can enable/disable inside a
+single corpus. Italian Legal uses this to expose Normattiva,
+Corte Costituzionale, OpenGA, Cassazione as independently-toggleable
+slices of the same HF dataset. Empty/absent for single-source corpora
+like EUR-Lex.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `id` | string | ✅ | Scoped to the parent corpus. Same regex as the corpus id. |
+| `display_name` | string | ✅ | Not localised — source names are usually proper nouns. |
+| `subtitle` | string | ❌ | Short qualifier rendered next to the name ("~125K", "(incrementale)"). |
+| `description` | string | ❌ | Longer description shown when the source is `available: false`. |
+| `available` | bool | ✅ | Whether the source is wired in the runtime today. |
+| `default_enabled` | bool | ❌ (default `false`) | First-time enabled state. Must be `false` when `available: false` (validation). |
+| `status_label` | string | ❌ | Free-text label shown next to a non-available source ("in arrivo", "coming soon", "V2 roadmap"). |
 
 ### Validation rules
 
@@ -122,7 +167,69 @@ Generalises what `italian-legal-hf` does today: bulk metadata import
 from a HuggingFace dataset (pinned revision, projected columns) +
 on-demand `/rows` fetch.
 
-## End-to-end examples
+## A non-Italian example — CNIL (France)
+
+Shows how to describe a French corpus with multiple sources and a
+declarative-future strategy. Marked `runnable: false` today (the
+runtime only honours `builtin` strategies), but the manifest is the
+real shape the JSON will take once `http-fetch-per-id` lands.
+
+[`corpora-plugins/cnil.json`](../corpora-plugins/cnil.json):
+
+```json
+{
+    "id": "cnil",
+    "display_name": "CNIL",
+    "display_name_locale": {
+        "fr": "CNIL",
+        "it": "CNIL — Garante francese",
+        "en": "CNIL (France)"
+    },
+    "description": "Publications de la Commission nationale de l'informatique et des libertés…",
+    "homepage": "https://www.cnil.fr",
+    "languages": ["fr"],
+    "default_language": "fr",
+    "supports_language_fallback": false,
+    "identifier_label": "Référence CNIL",
+    "identifier_example": "SAN-2024-013",
+    "enabled_by_default": false,
+    "strategy": {
+        "kind": "http-fetch-per-id",
+        "search_by_id": {
+            "url_template": "https://www.cnil.fr/fr/deliberation/{identifier}",
+            "shape": "rest-html",
+            "title_path": "h1.title",
+            "body_path": "article.node--type-deliberation .field--name-body"
+        },
+        "search_by_keyword": {
+            "url_template": "https://www.cnil.fr/fr/search/site/{query}?f%5B0%5D=type%3Adeliberation",
+            "shape": "rest-html",
+            "hits_path": "ol.search-results li"
+        }
+    },
+    "capabilities": {
+        "search": true, "fetch": true,
+        "documents": true, "documents_delete": true, "documents_resync": true,
+        "embed_progress": true, "bulk_import": false, "user_config": true
+    },
+    "sources": [
+        { "id": "deliberations",  "display_name": "Délibérations (sanctions, mises en demeure)", "available": false, "status_label": "à venir" },
+        { "id": "recommandations","display_name": "Recommandations et lignes directrices",      "available": false, "status_label": "à venir" },
+        { "id": "guides-pratiques","display_name": "Guides pratiques et fiches méthodologiques", "available": false, "status_label": "à venir" },
+        { "id": "avis-textes",    "display_name": "Avis sur projets de textes",                  "available": false, "status_label": "à venir" }
+    ]
+}
+```
+
+Two things to notice:
+
+- `display_name_locale` carries FR/IT/EN overrides so an Italian user
+  sees "CNIL — Garante francese" while a French user sees "CNIL".
+- The strategy's URL templates use `{identifier}` and `{query}`
+  placeholders. CSS selectors in `*_path` fields target the body and
+  title in the rendered HTML. When the `http-fetch-per-id` runtime
+  ships, the generic adapter will read these templates instead of
+  calling a Rust trait method.
 
 ### EUR-Lex
 

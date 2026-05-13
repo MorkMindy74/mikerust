@@ -1,0 +1,79 @@
+{
+    "id": "cnil",
+    "display_name": "CNIL",
+    "display_name_locale": {
+        "fr": "CNIL",
+        "it": "CNIL — Garante francese",
+        "en": "CNIL (France)"
+    },
+    "description": "Publications de la Commission nationale de l'informatique et des libertés : délibérations (sanctions et mises en demeure), recommandations, lignes directrices et guides pratiques sur la protection des données personnelles en France.",
+    "homepage": "https://www.cnil.fr",
+    "languages": ["fr"],
+    "default_language": "fr",
+    "supports_language_fallback": false,
+    "identifier_label": "Référence CNIL",
+    "identifier_example": "SAN-2024-013",
+    "enabled_by_default": false,
+    "strategy": {
+        "kind": "http-fetch-per-id",
+        "search_by_id": {
+            "url_template": "https://www.cnil.fr/fr/deliberation/{identifier}",
+            "shape": "rest-html",
+            "title_path": "h1.title",
+            "body_path": "article.node--type-deliberation .field--name-body",
+            "date_path": "time[datetime]@datetime"
+        },
+        "search_by_keyword": {
+            "url_template": "https://www.cnil.fr/fr/search/site/{query}?f%5B0%5D=type%3Adeliberation",
+            "shape": "rest-html",
+            "hits_path": "ol.search-results li",
+            "identifier_at": "h3.title a@href:strip-prefix=/fr/deliberation/",
+            "title_at": "h3.title a",
+            "date_at": "time[datetime]@datetime"
+        }
+    },
+    "capabilities": {
+        "search": true,
+        "fetch": true,
+        "documents": true,
+        "documents_delete": true,
+        "documents_resync": true,
+        "embed_progress": true,
+        "bulk_import": false,
+        "user_config": true
+    },
+    "sources": [
+        {
+            "id": "deliberations",
+            "display_name": "Délibérations (sanctions, mises en demeure)",
+            "subtitle": "(SAN- / MED- / D-)",
+            "description": "Décisions de la formation restreinte : sanctions pécuniaires, mises en demeure, avertissements. Couvre les manquements RGPD constatés par la CNIL contre des organismes publics et privés.",
+            "available": false,
+            "status_label": "à venir"
+        },
+        {
+            "id": "recommandations",
+            "display_name": "Recommandations et lignes directrices",
+            "subtitle": "(RGPD opérationnel)",
+            "description": "Doctrine de la CNIL sur l'application concrète du RGPD : cookies, prospection commerciale, vidéosurveillance, données de santé, IA, etc. Référence pour bâtir des politiques de conformité.",
+            "available": false,
+            "status_label": "à venir"
+        },
+        {
+            "id": "guides-pratiques",
+            "display_name": "Guides pratiques et fiches méthodologiques",
+            "subtitle": "(PME, secteur public, DPO)",
+            "description": "Documents pédagogiques destinés aux responsables de traitement : modèles d'AIPD, registres, formulaires de droits des personnes, kits de mise en conformité sectoriels.",
+            "available": false,
+            "status_label": "à venir"
+        },
+        {
+            "id": "avis-textes",
+            "display_name": "Avis sur projets de textes",
+            "subtitle": "(avant promulgation)",
+            "description": "Avis rendus par la CNIL sur des projets de loi, décrets, et autres actes réglementaires impliquant des traitements de données. Source utile pour reconstituer l'intention du législateur.",
+            "available": false,
+            "status_label": "à venir"
+        }
+    ]
+}
