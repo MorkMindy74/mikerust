@@ -15,7 +15,7 @@ tends to land faster than a full feature held back until it's "ready".
 You don't have to write the patch yourself: open an
 [issue](https://github.com/SemplificaAI/MikeRust/issues) to discuss a
 direction, send a pull request when you have something concrete, or
-reach out at [d.finardi@semplifica.ai](mailto:d.finardi@semplifica.ai)
+reach out at [git@semplifica.ai](mailto:git@semplifica.ai)
 if a public thread is the wrong place.
 
 ## Lineage
