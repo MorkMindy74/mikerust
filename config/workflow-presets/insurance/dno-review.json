@@ -68,63 +68,87 @@
         },
         {
             "index": 10,
+            "name": "Condizioni di rinnovo",
+            "format": "text",
+            "prompt": "Indica le condizioni di rinnovo della polizza: presenza di tacito rinnovo (sì/no), preavviso minimo di disdetta (in giorni o mesi), eventuali variazioni automatiche di premio al rinnovo (rinegoziato annualmente è comune per D&O, indicare se la polizza prevede meccanismi specifici come adeguamento al fatturato o all'andamento di settore). Cita l'articolo."
+        },
+        {
+            "index": 11,
+            "name": "Recesso infrannuale",
+            "format": "text",
+            "prompt": "Possibilità di recesso prima della scadenza naturale: chi può recedere (assicurato, assicuratore, entrambi), in quali casi (libero, dopo sinistro, per change of control, per giusta causa), effetti economici (rimborso pro-rata, penali). Per le D&O segnala in particolare le condizioni in caso di operazioni straordinarie (fusione, vendita, IPO). Cita l'articolo."
+        },
+        {
+            "index": 12,
+            "name": "Liquidazione sinistri",
+            "format": "text",
+            "prompt": "Gestione dei sinistri: indica se la liquidazione è curata internamente dall'assicuratore o esternalizzata a una compagnia di gestione (claims handler) — riporta il nome se presente. Indica i termini massimi previsti in polizza (in giorni) per accettazione del sinistro e pagamento dell'indennizzo. Per le D&O specifica anche le modalità di gestione delle defence costs (rimborso vs anticipazione). Cita l'articolo."
+        },
+        {
+            "index": 13,
+            "name": "Subrogazione",
+            "format": "yes_no",
+            "prompt": "L'assicuratore subentra (per surrogazione ex art. 1916 c.c.) nei diritti dell'assicurato verso terzi responsabili dopo aver liquidato il sinistro? Indica eventuali limitazioni o rinunce espresse al diritto di rivalsa (tipico nelle D&O: rinuncia di rivalsa verso amministratori e dipendenti per atti compiuti nelle loro funzioni). Cita l'articolo."
+        },
+        {
+            "index": 14,
             "name": "Legge applicabile",
             "format": "text",
             "prompt": "Governing law della polizza (es. \"Legge italiana\", \"Diritto inglese\"). Cita l'articolo."
         },
         {
-            "index": 11,
+            "index": 15,
             "name": "Foro competente / ADR",
             "format": "text",
             "prompt": "Tribunale competente o meccanismo di risoluzione alternativa (arbitrato, conciliazione, mediazione). Cita l'articolo."
         },
         {
-            "index": 12,
+            "index": 16,
             "name": "Side A",
             "format": "yes_no",
             "prompt": "La polizza prevede Side A coverage (copertura personale degli amministratori per le ipotesi in cui la società non possa o non voglia indennizzarli)? Cita l'articolo."
         },
         {
-            "index": 13,
+            "index": 17,
             "name": "Side B",
             "format": "yes_no",
             "prompt": "La polizza prevede Side B coverage (rimborso alla società per gli indennizzi corrisposti agli amministratori a titolo di company reimbursement)? Cita l'articolo."
         },
         {
-            "index": 14,
+            "index": 18,
             "name": "Side C / Entity coverage",
             "format": "yes_no",
             "prompt": "La polizza prevede Side C / Entity coverage (copertura diretta della società per securities claims, tipicamente azionariati quotati)? Cita l'articolo."
         },
         {
-            "index": 15,
+            "index": 19,
             "name": "Run-off / copertura post-mandato",
             "format": "text",
             "prompt": "Durata del run-off (in anni) e condizioni di attivazione (es. \"cessazione del mandato senza motivata revoca\", \"automatic 60-month run-off in caso di change of control\"). Indica l'eventuale premio aggiuntivo. Cita l'articolo."
         },
         {
-            "index": 16,
+            "index": 20,
             "name": "Esclusione condotte fraudolente",
             "format": "text",
             "prompt": "Riporta la formulazione dell'esclusione per condotte fraudolente, dolose o intenzionalmente illecite. Indica esplicitamente se è presente la \"final adjudication\" clause (l'esclusione opera solo dopo sentenza definitiva non più impugnabile) e se l'esclusione è severable (impacts solo l'amministratore che ha tenuto la condotta, non l'intera polizza). Cita l'articolo."
         },
         {
-            "index": 17,
+            "index": 21,
             "name": "Esclusione profitto illecito",
             "format": "text",
             "prompt": "Riporta la formulazione dell'esclusione per profitto illecito o vantaggio personale non dovuto (illicit personal gain, illegal profit). Indica esplicitamente se è presente la \"final adjudication\" clause e se è severable per assicurato. Cita l'articolo."
         },
         {
-            "index": 18,
+            "index": 22,
             "name": "Spese di difesa",
             "format": "text",
             "prompt": "Indica esplicitamente: (a) se è previsto l'\"advance of defence costs\" (anticipazione delle spese durante il procedimento); (b) se le spese sono \"within limits\" (riducono il massimale) o \"outside limits\" (aggiuntive); (c) se è richiesto il rimborso delle spese anticipate qualora la condotta dell'assicurato risulti successivamente esclusa dalla copertura. Cita l'articolo."
         },
         {
-            "index": 19,
+            "index": 23,
             "name": "Esclusioni principali",
             "format": "bulleted_list",
-            "prompt": "Elenca le esclusioni principali della polizza, una per bullet. Tipicamente: insider trading, inquinamento (pollution), sanzioni amministrative/penali, prior known claims, claims tra assicurati (insured vs insured), bodily injury / property damage (coperti da altre polizze), ERISA / pension liability (se non specificamente esteso), atti di guerra o terrorismo. Cita gli articoli delle esclusioni rilevanti."
+            "prompt": "Elenca le esclusioni principali della polizza, una per bullet. Tipicamente: insider trading, inquinamento (pollution), sanzioni amministrative/penali, prior known claims, claims tra assicurati (insured vs insured), bodily injury / property damage (coperti da altre polizze), ERISA / pension liability (se non specificamente esteso), shadow directors, atti di guerra o terrorismo. Cita gli articoli delle esclusioni rilevanti."
         }
     ]
 }
