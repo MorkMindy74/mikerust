@@ -534,6 +534,21 @@
         "ownerOnlyDelete": "eliminare {count} dei progetti selezionati — solo il proprietario può eliminare un progetto",
         "folderName": "Nome cartella"
     },
+    "Domains": {
+        "label": "Settore",
+        "filterPlaceholder": "Tutti i settori",
+        "values": {
+            "legal": "Legale",
+            "medical": "Medico",
+            "finance": "Finanza",
+            "real_estate": "Immobiliare",
+            "hr": "Risorse umane",
+            "insurance": "Assicurazioni",
+            "ip": "Proprietà intellettuale",
+            "compliance": "Compliance",
+            "others": "Altro"
+        }
+    },
     "Workflows": {
         "title": "Workflow",
         "newWorkflow": "Nuovo workflow",

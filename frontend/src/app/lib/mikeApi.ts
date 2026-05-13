@@ -491,8 +491,13 @@ export async function uploadStandaloneDocument(
     return response.json() as Promise<MikeDocument>;
 }
 
-export async function listStandaloneDocuments(): Promise<MikeDocument[]> {
-    return apiRequest<MikeDocument[]>("/single-documents");
+export async function listStandaloneDocuments(opts?: {
+    domain?: string;
+}): Promise<MikeDocument[]> {
+    const qs = opts?.domain
+        ? `?domain=${encodeURIComponent(opts.domain)}`
+        : "";
+    return apiRequest<MikeDocument[]>(`/single-documents${qs}`);
 }
 
 export async function deleteDocument(documentId: string): Promise<void> {
@@ -913,8 +918,11 @@ type WorkflowType = MikeWorkflow["type"];
 
 export async function listWorkflows(
     type: WorkflowType,
+    opts?: { domain?: string },
 ): Promise<MikeWorkflow[]> {
-    const data = await apiRequest<{ workflows: MikeWorkflow[] } | MikeWorkflow[]>(`/workflow?type=${type}`);
+    const params = new URLSearchParams({ type });
+    if (opts?.domain) params.set("domain", opts.domain);
+    const data = await apiRequest<{ workflows: MikeWorkflow[] } | MikeWorkflow[]>(`/workflow?${params}`);
     return Array.isArray(data) ? data : (data as { workflows: MikeWorkflow[] }).workflows ?? [];
 }
 
@@ -928,6 +936,7 @@ export async function createWorkflow(payload: {
     prompt_md?: string;
     columns_config?: { index: number; name: string; prompt: string }[];
     practice?: string | null;
+    domain?: string;
 }): Promise<MikeWorkflow> {
     return apiRequest<MikeWorkflow>("/workflow", {
         method: "POST",
@@ -943,6 +952,7 @@ export async function updateWorkflow(
         prompt_md?: string;
         columns_config?: { index: number; name: string; prompt: string }[];
         practice?: string | null;
+        domain?: string;
     },
 ): Promise<MikeWorkflow> {
     return apiRequest<MikeWorkflow>(`/workflow/${workflowId}`, {

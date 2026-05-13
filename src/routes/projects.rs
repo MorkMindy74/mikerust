@@ -32,21 +32,40 @@ pub fn router() -> Router<Arc<AppState>> {
 async fn list_projects(
     State(state): State<Arc<AppState>>,
     auth: AuthUser,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> ApiResult {
-    let rows: Vec<(String, String, Option<String>, String, String)> =
+    let domain_filter: Option<&str> = params
+        .get("domain")
+        .map(|s| s.as_str())
+        .filter(|s| !s.is_empty() && crate::domain::is_valid(s));
+
+    let rows: Vec<(String, String, Option<String>, String, String, String)> = if let Some(d) =
+        domain_filter
+    {
         sqlx::query_as(
-            "SELECT id, name, description, created_at, updated_at \
+            "SELECT id, name, description, created_at, updated_at, domain \
+             FROM projects WHERE user_id = ? AND domain = ? ORDER BY updated_at DESC",
+        )
+        .bind(&auth.user_id)
+        .bind(d)
+        .fetch_all(&state.db)
+        .await
+    } else {
+        sqlx::query_as(
+            "SELECT id, name, description, created_at, updated_at, domain \
              FROM projects WHERE user_id = ? ORDER BY updated_at DESC",
         )
         .bind(&auth.user_id)
         .fetch_all(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    }
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     let projects: Vec<Value> = rows
         .into_iter()
-        .map(|(id, name, desc, created_at, updated_at)| {
+        .map(|(id, name, desc, created_at, updated_at, domain)| {
             json!({ "id": id, "name": name, "description": desc,
+                    "domain": domain,
                     "created_at": created_at, "updated_at": updated_at })
         })
         .collect();
@@ -62,6 +81,10 @@ async fn list_projects(
 struct CreateProjectBody {
     name: String,
     description: Option<String>,
+    /// Professional vertical — see `crate::domain::DOMAINS`. Falls back
+    /// to `legal` (schema default) when omitted/invalid.
+    #[serde(default)]
+    domain: Option<String>,
 }
 
 async fn create_project(
@@ -73,18 +96,20 @@ async fn create_project(
         return Err(err(StatusCode::BAD_REQUEST, "Project name cannot be empty"));
     }
     let id = uuid::Uuid::new_v4().to_string();
+    let dom = crate::domain::normalise_or_default(body.domain.as_deref());
     sqlx::query(
-        "INSERT INTO projects (id, user_id, name, description) VALUES (?, ?, ?, ?)",
+        "INSERT INTO projects (id, user_id, name, description, domain) VALUES (?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&auth.user_id)
     .bind(body.name.trim())
     .bind(&body.description)
+    .bind(dom)
     .execute(&state.db)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
-    Ok(Json(json!({ "id": id, "name": body.name.trim() })))
+    Ok(Json(json!({ "id": id, "name": body.name.trim(), "domain": dom })))
 }
 
 // ---------------------------------------------------------------------------
@@ -95,9 +120,9 @@ async fn get_project(
     auth: AuthUser,
     Path(id): Path<String>,
 ) -> ApiResult {
-    let row: Option<(String, String, Option<String>, String, String, String)> =
+    let row: Option<(String, String, Option<String>, String, String, String, String)> =
         sqlx::query_as(
-            "SELECT id, name, description, created_at, updated_at, isolation_mode \
+            "SELECT id, name, description, created_at, updated_at, isolation_mode, domain \
              FROM projects WHERE id = ? AND user_id = ?",
         )
         .bind(&id)
@@ -106,13 +131,14 @@ async fn get_project(
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
-    let (id, name, desc, created_at, updated_at, isolation_mode) =
+    let (id, name, desc, created_at, updated_at, isolation_mode, domain) =
         row.ok_or_else(|| err(StatusCode::NOT_FOUND, "Project not found"))?;
 
     Ok(Json(json!({
         "id": id, "name": name, "description": desc,
         "created_at": created_at, "updated_at": updated_at,
-        "isolation_mode": isolation_mode
+        "isolation_mode": isolation_mode,
+        "domain": domain,
     })))
 }
 
@@ -131,6 +157,7 @@ struct UpdateProjectBody {
     name: Option<String>,
     description: Option<String>,
     isolation_mode: Option<String>,
+    domain: Option<String>,
 }
 
 async fn update_project(
@@ -149,18 +176,28 @@ async fn update_project(
             ));
         }
     }
+    if let Some(ref d) = body.domain {
+        if !crate::domain::is_valid(d) {
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                "domain must be a canonical value (legal, medical, finance, real_estate, hr, insurance, ip, compliance, others)",
+            ));
+        }
+    }
 
     let result = sqlx::query(
         "UPDATE projects SET \
            name = COALESCE(?, name), \
            description = COALESCE(?, description), \
            isolation_mode = COALESCE(?, isolation_mode), \
+           domain = COALESCE(?, domain), \
            updated_at = datetime('now') \
          WHERE id = ? AND user_id = ?",
     )
     .bind(&body.name)
     .bind(&body.description)
     .bind(&body.isolation_mode)
+    .bind(&body.domain)
     .bind(&id)
     .bind(&auth.user_id)
     .execute(&state.db)

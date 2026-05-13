@@ -43,13 +43,14 @@ type WorkflowRow = (
     String,         // columns_config (JSON text, parsed on the way out)
     String,         // created_at
     String,         // updated_at
+    String,         // domain (added in migration 0018, defaults to 'legal')
 );
 
 const SELECT_COLS: &str =
-    "id, user_id, title, NULLIF(prompt_md, '') AS prompt_md, type, practice, columns_config, created_at, updated_at";
+    "id, user_id, title, NULLIF(prompt_md, '') AS prompt_md, type, practice, columns_config, created_at, updated_at, domain";
 
 fn row_to_json(row: WorkflowRow, current_user: &str) -> Value {
-    let (id, user_id, title, prompt_md, ty, practice, columns_config, created_at, _updated_at) =
+    let (id, user_id, title, prompt_md, ty, practice, columns_config, created_at, _updated_at, domain) =
         row;
     let cols: Value = serde_json::from_str(&columns_config).unwrap_or_else(|_| json!([]));
     let is_owner = user_id == current_user;
@@ -61,6 +62,7 @@ fn row_to_json(row: WorkflowRow, current_user: &str) -> Value {
         "prompt_md": prompt_md,
         "columns_config": cols,
         "practice": practice,
+        "domain": domain,
         "created_at": created_at,
         "is_system": false,
         "is_owner": is_owner,
@@ -75,33 +77,43 @@ async fn list_workflows(
     auth: AuthUser,
     Query(params): Query<HashMap<String, String>>,
 ) -> ApiResult {
-    // Optional filter on workflow type. The frontend always sets this via
-    // listWorkflows(type), so we honour it when present.
+    // Optional filters: `type` (assistant | tabular) — set by every
+    // frontend caller — and `domain` (legal | medical | …) added in
+    // migration 0018. Both are AND-combined when present; both fall
+    // through silently when absent or empty.
     let type_filter: Option<String> = params
         .get("type")
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string());
+    let domain_filter: Option<String> = params
+        .get("domain")
+        .filter(|s| !s.is_empty() && crate::domain::is_valid(s))
+        .map(|s| s.to_string());
 
-    let rows: Vec<WorkflowRow> = if let Some(t) = type_filter {
-        sqlx::query_as(&format!(
-            "SELECT {SELECT_COLS} FROM workflows \
-             WHERE user_id = ? AND type = ? ORDER BY updated_at DESC"
-        ))
-        .bind(&auth.user_id)
-        .bind(t)
+    // Build the WHERE clause incrementally so we keep parameter bindings
+    // positional and avoid runtime SQL string concatenation tricks.
+    let mut sql = format!(
+        "SELECT {SELECT_COLS} FROM workflows WHERE user_id = ?"
+    );
+    if type_filter.is_some() {
+        sql.push_str(" AND type = ?");
+    }
+    if domain_filter.is_some() {
+        sql.push_str(" AND domain = ?");
+    }
+    sql.push_str(" ORDER BY updated_at DESC");
+
+    let mut q = sqlx::query_as::<_, WorkflowRow>(&sql).bind(&auth.user_id);
+    if let Some(t) = &type_filter {
+        q = q.bind(t);
+    }
+    if let Some(d) = &domain_filter {
+        q = q.bind(d);
+    }
+    let rows: Vec<WorkflowRow> = q
         .fetch_all(&state.db)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
-    } else {
-        sqlx::query_as(&format!(
-            "SELECT {SELECT_COLS} FROM workflows \
-             WHERE user_id = ? ORDER BY updated_at DESC"
-        ))
-        .bind(&auth.user_id)
-        .fetch_all(&state.db)
-        .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
-    };
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     let workflows: Vec<Value> = rows
         .into_iter()
@@ -126,6 +138,10 @@ struct CreateWorkflowBody {
     practice: Option<String>,
     #[serde(default)]
     columns_config: Option<Value>,
+    /// Professional vertical — see `crate::domain::DOMAINS`. Falls back
+    /// to `legal` (matching the schema default) when omitted or unknown.
+    #[serde(default)]
+    domain: Option<String>,
 }
 
 async fn create_workflow(
@@ -160,9 +176,11 @@ async fn create_workflow(
         .map(|v| v.to_string())
         .unwrap_or_else(|| "[]".to_string());
 
+    let dom = crate::domain::normalise_or_default(body.domain.as_deref());
+
     sqlx::query(
-        "INSERT INTO workflows (id, user_id, title, prompt_md, type, practice, columns_config) \
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO workflows (id, user_id, title, prompt_md, type, practice, columns_config, domain) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&auth.user_id)
@@ -171,6 +189,7 @@ async fn create_workflow(
     .bind(&ty)
     .bind(&body.practice)
     .bind(&cols_text)
+    .bind(dom)
     .execute(&state.db)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
@@ -221,6 +240,8 @@ struct UpdateWorkflowBody {
     practice: Option<String>,
     #[serde(default)]
     columns_config: Option<Value>,
+    #[serde(default)]
+    domain: Option<String>,
 }
 
 async fn update_workflow(
@@ -231,12 +252,24 @@ async fn update_workflow(
 ) -> ApiResult {
     let cols_text: Option<String> = body.columns_config.map(|v| v.to_string());
 
+    // Reject unknown domains on update (strict) — silently coercing
+    // would mask client bugs. None/omitted = leave unchanged.
+    if let Some(ref d) = body.domain {
+        if !crate::domain::is_valid(d) {
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                "domain must be one of the canonical values (legal, medical, finance, real_estate, hr, insurance, ip, compliance, others)",
+            ));
+        }
+    }
+
     let result = sqlx::query(
         "UPDATE workflows SET \
            title          = COALESCE(?, title), \
            prompt_md      = COALESCE(?, prompt_md), \
            practice       = COALESCE(?, practice), \
            columns_config = COALESCE(?, columns_config), \
+           domain         = COALESCE(?, domain), \
            updated_at = datetime('now') \
          WHERE id = ? AND user_id = ?",
     )
@@ -244,6 +277,7 @@ async fn update_workflow(
     .bind(&body.prompt_md)
     .bind(&body.practice)
     .bind(&cols_text)
+    .bind(&body.domain)
     .bind(&id)
     .bind(&auth.user_id)
     .execute(&state.db)

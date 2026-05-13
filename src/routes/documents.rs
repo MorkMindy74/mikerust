@@ -52,6 +52,10 @@ pub fn router() -> Router<Arc<AppState>> {
 #[derive(Deserialize)]
 struct ListQuery {
     project_id: Option<String>,
+    /// Optional `?domain=…` filter added with migration 0018. Useful
+    /// for the global-documents (project_id IS NULL) view in the UI
+    /// where users want to slice their personal pool by vertical.
+    domain: Option<String>,
 }
 
 async fn list_documents(
@@ -59,31 +63,42 @@ async fn list_documents(
     auth: AuthUser,
     Query(q): Query<ListQuery>,
 ) -> ApiResult {
-    let rows: Vec<(String, String, String, i64, Option<String>, String)> = if let Some(pid) = &q.project_id {
-        sqlx::query_as(
-            "SELECT id, filename, file_type, size_bytes, status, created_at \
-             FROM documents WHERE user_id = ? AND project_id = ? ORDER BY created_at DESC",
-        )
-        .bind(&auth.user_id)
-        .bind(pid)
-        .fetch_all(&state.db)
-        .await
-    } else {
-        sqlx::query_as(
-            "SELECT id, filename, file_type, size_bytes, status, created_at \
-             FROM documents WHERE user_id = ? ORDER BY created_at DESC",
-        )
-        .bind(&auth.user_id)
-        .fetch_all(&state.db)
-        .await
+    let domain_filter: Option<&str> = q
+        .domain
+        .as_deref()
+        .filter(|s| !s.is_empty() && crate::domain::is_valid(s));
+
+    let mut sql = String::from(
+        "SELECT id, filename, file_type, size_bytes, status, created_at, domain \
+         FROM documents WHERE user_id = ?",
+    );
+    if q.project_id.is_some() {
+        sql.push_str(" AND project_id = ?");
     }
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    if domain_filter.is_some() {
+        sql.push_str(" AND domain = ?");
+    }
+    sql.push_str(" ORDER BY created_at DESC");
+
+    let mut query = sqlx::query_as::<_, (String, String, String, i64, Option<String>, String, String)>(&sql)
+        .bind(&auth.user_id);
+    if let Some(pid) = &q.project_id {
+        query = query.bind(pid);
+    }
+    if let Some(d) = domain_filter {
+        query = query.bind(d);
+    }
+    let rows = query
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     let docs: Vec<Value> = rows
         .into_iter()
-        .map(|(id, filename, file_type, size, status, created_at)| {
+        .map(|(id, filename, file_type, size, status, created_at, domain)| {
             json!({ "id": id, "filename": filename, "file_type": file_type,
-                    "size_bytes": size, "status": status, "created_at": created_at })
+                    "size_bytes": size, "status": status,
+                    "domain": domain, "created_at": created_at })
         })
         .collect();
 
@@ -110,6 +125,11 @@ async fn upload_document(
     // later by the /chat send handler — and the chat-delete handler
     // ref-counts by content_hash before unlinking the on-disk files.
     let mut cache = false;
+    // Optional `domain` multipart field — when omitted, project-scoped
+    // uploads inherit the project's domain below, and standalone
+    // uploads fall back to the schema default ('legal') via the
+    // INSERT (no need to bind a value).
+    let mut domain: Option<String> = None;
     while let Some(field) = multipart.next_field().await.map_err(|e| {
         tracing::warn!("[upload] multipart parse error: {e}");
         err(StatusCode::BAD_REQUEST, &e.to_string())
@@ -141,6 +161,13 @@ async fn upload_document(
             "cache" => {
                 let text = field.text().await.map_err(|e| err(StatusCode::BAD_REQUEST, &e.to_string()))?;
                 cache = matches!(text.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes");
+            }
+            "domain" => {
+                let text = field.text().await.map_err(|e| err(StatusCode::BAD_REQUEST, &e.to_string()))?;
+                let trimmed = text.trim();
+                if !trimmed.is_empty() && crate::domain::is_valid(trimmed) {
+                    domain = Some(trimmed.to_string());
+                }
             }
             _ => {}
         }
@@ -257,9 +284,28 @@ async fn upload_document(
         (key, None, None)
     };
 
+    // Resolve domain: explicit field wins; otherwise inherit from the
+    // parent project; otherwise fall back to schema default ('legal').
+    let resolved_domain: Option<String> = if let Some(d) = domain {
+        Some(d)
+    } else if let Some(pid) = &project_id {
+        sqlx::query_as::<_, (String,)>(
+            "SELECT domain FROM projects WHERE id = ? AND user_id = ?",
+        )
+        .bind(pid)
+        .bind(&auth.user_id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten()
+        .map(|(d,)| d)
+    } else {
+        None
+    };
+
     sqlx::query(
-        "INSERT INTO documents (id, user_id, project_id, filename, file_type, size_bytes, storage_path, status, content_hash, extracted_text_path) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?)",
+        "INSERT INTO documents (id, user_id, project_id, filename, file_type, size_bytes, storage_path, status, content_hash, extracted_text_path, domain) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, COALESCE(?, 'legal'))",
     )
     .bind(&doc_id)
     .bind(&auth.user_id)
@@ -270,6 +316,7 @@ async fn upload_document(
     .bind(&storage_key)
     .bind(&content_hash)
     .bind(&extracted_text_path)
+    .bind(&resolved_domain)
     .execute(&state.db)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
@@ -279,6 +326,7 @@ async fn upload_document(
         "filename": fname,
         "file_type": file_type,
         "size_bytes": size,
+        "domain": resolved_domain.unwrap_or_else(|| "legal".to_string()),
         "status": "ready"
     })))
 }

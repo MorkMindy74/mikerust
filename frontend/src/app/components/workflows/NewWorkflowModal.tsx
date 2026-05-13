@@ -4,7 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { X, MessageSquare, Table2 } from "lucide-react";
 import { createWorkflow, updateWorkflow } from "@/app/lib/mikeApi";
-import type { MikeWorkflow } from "../shared/types";
+import type { MikeWorkflow, Domain } from "../shared/types";
+import { DEFAULT_DOMAIN } from "../shared/types";
+import { DomainSelect } from "../shared/DomainControls";
 import { PRACTICE_OPTIONS } from "./practices";
 
 interface Props {
@@ -17,11 +19,13 @@ interface Props {
 
 export function NewWorkflowModal({ open, onClose, onCreated, editWorkflow, onUpdated }: Props) {
     const tWf = useTranslations("Workflows");
+    const tDomains = useTranslations("Domains");
     const tCommon = useTranslations("Common");
     const [title, setTitle] = useState("");
     const [type, setType] = useState<"assistant" | "tabular">("assistant");
     const [practice, setPractice] = useState<string>("");
     const [customPractice, setCustomPractice] = useState("");
+    const [domain, setDomain] = useState<Domain>(DEFAULT_DOMAIN);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
     const customInputRef = useRef<HTMLInputElement>(null);
@@ -34,6 +38,7 @@ export function NewWorkflowModal({ open, onClose, onCreated, editWorkflow, onUpd
         if (open && editWorkflow) {
             setTitle(editWorkflow.title);
             setType(editWorkflow.type);
+            setDomain((editWorkflow.domain as Domain | undefined) ?? DEFAULT_DOMAIN);
             const saved = editWorkflow.practice ?? "";
             const isKnown = (PRACTICE_OPTIONS as readonly string[]).includes(saved);
             if (!isKnown && saved) {
@@ -65,6 +70,7 @@ export function NewWorkflowModal({ open, onClose, onCreated, editWorkflow, onUpd
                 const updated = await updateWorkflow(editWorkflow.id, {
                     title: title.trim(),
                     practice: effectivePractice,
+                    domain,
                 });
                 onUpdated?.(updated);
             } else {
@@ -72,6 +78,7 @@ export function NewWorkflowModal({ open, onClose, onCreated, editWorkflow, onUpd
                     title: title.trim(),
                     type,
                     practice: effectivePractice,
+                    domain,
                 });
                 onCreated(workflow);
             }
@@ -89,6 +96,7 @@ export function NewWorkflowModal({ open, onClose, onCreated, editWorkflow, onUpd
         setType("assistant");
         setPractice("");
         setCustomPractice("");
+        setDomain(DEFAULT_DOMAIN);
         setError("");
     }
 
@@ -160,6 +168,15 @@ export function NewWorkflowModal({ open, onClose, onCreated, editWorkflow, onUpd
                                 </div>
                             </div>
                         )}
+
+                        {/* Domain — top-level professional vertical
+                            (migration 0018). Sits above practice because
+                            it's the broader categorisation; practice areas
+                            are sub-tags inside the chosen domain. */}
+                        <div className="mt-5">
+                            <p className="mb-2 text-sm font-medium text-gray-500">{tDomains("label")}</p>
+                            <DomainSelect value={domain} onChange={setDomain} />
+                        </div>
 
                         {/* Practice */}
                         <div className="mt-5">

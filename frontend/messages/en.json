@@ -534,6 +534,21 @@
         "ownerOnlyDelete": "delete {count} of the selected projects — only the project owner can delete a project",
         "folderName": "Folder name"
     },
+    "Domains": {
+        "label": "Domain",
+        "filterPlaceholder": "All domains",
+        "values": {
+            "legal": "Legal",
+            "medical": "Medical",
+            "finance": "Finance",
+            "real_estate": "Real estate",
+            "hr": "HR",
+            "insurance": "Insurance",
+            "ip": "IP",
+            "compliance": "Compliance",
+            "others": "Others"
+        }
+    },
     "Workflows": {
         "title": "Workflows",
         "newWorkflow": "New workflow",

@@ -76,14 +76,15 @@ different shape.
 
 ## 2. Workflow anatomy
 
-A workflow is a row in the `workflows` table. Five fields matter at
+A workflow is a row in the `workflows` table. Six fields matter at
 authoring time:
 
 | Field | Meaning |
 |---|---|
 | `title` | Shown in the workflow list and in the chat composer's workflow picker. Keep it action-oriented: "Review NDA terms", not "NDA workflow". |
 | `type` | `"assistant"` or `"tabular"`. Drives where the workflow appears in the UI and how the model is asked to respond. |
-| `practice` | A category tag. Used for filtering the workflow list. Pick from the shipped list (see §5) or type a custom one. |
+| `domain` | Top-level professional vertical. One of `legal` (default), `medical`, `finance`, `real_estate`, `hr`, `insurance`, `ip`, `compliance`, `others`. Filters list views and is inherited by tabular reviews. See §5 for the practice/domain distinction. |
+| `practice` | A sub-category tag *within* a domain. Used for filtering the workflow list. Pick from the shipped list (see §5) or type a custom one. |
 | `prompt_md` | The instructions to the model, written in Markdown. This is the most important field. See §7 for guidance. |
 | `columns_config` | (tabular only) An array of column definitions. Each column has a `name`, a `prompt`, and an optional `format`. See §3. |
 
@@ -168,34 +169,59 @@ chat-driven, set its `type` to `"assistant"`.
 
 ---
 
-## 5. Practice areas — how to use them outside law
+## 5. Domain vs practice — top-level vertical and the sub-category
 
-The `practice` field is a free string but the dropdown is populated
-from a shipped list (19 entries):
+MikeRust uses **two** orthogonal categorisation fields, introduced
+in migration 0018:
 
-```
-General Transactions, Corporate, Finance, Litigation, Real Estate,
-Tax, Employment, IP, Competition, Tech Transactions, Project Finance,
-EC/VC, Private Equity, Private Credit, ECM, DCM, Lev Fin, Arbitration,
-Others
-```
+- **`domain`** — the broad professional vertical the artefact belongs
+  to. Always one of nine shipped values: `legal` (default), `medical`,
+  `finance`, `real_estate`, `hr`, `insurance`, `ip`, `compliance`,
+  `others`. Validated at the API boundary — unknown values fall back
+  to `legal` on create, are rejected on update. New domains can be
+  added by editing `crate::domain::DOMAINS` on the backend and
+  `Domain` in `frontend/.../shared/types.ts` — no SQL migration needed,
+  rows that already reference an unshipped domain keep working.
+- **`practice`** — a sub-tag *within* a domain. Free string. The
+  shipped dropdown lists 19 legal practice areas (`General
+  Transactions, Corporate, Finance, Litigation, Real Estate, Tax,
+  Employment, IP, Competition, Tech Transactions, Project Finance,
+  EC/VC, Private Equity, Private Credit, ECM, DCM, Lev Fin,
+  Arbitration, Others`); for non-legal domains, pick `Others` and
+  type your own (e.g. `Cardiology`, `Property Inspection`, `Resume
+  Screening`).
 
-These are clearly law-firm-ish. For non-legal use:
+### Domain-vs-practice in plain terms
 
-- **"Others" + a custom string**: pick `Others` in the dropdown and
-  type your own practice area (e.g. `Medical Records Review`,
-  `Real Estate Inspection`, `Resume Screening`). The string is stored
-  verbatim and shown wherever the workflow appears. You can filter
-  your workflow list by practice, and `Others` collects every custom
-  one alongside.
-- **Recurring custom areas → ship them**: if your team uses the same
-  custom practice repeatedly (e.g. an MD always categorises everything
-  as `Clinical Trial Review`), it's worth adding it to the shipped
-  dropdown. See "Going beyond the UI" at the bottom.
+| Scenario | `domain` | `practice` |
+|---|---|---|
+| A law firm doing M&A work | `legal` | `Corporate` |
+| A bank's IC analyst writing M&A memos | `finance` | (custom: `M&A`) |
+| A patent attorney prosecuting filings | `legal` | `IP` |
+| A patent agent (non-lawyer) doing FTO searches | `ip` | (custom: `FTO`) |
+| A cardiologist reviewing patient charts | `medical` | (custom: `Cardiology`) |
+| A claims adjuster triaging fire-loss claims | `insurance` | (custom: `Property — Fire`) |
 
-The practice field has **no functional effect** on what the model does
-— it's purely a UI categoriser. Don't put behaviour-changing
-instructions there; put them in `prompt_md`.
+The same word can appear in both columns ("Finance" is a legal
+practice **and** a domain) — the two cohabit because law firms work
+*on* those domains, while practitioners work *in* them.
+
+### Inheritance & filtering
+
+- The workflow list, tabular reviews list, projects list, and global
+  documents list each have a domain filter chip at the top. The chip
+  defaults to "All domains".
+- A project's domain propagates to documents uploaded under it (the
+  upload handler reads `projects.domain` and stamps it on the new
+  document row). For global documents (no project), the user picks the
+  domain at upload time; otherwise the schema defaults to `legal`.
+- A tabular review inherits the workflow's domain on creation. The
+  inheritance is not enforced on edit — you can re-tag a review to
+  bridge cross-domain analyses.
+
+Neither field has any effect on the model's behaviour. They're UI
+categorisers and filter keys; put behaviour-changing instructions in
+`prompt_md`.
 
 ---
 
@@ -468,8 +494,32 @@ In the UI:
 
 ## 11. Going beyond the UI
 
-If you find yourself working in a non-legal domain regularly, two
+If you find yourself working in a non-legal domain regularly, three
 upgrades make sense:
+
+### 11.0 Add a new domain to the shipped enum
+
+The 9 domains shipped today (`legal`, `medical`, `finance`,
+`real_estate`, `hr`, `insurance`, `ip`, `compliance`, `others`) cover
+most professional verticals. To add another (e.g. `architecture`,
+`journalism`, `accounting`):
+
+1. Edit
+   [`src/domain.rs`](../src/domain.rs): append the new identifier to
+   the `DOMAINS` array. The backend validation auto-picks it up; no
+   SQL migration needed (the column is a free TEXT field).
+2. Edit
+   [`frontend/src/app/components/shared/types.ts`](../frontend/src/app/components/shared/types.ts):
+   add the new value to both the `Domain` union and the `DOMAINS`
+   array constant.
+3. Add a display label in each i18n catalogue under
+   `Domains.values.<new_id>`
+   ([`it.json`](../frontend/messages/it.json),
+   [`en.json`](../frontend/messages/en.json),
+   [`fr.json`](../frontend/messages/fr.json)).
+
+Rebuild (or wait for HMR). The new domain appears in both the create
+dropdown and the filter chip everywhere a Domain control is rendered.
 
 ### 11.1 Add a practice area to the shipped dropdown
 

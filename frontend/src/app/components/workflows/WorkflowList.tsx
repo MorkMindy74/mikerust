@@ -26,6 +26,7 @@ import { DisplayWorkflowModal } from "./DisplayWorkflowModal";
 import { NewWorkflowModal } from "./NewWorkflowModal";
 import { ToolbarTabs } from "../shared/ToolbarTabs";
 import { RowActions } from "../shared/RowActions";
+import { DomainFilter } from "../shared/DomainControls";
 import { MikeIcon } from "@/components/chat/mike-icon";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -74,6 +75,13 @@ export function WorkflowList() {
         null,
     );
     const [typeFilterOpen, setTypeFilterOpen] = useState(false);
+    // Domain (professional vertical, migration 0018) — undefined means
+    // "show all domains"; otherwise filter the visible list. We do the
+    // narrowing client-side off the in-memory `byTab` collection to
+    // keep the filter UX responsive (toggling chips doesn't refetch).
+    const [domainFilter, setDomainFilter] = useState<
+        import("../shared/types").Domain | undefined
+    >(undefined);
     const [search, setSearch] = useState("");
     const actionsRef = useRef<HTMLDivElement>(null);
     const practiceFilterRef = useRef<HTMLDivElement>(null);
@@ -152,6 +160,7 @@ export function WorkflowList() {
     const filtered = byTab
         .filter((wf) => !practiceFilter || wf.practice === practiceFilter)
         .filter((wf) => !typeFilter || wf.type === typeFilter)
+        .filter((wf) => !domainFilter || (wf.domain ?? "legal") === domainFilter)
         .filter((wf) => !q || wf.title.toLowerCase().includes(q));
 
     const allSelected =
@@ -369,6 +378,7 @@ export function WorkflowList() {
             )}
             {typeFilterButton}
             {practiceFilterButton}
+            <DomainFilter value={domainFilter} onChange={setDomainFilter} />
         </div>
     );
 

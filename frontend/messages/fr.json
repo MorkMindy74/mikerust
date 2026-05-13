@@ -534,6 +534,21 @@
         "ownerOnlyDelete": "supprimer {count} des projets sélectionnés — seul le propriétaire du projet peut le supprimer",
         "folderName": "Nom du dossier"
     },
+    "Domains": {
+        "label": "Domaine",
+        "filterPlaceholder": "Tous les domaines",
+        "values": {
+            "legal": "Juridique",
+            "medical": "Médical",
+            "finance": "Finance",
+            "real_estate": "Immobilier",
+            "hr": "Ressources humaines",
+            "insurance": "Assurance",
+            "ip": "Propriété intellectuelle",
+            "compliance": "Conformité",
+            "others": "Autre"
+        }
+    },
     "Workflows": {
         "title": "Workflows",
         "newWorkflow": "Nouveau workflow",

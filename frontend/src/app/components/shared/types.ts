@@ -1,5 +1,36 @@
 // Shared TypeScript types for Mike AI legal assistant
 
+/**
+ * Professional vertical a workflow / review / project / document belongs to.
+ * Mirror of `crate::domain::DOMAINS` on the backend (see migration 0018).
+ * `legal` is the default — MikeRust forks from a law-firm-focused tool, so
+ * everything prior to the migration is implicitly legal.
+ */
+export type Domain =
+    | "legal"
+    | "medical"
+    | "finance"
+    | "real_estate"
+    | "hr"
+    | "insurance"
+    | "ip"
+    | "compliance"
+    | "others";
+
+export const DOMAINS: readonly Domain[] = [
+    "legal",
+    "medical",
+    "finance",
+    "real_estate",
+    "hr",
+    "insurance",
+    "ip",
+    "compliance",
+    "others",
+] as const;
+
+export const DEFAULT_DOMAIN: Domain = "legal";
+
 export interface MikeFolder {
   id: string;
   project_id: string;
@@ -31,6 +62,8 @@ export interface MikeProject {
    * right SearchScope on every turn.
    */
   isolation_mode?: "shared" | "strict";
+  /** Professional vertical — see `Domain`. Defaults to 'legal'. */
+  domain?: Domain;
 }
 
 export interface MikeDocument {
@@ -50,6 +83,12 @@ export interface MikeDocument {
   updated_at?: string | null;
   /** Max version_number across assistant_edit rows, null if doc is unedited. */
   latest_version_number?: number | null;
+  /**
+   * Professional vertical (migration 0018). Inherited from the parent
+   * project at upload time; for global documents (project_id null) it's
+   * picked explicitly by the user or defaults to 'legal'.
+   */
+  domain?: Domain;
 }
 
 export interface StructureNode {
@@ -277,6 +316,8 @@ export interface TabularReview {
   columns_config: ColumnConfig[] | null;
   workflow_id: string | null;
   practice?: string | null;
+  /** Professional vertical — see `Domain`. Defaults to 'legal'. */
+  domain?: Domain;
   /** Per-review email list. Used so standalone (project_id null) reviews can be shared directly. */
   shared_with?: string[];
   /** Server-set: true when the requesting user is the review's creator. */
@@ -312,6 +353,8 @@ export interface MikeWorkflow {
   is_system: boolean;
   created_at: string;
   practice?: string | null;
+  /** Professional vertical — see `Domain`. Defaults to 'legal'. */
+  domain?: Domain;
   shared_by_name?: string | null;
   allow_edit?: boolean;
   is_owner?: boolean;

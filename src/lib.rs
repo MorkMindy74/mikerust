@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod corpora;
 pub mod db;
+pub mod domain;
 pub mod embeddings;
 pub mod llm;
 pub mod mcp;
