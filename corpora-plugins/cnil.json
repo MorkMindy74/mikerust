@@ -6,30 +6,28 @@
         "it": "CNIL — Garante francese",
         "en": "CNIL (France)"
     },
-    "description": "Publications de la Commission nationale de l'informatique et des libertés : délibérations (sanctions et mises en demeure), recommandations, lignes directrices et guides pratiques sur la protection des données personnelles en France.",
-    "homepage": "https://www.cnil.fr",
+    "description": "Délibérations CNIL (sanctions, mises en demeure, avis, recommandations) servies depuis Légifrance — l'identifiant pérenne est de la forme `CNILTEXT000054047151`. Cherche par référence humaine (SAN-2024-013, MED-2024-007, ...) ou mots-clés ; les résultats remontent l'identifiant CNILTEXT à utiliser pour le fetch.",
+    "homepage": "https://www.legifrance.gouv.fr/liste/cnil",
     "languages": ["fr"],
     "default_language": "fr",
     "supports_language_fallback": false,
-    "identifier_label": "Référence CNIL",
-    "identifier_example": "SAN-2024-013",
+    "identifier_label": "CNILTEXT",
+    "identifier_example": "CNILTEXT000054047151",
     "enabled_by_default": false,
     "strategy": {
         "kind": "http-fetch-per-id",
         "search_by_id": {
-            "url_template": "https://www.cnil.fr/fr/deliberation/{identifier}",
+            "url_template": "https://www.legifrance.gouv.fr/cnil/id/{identifier}?fonds=CNIL",
             "shape": "rest-html",
-            "title_path": "h1.title",
-            "body_path": "article.node--type-deliberation .field--name-body",
-            "date_path": "time[datetime]@datetime"
+            "title_path": "h1",
+            "body_path": "main"
         },
         "search_by_keyword": {
-            "url_template": "https://www.cnil.fr/fr/search/site/{query}?f%5B0%5D=type%3Adeliberation",
+            "url_template": "https://www.legifrance.gouv.fr/search/cnil?tab_selection=cnil&searchField=ALL&query={query}&page=1&init=true",
             "shape": "rest-html",
-            "hits_path": "ol.search-results li",
-            "identifier_at": "h3.title a@href:strip-prefix=/fr/deliberation/",
-            "title_at": "h3.title a",
-            "date_at": "time[datetime]@datetime"
+            "hits_path": "ol.search-result-result li, ul.search-result-result li, article.result",
+            "identifier_at": "a[href*=\"/cnil/id/\"]@href:strip-prefix=https://www.legifrance.gouv.fr/cnil/id/:strip-prefix=/cnil/id/",
+            "title_at": "a[href*=\"/cnil/id/\"]"
         }
     },
     "capabilities": {
@@ -48,30 +46,30 @@
             "display_name": "Délibérations (sanctions, mises en demeure)",
             "subtitle": "(SAN- / MED- / D-)",
             "description": "Décisions de la formation restreinte : sanctions pécuniaires, mises en demeure, avertissements. Couvre les manquements RGPD constatés par la CNIL contre des organismes publics et privés.",
-            "available": false,
-            "status_label": "à venir"
+            "available": true,
+            "default_enabled": true
         },
         {
             "id": "recommandations",
             "display_name": "Recommandations et lignes directrices",
             "subtitle": "(RGPD opérationnel)",
             "description": "Doctrine de la CNIL sur l'application concrète du RGPD : cookies, prospection commerciale, vidéosurveillance, données de santé, IA, etc. Référence pour bâtir des politiques de conformité.",
-            "available": false,
-            "status_label": "à venir"
+            "available": true,
+            "default_enabled": false
+        },
+        {
+            "id": "avis",
+            "display_name": "Avis sur projets de textes",
+            "subtitle": "(avant promulgation)",
+            "description": "Avis rendus par la CNIL sur des projets de loi, décrets, et autres actes réglementaires impliquant des traitements de données. Source utile pour reconstituer l'intention du législateur.",
+            "available": true,
+            "default_enabled": false
         },
         {
             "id": "guides-pratiques",
             "display_name": "Guides pratiques et fiches méthodologiques",
             "subtitle": "(PME, secteur public, DPO)",
-            "description": "Documents pédagogiques destinés aux responsables de traitement : modèles d'AIPD, registres, formulaires de droits des personnes, kits de mise en conformité sectoriels.",
-            "available": false,
-            "status_label": "à venir"
-        },
-        {
-            "id": "avis-textes",
-            "display_name": "Avis sur projets de textes",
-            "subtitle": "(avant promulgation)",
-            "description": "Avis rendus par la CNIL sur des projets de loi, décrets, et autres actes réglementaires impliquant des traitements de données. Source utile pour reconstituer l'intention du législateur.",
+            "description": "Documents pédagogiques destinés aux responsables de traitement : modèles d'AIPD, registres, formulaires de droits des personnes, kits de mise en conformité sectoriels. NON disponibles via Légifrance — nécessitent un connecteur dédié vers cnil.fr.",
             "available": false,
             "status_label": "à venir"
         }

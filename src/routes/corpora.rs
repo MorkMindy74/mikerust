@@ -180,20 +180,33 @@ async fn generic_search(
     let lang = body.language.as_deref();
     let limit = body.limit.unwrap_or(20).min(100);
 
-    // Heuristic: if the query looks like the corpus's identifier
-    // example (or contains no whitespace and is short), try
-    // search_by_id first; otherwise treat as keyword search. The
-    // adapter is responsible for returning a useful one-element
-    // result for identifier probes.
-    let looks_like_identifier = !q.contains(char::is_whitespace) && q.len() < 64;
-    let hits = if looks_like_identifier {
+    // Routing policy: if `capabilities.search` is true we MUST honour
+    // it. Prefer the keyword search (it handles human references AND
+    // free text); fall back to identifier probe only when the manifest
+    // doesn't expose a keyword search. The previous "no-whitespace
+    // = identifier" heuristic mis-routed corpus-specific reference
+    // shapes (e.g. CNIL "SAN-2024-013" went through search_by_id and
+    // tried to fetch a URL templated with the human ref, which 404'd
+    // because the canonical identifier is the opaque CNILTEXT id).
+    let has_keyword = state
+        .corpus_plugins
+        .iter()
+        .find(|p| p.id == id)
+        .and_then(|p| match &p.strategy {
+            crate::corpora::plugin::CorpusStrategy::HttpFetchPerId(spec) => {
+                Some(spec.search_by_keyword.is_some())
+            }
+            _ => None,
+        })
+        .unwrap_or(false);
+    let hits = if has_keyword {
         adapter
-            .search_by_id(q, lang)
+            .search_by_keyword(q, lang, limit)
             .await
             .map_err(|e| err(StatusCode::BAD_GATEWAY, &e.to_string()))?
     } else {
         adapter
-            .search_by_keyword(q, lang, limit)
+            .search_by_id(q, lang)
             .await
             .map_err(|e| err(StatusCode::BAD_GATEWAY, &e.to_string()))?
     };
