@@ -5,8 +5,7 @@ import { useLocale, useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
 import { setLocaleCookie } from "@/i18n/actions";
 import { locales, type Locale } from "@/i18n/config";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
+import { apiBase } from "@/lib/apiBase";
 
 // Persist the choice on the backend (data\storage\, via /user/locale) so it
 // follows the data folder, then mirror to the cookie that next-intl uses
@@ -17,7 +16,7 @@ async function persistLocaleOnBackend(locale: Locale) {
     const token = localStorage.getItem("mike_auth_token");
     if (!token) return;
     try {
-        await fetch(`${API_BASE}/user/locale`, {
+        await fetch(`${apiBase()}/user/locale`, {
             method: "PUT",
             headers: {
                 "Content-Type": "application/json",

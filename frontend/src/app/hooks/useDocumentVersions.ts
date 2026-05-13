@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { apiBase } from "@/lib/apiBase";
 export interface DocumentVersionRow {
     id: string;
     version_number: number | null;
@@ -51,11 +52,8 @@ export function useDocumentVersions(
         (async () => {
             try {
                                 const token = typeof window !== "undefined" ? localStorage.getItem("mike_auth_token") : null;
-                const apiBase =
-                    process.env.NEXT_PUBLIC_API_BASE_URL ??
-                    "http://localhost:3001";
                 const resp = await fetch(
-                    `${apiBase}/single-documents/${documentId}/versions`,
+                    `${apiBase()}/single-documents/${documentId}/versions`,
                     {
                         headers: token
                             ? { Authorization: `Bearer ${token}` }

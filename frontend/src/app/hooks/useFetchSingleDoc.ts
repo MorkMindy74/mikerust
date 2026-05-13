@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { apiBase } from "@/lib/apiBase";
 
 /**
  * /display returns either PDF bytes (when the active version has a PDF
@@ -66,16 +67,14 @@ export function useFetchSingleDoc(
                         : null;
                 if (cancelled) return;
 
-                const apiBase =
-                    process.env.NEXT_PUBLIC_API_BASE_URL ??
-                    "http://localhost:3001";
+                const base = apiBase();
                 const url = kbPath
-                    ? `${apiBase}/sync/kb-doc?path=${encodeURIComponent(kbPath)}`
+                    ? `${base}/sync/kb-doc?path=${encodeURIComponent(kbPath)}`
                     : (() => {
                           const qs = versionId
                               ? `?version_id=${encodeURIComponent(versionId)}`
                               : "";
-                          return `${apiBase}/single-documents/${documentId}/display${qs}`;
+                          return `${base}/single-documents/${documentId}/display${qs}`;
                       })();
                 console.log(
                     `[fetch-doc] GET ${url} (kbPath=${kbPath ? "set" : "no"}, doc=${documentId ?? "?"})`,

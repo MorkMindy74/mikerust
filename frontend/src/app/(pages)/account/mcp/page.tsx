@@ -14,8 +14,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
+import { apiBase } from "@/lib/apiBase";
 
 type Transport = "http" | "sse" | "stdio";
 
@@ -52,7 +51,7 @@ function getToken() {
 }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
-    const res = await fetch(`${API_BASE}${path}`, {
+    const res = await fetch(`${apiBase()}${path}`, {
         ...init,
         headers: {
             "Content-Type": "application/json",
@@ -343,7 +342,7 @@ function McpEditor({ value, isNew, onChange, onCancel, onSave, error }: EditorPr
         setProbeResult(null);
         setProbeError(null);
         try {
-            const res = await fetch(`${API_BASE}/user/mcp-servers/probe`, {
+            const res = await fetch(`${apiBase()}/user/mcp-servers/probe`, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",

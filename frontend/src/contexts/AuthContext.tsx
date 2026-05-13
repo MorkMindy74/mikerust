@@ -7,6 +7,7 @@ import React, {
     useState,
     ReactNode,
 } from "react";
+import { apiBase } from "@/lib/apiBase";
 
 const TOKEN_KEY = "mike_auth_token";
 const USER_KEY = "mike_auth_user";
@@ -36,10 +37,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         try {
             const storedUser = localStorage.getItem(USER_KEY);
             const token = localStorage.getItem(TOKEN_KEY);
-            const apiBase =
-                process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
             console.log(
-                `[mike] boot · api=${apiBase} · ` +
+                `[mike] boot · api=${apiBase()} · ` +
                     (storedUser && token
                         ? `session=present user=${JSON.parse(storedUser).email ?? "?"}`
                         : "session=none"),

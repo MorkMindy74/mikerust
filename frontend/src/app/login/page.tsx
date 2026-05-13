@@ -7,8 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SiteLogo } from "@/components/site-logo";
 import { useAuth } from "@/contexts/AuthContext";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
+import { apiBase, apiBaseReady } from "@/lib/apiBase";
 
 export default function LoginPage() {
     const router = useRouter();
@@ -31,7 +30,8 @@ export default function LoginPage() {
         setBioLoading(true);
         setError(null);
         try {
-            const res = await fetch(`${API_BASE}/auth/unlock-biometric`, {
+            await apiBaseReady;
+            const res = await fetch(`${apiBase()}/auth/unlock-biometric`, {
                 method: "POST",
             });
             const data = await res.json();
@@ -54,27 +54,30 @@ export default function LoginPage() {
         }
         if (authLoading) return;
 
-        // Check first run
-        fetch(`${API_BASE}/auth/status`)
-            .then((r) => r.json())
-            .then((data) => {
-                if (data.setup_required) {
-                    router.replace("/signup");
-                } else {
-                    setChecking(false);
-                }
-            })
-            .catch(() => setChecking(false));
+        // Wait for the Tauri shell to publish the actual backend port
+        // before firing the first auth-status / biometric-availability
+        // probes (cold start race with the random-port handshake).
+        apiBaseReady.then(() => {
+            fetch(`${apiBase()}/auth/status`)
+                .then((r) => r.json())
+                .then((data) => {
+                    if (data.setup_required) {
+                        router.replace("/signup");
+                    } else {
+                        setChecking(false);
+                    }
+                })
+                .catch(() => setChecking(false));
 
-        // Check Windows Hello state
-        fetch(`${API_BASE}/auth/biometric-available`)
-            .then((r) => r.json())
-            .then((d) => {
-                const enabled = d.available && d.enabled;
-                setBioEnabled(enabled);
-                if (enabled) setMode("bio");
-            })
-            .catch(() => {});
+            fetch(`${apiBase()}/auth/biometric-available`)
+                .then((r) => r.json())
+                .then((d) => {
+                    const enabled = d.available && d.enabled;
+                    setBioEnabled(enabled);
+                    if (enabled) setMode("bio");
+                })
+                .catch(() => {});
+        });
     }, [authLoading, isAuthenticated, router]);
 
     // Auto-trigger biometric once when mode switches to "bio"
@@ -90,7 +93,8 @@ export default function LoginPage() {
         setLoading(true);
         setError(null);
         try {
-            const res = await fetch(`${API_BASE}/auth/unlock`, {
+            await apiBaseReady;
+            const res = await fetch(`${apiBase()}/auth/unlock`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ pin }),

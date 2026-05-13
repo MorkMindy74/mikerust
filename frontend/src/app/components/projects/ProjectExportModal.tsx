@@ -6,8 +6,7 @@ import { createPortal } from "react-dom";
 import { Download, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
+import { apiBase } from "@/lib/apiBase";
 
 interface Props {
     open: boolean;
@@ -44,7 +43,7 @@ export function ProjectExportModal({ open, onClose, projectId, projectName }: Pr
                     ? localStorage.getItem("mike_auth_token") ?? ""
                     : "";
             const res = await fetch(
-                `${API_BASE}/project/${projectId}/export`,
+                `${apiBase()}/project/${projectId}/export`,
                 {
                     method: "POST",
                     headers: {

@@ -13,9 +13,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-
-const API_BASE =
-    process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
+import { apiBase } from "@/lib/apiBase";
 
 function getToken() {
     return typeof window !== "undefined"
@@ -44,7 +42,7 @@ async function openExternal(url: string) {
 }
 
 async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-    const res = await fetch(`${API_BASE}${path}`, {
+    const res = await fetch(`${apiBase()}${path}`, {
         ...init,
         headers: {
             "Content-Type": "application/json",

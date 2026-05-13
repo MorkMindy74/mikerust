@@ -55,8 +55,7 @@ async function openExternal(url: string) {
     }
 }
 
-const API_BASE =
-    process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
+import { apiBase } from "@/lib/apiBase";
 
 function getToken() {
     return typeof window !== "undefined"
@@ -65,7 +64,7 @@ function getToken() {
 }
 
 async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-    const res = await fetch(`${API_BASE}${path}`, {
+    const res = await fetch(`${apiBase()}${path}`, {
         ...init,
         headers: {
             "Content-Type": "application/json",

@@ -19,10 +19,22 @@ use tower_http::cors::{Any, CorsLayer};
 /// Start the axum HTTP server on the given port.
 /// Blocks until the server shuts down.
 /// Intended to be called from a dedicated tokio task or thread.
+///
+/// Pass `port = 0` to let the OS pick a free high port. The actual
+/// bound port is logged at startup; callers that need to discover it
+/// (e.g. the Tauri shell so it can tell the frontend) should use
+/// `run_server_with_bio_tx` and pass a `port_tx` oneshot.
 pub use db::BiometricRequest;
 
 pub async fn run_server(port: u16) -> anyhow::Result<()> {
-    run_server_with_bio_tx(port, None).await
+    run_server_with_channels(port, None, None).await
+}
+
+pub async fn run_server_with_bio_tx(
+    port: u16,
+    biometric_tx: Option<tokio::sync::mpsc::Sender<BiometricRequest>>,
+) -> anyhow::Result<()> {
+    run_server_with_channels(port, biometric_tx, None).await
 }
 
 /// Load `.env` from a known-good location regardless of cwd.
@@ -91,9 +103,10 @@ fn ensure_fastembed_cache_dir() {
     tracing::info!("[rag] fastembed cache pinned to {}", path.display());
 }
 
-pub async fn run_server_with_bio_tx(
+pub async fn run_server_with_channels(
     port: u16,
     biometric_tx: Option<tokio::sync::mpsc::Sender<BiometricRequest>>,
+    port_tx: Option<tokio::sync::oneshot::Sender<u16>>,
 ) -> anyhow::Result<()> {
     load_dotenv();
     ensure_fastembed_cache_dir();
@@ -144,9 +157,19 @@ pub async fn run_server_with_bio_tx(
         .layer(cors)
         .with_state(state);
 
+    // Bind: when `port == 0`, the OS picks a free high port — we then
+    // read it back from the listener and report it via `port_tx` so the
+    // Tauri shell can forward the actual URL to the frontend (which
+    // can't know it ahead of time). When `port != 0` we honour it as
+    // a fixed bind (useful for standalone backend dev where the
+    // frontend uses `NEXT_PUBLIC_API_BASE_URL` to find us).
     let addr = format!("127.0.0.1:{port}");
-    tracing::info!("API listening on {addr}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
+    let actual_port = listener.local_addr()?.port();
+    tracing::info!("API listening on 127.0.0.1:{actual_port}");
+    if let Some(tx) = port_tx {
+        let _ = tx.send(actual_port);
+    }
     axum::serve(listener, app).await?;
     Ok(())
 }

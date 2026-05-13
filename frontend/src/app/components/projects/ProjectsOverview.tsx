@@ -12,8 +12,7 @@ import type { MikeProject } from "@/app/components/shared/types";
 import { NewProjectModal } from "./NewProjectModal";
 import { ToolbarTabs } from "@/app/components/shared/ToolbarTabs";
 import { RowActions } from "@/app/components/shared/RowActions";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
+import { apiBase } from "@/lib/apiBase";
 
 function formatDate(iso: string, locale: string) {
     return new Date(iso).toLocaleDateString(locale, {
@@ -263,7 +262,7 @@ export function ProjectsOverview() {
                 typeof window !== "undefined"
                     ? localStorage.getItem("mike_auth_token") ?? ""
                     : "";
-            const res = await fetch(`${API_BASE}/project/import`, {
+            const res = await fetch(`${apiBase()}/project/import`, {
                 method: "POST",
                 headers: { Authorization: `Bearer ${token}` },
                 body: fd,

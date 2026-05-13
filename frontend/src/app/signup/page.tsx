@@ -8,8 +8,7 @@ import { Input } from "@/components/ui/input";
 import { SiteLogo } from "@/components/site-logo";
 import { CheckCircle2 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
+import { apiBase, apiBaseReady } from "@/lib/apiBase";
 
 export default function SetupPage() {
     const router = useRouter();
@@ -29,13 +28,18 @@ export default function SetupPage() {
             return;
         }
         if (authLoading) return;
-        // If profile already exists, go to login
-        fetch(`${API_BASE}/auth/status`)
-            .then((r) => r.json())
-            .then((d) => {
-                if (!d.setup_required) router.replace("/login");
-            })
-            .catch(() => {});
+        // If profile already exists, go to login. Wait for the Tauri
+        // shell to report the actual backend port before firing —
+        // otherwise the very first session check on cold start can race
+        // the random-port discovery and hit the env fallback.
+        apiBaseReady.then(() => {
+            fetch(`${apiBase()}/auth/status`)
+                .then((r) => r.json())
+                .then((d) => {
+                    if (!d.setup_required) router.replace("/login");
+                })
+                .catch(() => {});
+        });
     }, [authLoading, isAuthenticated, router, success]);
 
     const handleSetup = async (e: React.FormEvent) => {
@@ -53,7 +57,8 @@ export default function SetupPage() {
 
         setLoading(true);
         try {
-            const res = await fetch(`${API_BASE}/auth/setup`, {
+            await apiBaseReady;
+            const res = await fetch(`${apiBase()}/auth/setup`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({

@@ -8,6 +8,7 @@ import {
     highlightDocxQuote,
 } from "./highlightDocxQuote";
 import type { CitationQuote } from "./types";
+import { apiBase } from "@/lib/apiBase";
 
 interface Props {
     documentId: string;
@@ -155,13 +156,11 @@ async function tagWIdsOnRenderedDom(
             typeof window !== "undefined"
                 ? localStorage.getItem("mike_auth_token")
                 : null;
-        const apiBase =
-            process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
         const qs = versionId
             ? `?version_id=${encodeURIComponent(versionId)}`
             : "";
         const resp = await fetch(
-            `${apiBase}/single-documents/${documentId}/tracked-change-ids${qs}`,
+            `${apiBase()}/single-documents/${documentId}/tracked-change-ids${qs}`,
             { headers: token ? { Authorization: `Bearer ${token}` } : {} },
         );
         if (!resp.ok) {

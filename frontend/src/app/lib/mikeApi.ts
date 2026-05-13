@@ -33,8 +33,7 @@ interface ServerChatDetailOut {
     messages: ServerMessage[];
 }
 
-const API_BASE =
-    process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
+import { apiBase, apiBaseReady } from "@/lib/apiBase";
 
 function getAuthHeader(): Record<string, string> {
     const token =
@@ -46,9 +45,14 @@ function getAuthHeader(): Record<string, string> {
 }
 
 async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
+    // Wait for the Tauri shell to publish the actual backend port the
+    // first time around. Subsequent calls are no-ops (the promise is
+    // already settled). Outside Tauri, the discovery fails fast and
+    // we fall back to NEXT_PUBLIC_API_BASE_URL.
+    await apiBaseReady;
     const authHeaders = getAuthHeader();
     const { headers: initHeaders, ...restInit } = init ?? {};
-    const response = await fetch(`${API_BASE}${path}`, {
+    const response = await fetch(`${apiBase()}${path}`, {
         cache: "no-store",
         ...restInit,
         headers: {
@@ -419,7 +423,7 @@ export async function uploadDocumentVersion(
     form.append("file", file);
     if (displayName) form.append("display_name", displayName);
     const response = await fetch(
-        `${API_BASE}/single-documents/${documentId}/versions`,
+        `${apiBase()}/single-documents/${documentId}/versions`,
         {
             method: "POST",
             headers: { ...authHeaders },
@@ -453,7 +457,7 @@ export async function uploadProjectDocument(
     const form = new FormData();
     form.append("file", file);
     const response = await fetch(
-        `${API_BASE}/projects/${projectId}/documents`,
+        `${apiBase()}/projects/${projectId}/documents`,
         {
             method: "POST",
             headers: { ...authHeaders },
@@ -477,7 +481,8 @@ export async function uploadStandaloneDocument(
     // (project libraries, tabular review setup) leave this off so the
     // upload stays in the long-lived documents/ tree.
     if (options?.cache) form.append("cache", "true");
-    const response = await fetch(`${API_BASE}/single-documents`, {
+    await apiBaseReady;
+    const response = await fetch(`${apiBase()}/single-documents`, {
         method: "POST",
         headers: { ...authHeaders },
         body: form,
@@ -508,7 +513,8 @@ export async function downloadDocumentsZip(
     documentIds: string[],
 ): Promise<Blob> {
     const authHeaders = getAuthHeader();
-    const response = await fetch(`${API_BASE}/single-documents/download-zip`, {
+    await apiBaseReady;
+    const response = await fetch(`${apiBase()}/single-documents/download-zip`, {
         method: "POST",
         cache: "no-store",
         headers: {
@@ -612,7 +618,8 @@ export async function streamChat(payload: {
 }): Promise<Response> {
     const { signal, ...body } = payload;
     const authHeaders = getAuthHeader();
-    return fetch(`${API_BASE}/chat`, {
+    await apiBaseReady;
+    return fetch(`${apiBase()}/chat`, {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
@@ -642,7 +649,8 @@ export async function streamProjectChat(payload: {
 }): Promise<Response> {
     const { projectId, signal, ...body } = payload;
     const authHeaders = getAuthHeader();
-    return fetch(`${API_BASE}/projects/${projectId}/chat`, {
+    await apiBaseReady;
+    return fetch(`${apiBase()}/projects/${projectId}/chat`, {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
@@ -758,7 +766,8 @@ export async function streamTabularGeneration(
     reviewId: string,
 ): Promise<Response> {
     const authHeaders = getAuthHeader();
-    return fetch(`${API_BASE}/tabular-review/${reviewId}/generate`, {
+    await apiBaseReady;
+    return fetch(`${apiBase()}/tabular-review/${reviewId}/generate`, {
         method: "POST",
         headers: { ...authHeaders },
     });
@@ -772,7 +781,8 @@ export async function streamTabularChat(
     context?: { reviewTitle?: string | null; projectName?: string | null },
 ): Promise<Response> {
     const authHeaders = getAuthHeader();
-    return fetch(`${API_BASE}/tabular-review/${reviewId}/chat`, {
+    await apiBaseReady;
+    return fetch(`${apiBase()}/tabular-review/${reviewId}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeaders },
         body: JSON.stringify({

@@ -9,8 +9,7 @@ import { LogOut, Check, Fingerprint, KeyRound, ShieldCheck } from "lucide-react"
 import { useAuth } from "@/contexts/AuthContext";
 import { useUserProfile } from "@/contexts/UserProfileContext";
 import { LanguageSwitcher } from "@/app/components/shared/LanguageSwitcher";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
+import { apiBase } from "@/lib/apiBase";
 
 function getToken() {
     return typeof window !== "undefined"
@@ -48,7 +47,7 @@ export default function AccountPage() {
     }, [profile]);
 
     useEffect(() => {
-        fetch(`${API_BASE}/auth/biometric-available`)
+        fetch(`${apiBase()}/auth/biometric-available`)
             .then((r) => r.json())
             .then((d) => {
                 setBioAvailable(d.available ?? false);
@@ -78,7 +77,7 @@ export default function AccountPage() {
         }
         setPinLoading(true);
         try {
-            const res = await fetch(`${API_BASE}/auth/change-pin`, {
+            const res = await fetch(`${apiBase()}/auth/change-pin`, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
@@ -102,8 +101,8 @@ export default function AccountPage() {
         setBioLoading(true);
         setBioMsg(null);
         const endpoint = bioEnabled
-            ? `${API_BASE}/auth/biometric-disable`
-            : `${API_BASE}/auth/biometric-enable`;
+            ? `${apiBase()}/auth/biometric-disable`
+            : `${apiBase()}/auth/biometric-enable`;
         try {
             const res = await fetch(endpoint, {
                 method: "POST",
@@ -124,7 +123,7 @@ export default function AccountPage() {
     const handleLogout = async () => {
         const token = getToken();
         if (token) {
-            await fetch(`${API_BASE}/auth/logout`, {
+            await fetch(`${apiBase()}/auth/logout`, {
                 method: "POST",
                 headers: { Authorization: `Bearer ${token}` },
             }).catch(() => {});

@@ -1,5 +1,31 @@
-use tauri::Manager;
-use tokio::sync::mpsc;
+use std::sync::{Arc, Mutex};
+use tauri::{Manager, State};
+use tokio::sync::{mpsc, oneshot};
+
+/// State managed by Tauri: the actual port the axum server bound to.
+/// Filled in once the server has started up (via the `port_tx` oneshot).
+/// Read by the `api_base_url` invoke handler so the frontend can
+/// discover where the backend is without a build-time constant.
+///
+/// Stored as `Arc<Mutex<Option<String>>>` so the same handle can be
+/// cloned into the background port-watch task AND managed by Tauri
+/// for invoke-handler reads, without resorting to raw pointers.
+#[derive(Clone)]
+struct ApiBaseUrl(Arc<Mutex<Option<String>>>);
+
+impl ApiBaseUrl {
+    fn new() -> Self {
+        Self(Arc::new(Mutex::new(None)))
+    }
+    fn set(&self, url: String) {
+        if let Ok(mut g) = self.0.lock() {
+            *g = Some(url);
+        }
+    }
+    fn get(&self) -> Option<String> {
+        self.0.lock().ok().and_then(|g| g.clone())
+    }
+}
 
 /// Entry point called by main.rs.
 /// Starts the axum server as a background tokio task, then launches Tauri.
@@ -19,23 +45,60 @@ pub fn run() {
     // Biometric channel: axum sends requests, Tauri processes them with HWND
     let (bio_tx, mut bio_rx) = mpsc::channel::<mike::BiometricRequest>(4);
 
+    // Port discovery channel: axum reports the OS-assigned port back so
+    // the Tauri shell can hand it to the frontend on demand. Default
+    // mode is "OS picks a free high port" (PORT env unset). PORT can
+    // still pin a specific port for the standalone-backend dev story
+    // (running the frontend in a regular browser at :3000 with
+    // NEXT_PUBLIC_API_BASE_URL=http://localhost:<port>).
+    let (port_tx, port_rx) = oneshot::channel::<u16>();
+    let api_base = ApiBaseUrl::new();
+    let api_base_for_task = api_base.clone();
+
     // Spawn the axum server on a background tokio runtime
     std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
         rt.block_on(async {
             let port: u16 = std::env::var("PORT")
-                .unwrap_or_else(|_| "3001".into())
-                .parse()
-                .unwrap_or(3001);
-            if let Err(e) = mike::run_server_with_bio_tx(port, Some(bio_tx)).await {
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0); // 0 = let the OS pick a free high port
+            if let Err(e) = mike::run_server_with_channels(
+                port,
+                Some(bio_tx),
+                Some(port_tx),
+            ).await {
                 tracing::error!("axum server error: {e}");
             }
         });
     });
 
+    // Background task: wait for the axum server to report its bound
+    // port, then stash it in the shared `ApiBaseUrl` handle so the
+    // `api_base_url` invoke handler can read it. Done out of Tauri's
+    // `setup` so the main thread isn't blocked — the IPC roundtrip
+    // from the frontend's first `invoke("api_base_url")` races against
+    // bind, but axum bind is sub-millisecond so the race resolves
+    // before the user can trigger any user-driven fetch.
+    tauri::async_runtime::spawn(async move {
+        if let Ok(port) = port_rx.await {
+            let url = format!("http://127.0.0.1:{port}");
+            tracing::info!("[tauri] api_base_url resolved to {url}");
+            api_base_for_task.set(url);
+        } else {
+            tracing::warn!(
+                "[tauri] axum server never reported a port — \
+                 api_base_url will stay None and the frontend will \
+                 fall back to NEXT_PUBLIC_API_BASE_URL"
+            );
+        }
+    });
+
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![open_external_url])
+        .manage(api_base)
+        .invoke_handler(tauri::generate_handler![open_external_url, api_base_url])
         .setup(move |app| {
+
             #[cfg(debug_assertions)]
             app.get_webview_window("main")
                 .expect("main window")
@@ -143,6 +206,18 @@ fn verify_with_window(
 /// Validates the scheme — only `http://` and `https://` URLs are
 /// accepted, so a malicious payload from a tool result can't
 /// trigger a `file://` or `mailto:` action through this command.
+/// Return the actual base URL of the embedded axum HTTP server.
+///
+/// The shell launches axum with `port = 0` so the OS picks a free
+/// high port; we then store the resulting `http://127.0.0.1:<port>`
+/// here. The frontend calls this once at boot to discover where to
+/// `fetch()`. Returns an empty string before the server has reported
+/// its port (so the frontend can fall back to NEXT_PUBLIC_API_BASE_URL).
+#[tauri::command]
+fn api_base_url(state: State<'_, ApiBaseUrl>) -> String {
+    state.get().unwrap_or_default()
+}
+
 #[tauri::command]
 fn open_external_url(url: String) -> Result<(), String> {
     let lower = url.to_ascii_lowercase();

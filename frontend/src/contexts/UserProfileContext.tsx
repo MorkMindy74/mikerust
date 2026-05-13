@@ -9,11 +9,7 @@ import React, {
     useCallback,
 } from "react";
 import { useAuth } from "@/contexts/AuthContext";
-
-const API_BASE =
-    typeof process !== "undefined"
-        ? (process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001")
-        : "http://localhost:3001";
+import { apiBase, apiBaseReady } from "@/lib/apiBase";
 
 // LLM credentials and per-provider config, sourced exclusively from the
 // backend (`/user/llm-settings`). Stored server-side in user_settings
@@ -165,9 +161,13 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
             const headers: Record<string, string> = token
                 ? { Authorization: `Bearer ${token}` }
                 : {};
+            // Wait for the Tauri shell to publish the actual backend
+            // port — this is one of the earliest fetches on cold start.
+            await apiBaseReady;
+            const base = apiBase();
             const [statusRes, llmRes] = await Promise.all([
-                fetch(`${API_BASE}/auth/status`, { headers }),
-                fetch(`${API_BASE}/user/llm-settings`, { headers }),
+                fetch(`${base}/auth/status`, { headers }),
+                fetch(`${base}/user/llm-settings`, { headers }),
             ]);
             if (!statusRes.ok) throw new Error("status error");
             const status = await statusRes.json();
@@ -211,7 +211,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
             const token = localStorage.getItem("mike_auth_token");
             if (!token) return false;
             try {
-                const res = await fetch(`${API_BASE}/user/profile`, {
+                const res = await fetch(`${apiBase()}/user/profile`, {
                     method: "PUT",
                     headers: {
                         "Content-Type": "application/json",
@@ -264,13 +264,13 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
         // sessions even when the user moves to a new machine. We use the
         // existing /user/llm-settings PUT and only send the changed slot.
         try {
-            const current = await fetch(`${API_BASE}/user/llm-settings`, {
+            const current = await fetch(`${apiBase()}/user/llm-settings`, {
                 headers: { Authorization: `Bearer ${token}` },
             });
             const json = current.ok
                 ? ((await current.json()) as BackendLlmSettings)
                 : {};
-            await fetch(`${API_BASE}/user/llm-settings`, {
+            await fetch(`${apiBase()}/user/llm-settings`, {
                 method: "PUT",
                 headers: {
                     "Content-Type": "application/json",

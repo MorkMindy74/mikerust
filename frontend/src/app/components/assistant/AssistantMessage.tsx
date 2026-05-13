@@ -17,6 +17,7 @@ import type {
 } from "../shared/types";
 import { EditCard, applyOptimisticResolution } from "./EditCard";
 import { PreResponseWrapper } from "../shared/PreResponseWrapper";
+import { apiBase } from "@/lib/apiBase";
 
 /**
  * Card rendered above the per-edit EditCards when a message produced
@@ -76,8 +77,6 @@ function BulkEditActions({
         setProgress({ done: 0, total: pending.length });
         try {
                         const token = typeof window !== "undefined" ? localStorage.getItem("mike_auth_token") : null;
-            const apiBase =
-                process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
 
             // Sequential so the per-document version counter advances in a
             // predictable order and the viewer doesn't race between bumps.
@@ -101,7 +100,7 @@ function BulkEditActions({
                 }
                 try {
                     const resp = await fetch(
-                        `${apiBase}/single-documents/${annotation.document_id}/edits/${annotation.edit_id}/${verb}`,
+                        `${apiBase()}/single-documents/${annotation.document_id}/edits/${annotation.edit_id}/${verb}`,
                         {
                             method: "POST",
                             headers: token
@@ -602,10 +601,8 @@ function DocDownloadBlock({
     // Only backend-relative URLs are accepted. The download fetch carries
     // the user's bearer token, so any absolute URL from tool output is
     // refused to keep the token from leaking off-origin.
-    const API_BASE =
-        process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
     const isSafeHref = download_url.startsWith("/");
-    const href = isSafeHref ? `${API_BASE}${download_url}` : null;
+    const href = isSafeHref ? `${apiBase()}${download_url}` : null;
     const [busy, setBusy] = useState(false);
 
     const handleDownload = async (e?: {

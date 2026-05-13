@@ -6,8 +6,7 @@ import { Check, Eye, EyeOff, Server, Cpu, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useUserProfile } from "@/contexts/UserProfileContext";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
+import { apiBase } from "@/lib/apiBase";
 
 // Per-provider settings shape used in the form.
 //
@@ -105,7 +104,7 @@ async function loadSettings(): Promise<LLMSettings> {
     const token = getToken();
     if (!token) return DEFAULTS;
     try {
-        const res = await fetch(`${API_BASE}/user/llm-settings`, {
+        const res = await fetch(`${apiBase()}/user/llm-settings`, {
             headers: { Authorization: `Bearer ${token}` },
         });
         if (!res.ok) return DEFAULTS;
@@ -130,7 +129,7 @@ async function saveSettings(body: Record<string, unknown>): Promise<string | nul
         if (typeof window !== "undefined") window.location.href = "/login";
         return "Not authenticated — redirecting to login…";
     }
-    const res = await fetch(`${API_BASE}/user/llm-settings`, {
+    const res = await fetch(`${apiBase()}/user/llm-settings`, {
         method: "PUT",
         headers: {
             "Content-Type": "application/json",

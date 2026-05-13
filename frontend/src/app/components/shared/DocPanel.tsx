@@ -16,6 +16,7 @@ import type {
     MikeCitationAnnotation,
     MikeEditAnnotation,
 } from "./types";
+import { apiBase } from "@/lib/apiBase";
 
 function isDocxFilename(name: string | null | undefined): boolean {
     if (!name || typeof name !== "string") return false;
@@ -375,11 +376,8 @@ function EditResolveButtons({
             }
             try {
                                 const token = typeof window !== "undefined" ? localStorage.getItem("mike_auth_token") : null;
-                const apiBase =
-                    process.env.NEXT_PUBLIC_API_BASE_URL ??
-                    "http://localhost:3001";
                 const resp = await fetch(
-                    `${apiBase}/single-documents/${edit.document_id}/edits/${edit.edit_id}/${verb}`,
+                    `${apiBase()}/single-documents/${edit.document_id}/edits/${edit.edit_id}/${verb}`,
                     {
                         method: "POST",
                         headers: token
@@ -477,15 +475,13 @@ function DownloadButton({
         setBusy(true);
         try {
                         const token = typeof window !== "undefined" ? localStorage.getItem("mike_auth_token") : null;
-            const apiBase =
-                process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
             const url = kbPath
-                ? `${apiBase}/sync/kb-doc?path=${encodeURIComponent(kbPath)}`
+                ? `${apiBase()}/sync/kb-doc?path=${encodeURIComponent(kbPath)}`
                 : (() => {
                       const qs = versionId
                           ? `?version_id=${encodeURIComponent(versionId)}`
                           : "";
-                      return `${apiBase}/single-documents/${documentId}/docx${qs}`;
+                      return `${apiBase()}/single-documents/${documentId}/docx${qs}`;
                   })();
             const resp = await fetch(url, {
                 headers: token ? { Authorization: `Bearer ${token}` } : {},

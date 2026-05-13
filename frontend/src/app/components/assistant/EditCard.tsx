@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useTranslations } from "next-intl";
 import type { MikeEditAnnotation } from "../shared/types";
+import { apiBase } from "@/lib/apiBase";
 
 function normalizeText(s: string) {
     return s.replace(/\s+/g, " ").trim();
@@ -242,10 +243,8 @@ export function EditCard({
         }
         try {
                         const token = typeof window !== "undefined" ? localStorage.getItem("mike_auth_token") : null;
-            const apiBase =
-                process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
             const resp = await fetch(
-                `${apiBase}/single-documents/${annotation.document_id}/edits/${annotation.edit_id}/${verb}`,
+                `${apiBase()}/single-documents/${annotation.document_id}/edits/${annotation.edit_id}/${verb}`,
                 {
                     method: "POST",
                     headers: token
