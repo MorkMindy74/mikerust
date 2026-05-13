@@ -169,21 +169,35 @@ export default function AccountPage() {
                             </Button>
                         </div>
                     </div>
+                    {/* Language picker — same row layout as the
+                        displayName field above (control + phantom 80px
+                        slot) so all three Profile controls end at the
+                        same x-coordinate even though only displayName
+                        actually carries a Save button. */}
                     <div>
-                        <LanguageSwitcher />
+                        <label className="text-sm text-gray-600 block mb-2">{t("language")}</label>
+                        <div className="flex gap-2">
+                            <div className="flex-1">
+                                <LanguageSwitcher />
+                            </div>
+                            <div className="min-w-[80px]" aria-hidden />
+                        </div>
                     </div>
                     {/* Default domain — pre-selected in workflow / project /
                         document create dialogs. Stored on user_settings via
                         PUT /user/default-domain (migration 0019). */}
-                    <div className="flex items-center gap-3">
-                        <span className="text-sm font-medium">{tDomains("label")}</span>
-                        <DomainSelect
-                            value={(profile?.defaultDomain as Domain | null | undefined) ?? DEFAULT_DOMAIN}
-                            onChange={(next) => {
-                                void updateDefaultDomain(next);
-                            }}
-                            className="w-56 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-sm"
-                        />
+                    <div>
+                        <label className="text-sm text-gray-600 block mb-2">{tDomains("label")}</label>
+                        <div className="flex gap-2">
+                            <DomainSelect
+                                value={(profile?.defaultDomain as Domain | null | undefined) ?? DEFAULT_DOMAIN}
+                                onChange={(next) => {
+                                    void updateDefaultDomain(next);
+                                }}
+                                className="flex-1 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm hover:border-gray-400"
+                            />
+                            <div className="min-w-[80px]" aria-hidden />
+                        </div>
                     </div>
                 </div>
             </section>
