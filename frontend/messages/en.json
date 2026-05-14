@@ -90,6 +90,7 @@
         "noChats": "No chats",
         "search": "Search chats",
         "deleteChat": "Delete chat",
+        "deleteChatDisabledActive": "Close this chat first to delete it",
         "renameChat": "Rename chat"
     },
     "Account": {

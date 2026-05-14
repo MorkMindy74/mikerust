@@ -90,6 +90,7 @@
         "noChats": "Sem conversas",
         "search": "Pesquisar conversas",
         "deleteChat": "Eliminar conversa",
+        "deleteChatDisabledActive": "Feche primeiro esta conversa para a poder eliminar",
         "renameChat": "Renomear conversa"
     },
     "Account": {

@@ -90,6 +90,7 @@
         "noChats": "Aucun chat",
         "search": "Rechercher des chats",
         "deleteChat": "Supprimer le chat",
+        "deleteChatDisabledActive": "Fermez d'abord ce chat pour pouvoir le supprimer",
         "renameChat": "Renommer le chat"
     },
     "Account": {

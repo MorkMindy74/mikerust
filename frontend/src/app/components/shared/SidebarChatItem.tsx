@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { MoreHorizontal, Pencil, Trash2, Check, X } from "lucide-react";
+import { useTranslations } from "next-intl";
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -23,6 +24,7 @@ interface Props {
 export function SidebarChatItem({ chat, isActive, onSelect, projectName }: Props) {
     const { renameChat, deleteChat } = useChatHistoryContext();
     const { user } = useAuth();
+    const tSidebar = useTranslations("Sidebar");
     const [isRenaming, setIsRenaming] = useState(false);
     const [editTitle, setEditTitle] = useState(chat.title ?? "");
     const [ownerOnlyAction, setOwnerOnlyAction] = useState<string | null>(null);
@@ -30,6 +32,11 @@ export function SidebarChatItem({ chat, isActive, onSelect, projectName }: Props
     // Sidebar can show collaborator chats from projects the user owns;
     // rename/delete are still creator-only on the backend, so guard here.
     const isChatOwner = !!user?.id && chat.user_id === user.id;
+    // Deleting the currently-active chat leaves the browser stuck on
+    // /assistant/chat/<deleted-id> — any subsequent message hits the
+    // chat_id-not-found 404 path on the backend. Keep the button
+    // visible (so the menu shape stays predictable) but disabled.
+    const deleteDisabled = isActive;
 
     useEffect(() => {
         if (isRenaming) editInputRef.current?.focus();
@@ -125,20 +132,31 @@ export function SidebarChatItem({ chat, isActive, onSelect, projectName }: Props
                                 }}
                             >
                                 <Pencil className="mr-2 h-4 w-4" />
-                                Rename
+                                {tSidebar("renameChat")}
                             </DropdownMenuItem>
                             <DropdownMenuItem
+                                disabled={deleteDisabled}
                                 onClick={() => {
+                                    if (deleteDisabled) return;
                                     if (!isChatOwner) {
                                         setOwnerOnlyAction("delete this chat");
                                         return;
                                     }
                                     void deleteChat(chat.id);
                                 }}
-                                className="text-red-600 focus:text-red-600"
+                                title={
+                                    deleteDisabled
+                                        ? tSidebar("deleteChatDisabledActive")
+                                        : undefined
+                                }
+                                className={
+                                    deleteDisabled
+                                        ? "text-red-300 cursor-not-allowed focus:text-red-300"
+                                        : "text-red-600 focus:text-red-600"
+                                }
                             >
                                 <Trash2 className="mr-2 h-4 w-4" />
-                                Delete
+                                {tSidebar("deleteChat")}
                             </DropdownMenuItem>
                         </DropdownMenuContent>
                     </DropdownMenu>
