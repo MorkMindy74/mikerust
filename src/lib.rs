@@ -4,6 +4,7 @@ pub mod db;
 pub mod docx;
 pub mod domain;
 pub mod embeddings;
+pub mod http_client;
 pub mod llm;
 pub mod mcp;
 pub mod mikeprj;
@@ -15,9 +16,9 @@ pub mod sync;
 
 pub use db::AppState;
 
-use axum::{Router, http::Method};
+use axum::{Router, extract::DefaultBodyLimit, http::Method};
 use std::sync::Arc;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::{AllowOrigin, CorsLayer};
 
 /// Start the axum HTTP server on the given port.
 /// Blocks until the server shuts down.
@@ -145,10 +146,59 @@ pub async fn run_server_with_channels(
         );
     }
 
+    // Restrict CORS to the origins that actually need it: the Next.js
+    // dev server, the Tauri webview, and (via env var) any extra origin
+    // a deployer wants to allow explicitly. Previously this was wide-open
+    // (`allow_origin(Any)`), which is fine inside Tauri's `tauri://`
+    // webview but lets *any* website hit the local API and exfiltrate
+    // the bearer token from `localStorage` if a user ever opens the
+    // backend port in a regular browser tab.
+    //
+    // Override at runtime with `MIKE_ALLOWED_ORIGINS=https://x,https://y`.
+    let allowlist: Vec<axum::http::HeaderValue> = std::env::var("MIKE_ALLOWED_ORIGINS")
+        .ok()
+        .map(|s| {
+            s.split(',')
+                .map(|p| p.trim().to_string())
+                .filter(|p| !p.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(|| {
+            vec![
+                "http://localhost:3000".to_string(),
+                "http://localhost:3001".to_string(),
+                "http://127.0.0.1:3000".to_string(),
+                "http://127.0.0.1:3001".to_string(),
+                "tauri://localhost".to_string(),
+                "https://tauri.localhost".to_string(),
+            ]
+        })
+        .into_iter()
+        .filter_map(|s| s.parse::<axum::http::HeaderValue>().ok())
+        .collect();
     let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::PATCH, Method::DELETE, Method::OPTIONS])
-        .allow_headers(Any);
+        .allow_origin(AllowOrigin::list(allowlist))
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
+        .allow_headers([
+            axum::http::header::AUTHORIZATION,
+            axum::http::header::CONTENT_TYPE,
+            axum::http::header::ACCEPT,
+        ])
+        .allow_credentials(false);
+
+    // Global request body limit. The default axum limit (2 MB) is too
+    // small for chat history with multi-doc attachments, but unbounded
+    // is a DoS vector. 50 MB is a comfortable ceiling for every route
+    // that ISN'T document upload (which has its own 100 MB layer set
+    // in `routes::documents::router()`).
+    let global_body_limit = DefaultBodyLimit::max(50 * 1024 * 1024);
 
     let app = Router::new()
         .nest("/auth",     routes::auth::router())
@@ -168,6 +218,7 @@ pub async fn run_server_with_channels(
         .nest("/italian-legal", routes::italian_legal::router())
         .nest("/corpora",  routes::corpora::router())
         .layer(cors)
+        .layer(global_body_limit)
         .with_state(state);
 
     // Bind: when `port == 0`, the OS picks a free high port — we then

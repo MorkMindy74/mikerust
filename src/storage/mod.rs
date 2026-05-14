@@ -1,5 +1,5 @@
-use anyhow::Result;
-use std::path::PathBuf;
+use anyhow::{anyhow, Result};
+use std::path::{Component, Path, PathBuf};
 use tokio::fs;
 
 /// Unified storage trait — local filesystem or S3/R2 backend.
@@ -27,20 +27,81 @@ impl LocalStorage {
             std::env::var("STORAGE_PATH").unwrap_or_else(|_| "./data/storage".to_string()),
         );
         std::fs::create_dir_all(&base)?;
+        // Resolve the base once so `safe_path_under` can prefix-check
+        // against an unambiguous absolute form. If canonicalize fails
+        // (rare — symlinks to deleted paths, exotic FS), keep the raw
+        // base and let the per-call check fail gracefully.
+        let base = std::fs::canonicalize(&base).unwrap_or(base);
         Ok(Self { base })
     }
 
-    fn full_path(&self, key: &str) -> PathBuf {
-        // Sanitize: strip leading slashes, no path traversal
-        let safe = key.trim_start_matches('/').replace("..", "");
-        self.base.join(safe)
+    /// Resolve a storage key into an absolute path **guaranteed** to
+    /// live under `self.base`, rejecting any input that tries to escape
+    /// (via `..` segments, absolute paths, or symlinks). Returns `Err`
+    /// when the key would resolve outside the base directory; callers
+    /// then return a 4xx upstream instead of touching the file system.
+    ///
+    /// The previous implementation did `key.replace("..", "")`, which
+    /// failed three ways: (a) `PathBuf::join` of an absolute key
+    /// replaces the base entirely; (b) a single `.` segment plus
+    /// platform path-separator games can still escape on Windows;
+    /// (c) symlinks under `base` to outside-base files are not
+    /// detected. Component-by-component validation closes all three.
+    fn safe_path_under(&self, key: &str) -> Result<PathBuf> {
+        let normalised = key.replace('\\', "/");
+        let trimmed = normalised.trim_start_matches('/');
+        let rel = Path::new(trimmed);
+
+        let mut acc = self.base.clone();
+        for component in rel.components() {
+            match component {
+                // Plain component — push and continue.
+                Component::Normal(seg) => acc.push(seg),
+                // Current-dir noise — ignore.
+                Component::CurDir => continue,
+                // Anything else (RootDir, Prefix, ParentDir) signals
+                // an escape attempt. Refuse explicitly.
+                Component::RootDir
+                | Component::Prefix(_)
+                | Component::ParentDir => {
+                    return Err(anyhow!(
+                        "rejecting storage key with non-relative component: {key:?}"
+                    ));
+                }
+            }
+        }
+
+        // Final prefix check: if the file already exists, canonicalize
+        // and verify it's still under `base` (catches symlink escapes
+        // pointing outside). If not yet created (typical for put), use
+        // the parent directory's canonical form.
+        let canonical = match std::fs::canonicalize(&acc) {
+            Ok(c) => c,
+            Err(_) => {
+                let parent = acc.parent().unwrap_or(&self.base);
+                std::fs::create_dir_all(parent).ok();
+                let parent_canon = std::fs::canonicalize(parent)
+                    .unwrap_or_else(|_| parent.to_path_buf());
+                let leaf = acc.file_name().ok_or_else(|| {
+                    anyhow!("storage key has no filename component: {key:?}")
+                })?;
+                parent_canon.join(leaf)
+            }
+        };
+
+        if !canonical.starts_with(&self.base) {
+            return Err(anyhow!(
+                "storage key escapes base dir: key={key:?} resolved={canonical:?}"
+            ));
+        }
+        Ok(canonical)
     }
 }
 
 #[async_trait::async_trait]
 impl Storage for LocalStorage {
     async fn put(&self, key: &str, data: &[u8], _content_type: &str) -> Result<()> {
-        let path = self.full_path(key);
+        let path = self.safe_path_under(key)?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).await?;
         }
@@ -49,11 +110,11 @@ impl Storage for LocalStorage {
     }
 
     async fn get(&self, key: &str) -> Result<Vec<u8>> {
-        Ok(fs::read(self.full_path(key)).await?)
+        Ok(fs::read(self.safe_path_under(key)?).await?)
     }
 
     async fn delete(&self, key: &str) -> Result<()> {
-        let path = self.full_path(key);
+        let path = self.safe_path_under(key)?;
         if path.exists() {
             fs::remove_file(path).await?;
         }
@@ -65,6 +126,88 @@ impl Storage for LocalStorage {
         let api_base = std::env::var("API_BASE_URL")
             .unwrap_or_else(|_| "http://localhost:3001".to_string());
         Ok(format!("{api_base}/download/{key}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fresh_storage(tmp: &tempfile::TempDir) -> LocalStorage {
+        let base = tmp.path().to_path_buf();
+        std::fs::create_dir_all(&base).unwrap();
+        let base = std::fs::canonicalize(&base).unwrap();
+        LocalStorage { base }
+    }
+
+    #[test]
+    fn safe_path_accepts_simple_relative_keys() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = fresh_storage(&tmp);
+        let p = s.safe_path_under("documents/user-1/abc").unwrap();
+        assert!(p.starts_with(&s.base));
+    }
+
+    #[test]
+    fn safe_path_strips_leading_slash() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = fresh_storage(&tmp);
+        let p = s.safe_path_under("/documents/user-1/abc").unwrap();
+        assert!(p.starts_with(&s.base));
+    }
+
+    #[test]
+    fn safe_path_rejects_parent_traversal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = fresh_storage(&tmp);
+        assert!(s.safe_path_under("../etc/passwd").is_err());
+        assert!(s.safe_path_under("documents/../../../etc/passwd").is_err());
+        assert!(s.safe_path_under("/../etc/passwd").is_err());
+    }
+
+    #[test]
+    fn safe_path_rejects_windows_drive_prefix() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = fresh_storage(&tmp);
+        // A bare leading slash is *not* an attack — it's sanitised to
+        // a relative path. The dangerous form is a key carrying a
+        // platform-specific prefix that `PathBuf::join` honours as
+        // absolute, replacing the base. On Windows that's the drive
+        // letter (`C:\…`); we refuse it via the `Prefix` component.
+        if cfg!(windows) {
+            assert!(s.safe_path_under("C:\\Windows\\system32").is_err());
+            assert!(s.safe_path_under("D:/etc/passwd").is_err());
+        }
+    }
+
+    #[test]
+    fn safe_path_strips_leading_slash_to_relative() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = fresh_storage(&tmp);
+        // Confirm that an unintentionally-prefixed key (the call
+        // sites add `/` for readability) lands cleanly under base.
+        let p = s.safe_path_under("/absolute/path").unwrap();
+        assert!(p.starts_with(&s.base));
+        assert!(p.ends_with("path"));
+    }
+
+    #[test]
+    fn safe_path_rejects_backslash_traversal_on_any_platform() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = fresh_storage(&tmp);
+        // Backslashes are converted to `/` before splitting so even
+        // on Unix the `..` segments are detected.
+        assert!(s.safe_path_under("..\\..\\etc\\passwd").is_err());
+    }
+
+    #[test]
+    fn safe_path_keeps_current_dir_noise() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = fresh_storage(&tmp);
+        // `./foo/./bar` collapses to `foo/bar` without escaping.
+        let p = s.safe_path_under("./foo/./bar").unwrap();
+        assert!(p.starts_with(&s.base));
+        assert!(p.ends_with("bar"));
     }
 }
 
