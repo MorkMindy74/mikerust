@@ -46,27 +46,33 @@ sha2 = "0.10"
 # text. Optional feature gate so devs without ort/onnxruntime libs can
 # still build the rest of MikeRust.
 #
-# Default fastembed features include `ort-download-binaries-native-tls`
-# which pulls the correct onnxruntime build for the active target at
-# compile time (via ort-sys) and links it into the binary as a
-# bundled artifact.
-#
-# Tried `ort/load-dynamic` against `libs/onnxruntime/win-arm64/onnxruntime.dll`
-# TWICE (commits b565e08 2026-05-14 and the load-dynamic experiment
-# after `cd7ba39`). Both reproduce a >5-minute stall inside
-# `TextEmbedding::try_new_from_user_defined` on Snapdragon X Elite
-# ARM64. The DLL we vendor is byte-identical (SHA256 verified) to
-# the binary `ort-sys` uses in the static build — so the regression
-# isn't the binary, it's something in ort 2.0.0-rc.12's load-dynamic
-# symbol-resolution glue on ARM64. The default static path is the
-# only configuration that actually completes session init in <5s.
-fastembed = { version = "5", optional = true }
-# Direct dep on the same ort version fastembed pulls transitively, so
+# Dynamic-load mode targeting onnxruntime 1.24.2 (the version ort
+# 2.0.0-rc.12 statically links against — confirmed via the
+# `branch=rel-1.24.2` strings baked in by pyke's CI). Two earlier
+# attempts hung on the wrong DLL version (1.20.0 stock) because of
+# ABI drift: 1.24.x added IO-binding APIs / plugin-EP runtime that
+# 1.20.x doesn't export, and ort's dyloader deadlocks silently when
+# a function-pointer lookup misses. Vendored DLLs in
+# `libs/onnxruntime/{win-arm64,win-x64}/` are now Microsoft's
+# official v1.24.2 release archives — same ABI ort-sys's static
+# build was compiled against.
+fastembed = { version = "5", optional = true, default-features = false, features = [
+    "hf-hub-native-tls",
+    "image-models",
+    "ort-load-dynamic",
+] }
+# Direct dep on the same ort version fastembed pulls transitively so
 # we can configure execution providers (DirectML on Windows GPUs, QNN
 # on Qualcomm Snapdragon NPUs) without forking fastembed. Cargo
-# deduplicates: there's still a single ort 2.0.0-rc.12 in the build,
-# our features just merge into fastembed's existing feature set.
-ort = { version = "=2.0.0-rc.12", optional = true, default-features = false }
+# deduplicates: there's a single ort 2.0.0-rc.12 in the build.
+#
+# `load-dynamic` enabled: onnxruntime.dll lives in
+# `libs/onnxruntime/<platform>/` and is loaded at runtime via
+# `ORT_DYLIB_PATH`. No static link.
+ort = { version = "=2.0.0-rc.12", optional = true, default-features = false, features = [
+    "std",
+    "load-dynamic",
+] }
 # Vector store via the sqlite-vec extension. Same SQLite file as the
 # rest of MikeRust (mike.db) — atomic transactions, single backup,
 # no extra daemon, no protoc. Brute-force cosine in C with SIMD;

@@ -34,6 +34,27 @@ machine and target.
   hijack surface where a poisoned `onnxruntime.dll` on the search
   path could be loaded before ours.
 
+## Version: must be exactly 1.24.2 for ort 2.0.0-rc.12
+
+`ort 2.0.0-rc.12` statically compiles against onnxruntime **1.24.2**.
+The vendored DLL must match that minor version *exactly* — anything
+older (e.g. Microsoft's stock 1.20.0 release) deadlocks
+`TextEmbedding::try_new_from_user_defined` silently because ort's
+function-pointer table references symbols that don't exist in the
+older DLL. Verify what version ort-sys actually links with:
+
+```powershell
+# Strings like "branch=rel-1.24.2, git-commit=..." in mike-tauri.exe
+# reveal the version ort-sys compiled against. Match the vendored
+# DLL to whatever that string says.
+Select-String -Path target\debug\mike-tauri.exe `
+  -Pattern 'branch=rel-\d+\.\d+\.\d+' -Encoding Default
+```
+
+When upgrading the `ort` dep, re-run the strings probe and bump the
+DLLs to the new version — don't trust the official onnxruntime
+releases page to be "close enough".
+
 ## Which variant?
 
 ONNX Runtime ships several builds, each compiled with a different
@@ -46,22 +67,23 @@ DLL freely depending on the host.
 
 | Machine class | Recommended onnxruntime build | Bundle to download |
 |---|---|---|
-| **Windows desktop, any DX12 GPU** | DirectML | `Microsoft.ML.OnnxRuntime.DirectML` (NuGet) — onnxruntime.dll + DirectML.dll |
-| **Windows + NVIDIA RTX/GeForce** | CUDA + TensorRT | `onnxruntime-win-x64-gpu-1.20.x.zip` (GitHub releases) |
-| **Windows + Intel CPU/iGPU** | OpenVINO | `Microsoft.ML.OnnxRuntime.OpenVino` |
-| **Windows ARM64 (Snapdragon X Elite)** | QNN + DirectML | `Microsoft.ML.OnnxRuntime.QNN` |
-| **Linux + NVIDIA** | CUDA + TensorRT | `onnxruntime-linux-x64-gpu-1.20.x.tgz` |
-| **Linux + AMD** | ROCm | `onnxruntime-linux-x64-rocm-1.20.x.tgz` |
-| **macOS Apple Silicon** | CoreML | `onnxruntime-osx-arm64-1.20.x.tgz` |
-| **macOS Intel** | CPU | `onnxruntime-osx-x86_64-1.20.x.tgz` |
-| **CPU-only / portable** | base CPU | `onnxruntime-<os>-<arch>-1.20.x.{zip,tgz}` |
+| **Windows desktop, any DX12 GPU** | DirectML | `Microsoft.ML.OnnxRuntime.DirectML` 1.24.2 (NuGet) — onnxruntime.dll + DirectML.dll |
+| **Windows + NVIDIA RTX/GeForce** | CUDA + TensorRT | `onnxruntime-win-x64-gpu-1.24.2.zip` (GitHub releases) |
+| **Windows + Intel CPU/iGPU** | OpenVINO | `Microsoft.ML.OnnxRuntime.OpenVino` 1.24.2 |
+| **Windows ARM64 (Snapdragon X Elite)** | QNN + DirectML | `Microsoft.ML.OnnxRuntime.QNN` 1.24.2 |
+| **Linux + NVIDIA** | CUDA + TensorRT | `onnxruntime-linux-x64-gpu-1.24.2.tgz` |
+| **Linux + AMD** | ROCm | `onnxruntime-linux-x64-rocm-1.24.2.tgz` |
+| **macOS Apple Silicon** | CoreML | `onnxruntime-osx-arm64-1.24.2.tgz` |
+| **macOS Intel** | CPU | `onnxruntime-osx-x86_64-1.24.2.tgz` |
+| **CPU-only / portable** | base CPU | `onnxruntime-<os>-<arch>-1.24.2.{zip,tgz}` |
 
 ## Fetching (Windows quick path)
 
 ```powershell
 # Pick the right URL from https://github.com/microsoft/onnxruntime/releases
-# (replace 1.20.0 with the latest 1.20.x — ort 2.0.0-rc.12 targets the 1.x API)
-$ver = "1.20.0"
+# v1.24.2 is what ort 2.0.0-rc.12 expects — bumping ort means
+# bumping this too (see "Version" note above).
+$ver = "1.24.2"
 $arch = "x64"   # or "arm64"
 $url = "https://github.com/microsoft/onnxruntime/releases/download/v$ver/onnxruntime-win-$arch-$ver.zip"
 Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\ort.zip"
