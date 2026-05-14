@@ -1045,3 +1045,80 @@ export async function deleteWorkflowShare(
         method: "DELETE",
     });
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// DOCX templates — sidecars loaded from config/docx-templates/. The
+// sidebar entry, the templates list page, and the chat composer
+// picker all consume these.
+// ─────────────────────────────────────────────────────────────────────
+
+export interface DocxTemplateSummary {
+    id: string;
+    display_name: Record<string, string>;
+    category: string;
+    domain: string;
+    also_applicable_to?: string[];
+    locale: string;
+    automation_level: "L1" | "L2" | "L3" | "L4";
+    placeholder_syntax: string;
+    source_reference?: string | null;
+    required_metadata: string[];
+    is_system?: boolean;
+}
+
+export interface DocxTemplateSidecar extends DocxTemplateSummary {
+    paper: {
+        size: string;
+        orientation: string;
+        format: string;
+    };
+    margins_cm: { top: number; right: number; bottom: number; left: number };
+    typography: {
+        body_font: string;
+        body_size_pt: number;
+        line_spacing: number;
+        paragraph_after_pt?: number;
+        alignment: string;
+        first_line_indent_cm?: number;
+    };
+    footnotes?: { font: string; size_pt: number; line_spacing: number };
+    style_map_baseline?: Record<string, string>;
+    style_map?: Record<string, string>;
+    section_skeleton?: Array<{
+        id: string;
+        title?: string | null;
+        render?: string | null;
+        guidance?: string | null;
+        repeating?: boolean;
+    }>;
+    field_prompts?: Record<string, string>;
+}
+
+export async function listDocxTemplates(opts?: {
+    domain?: string;
+    locale?: string;
+}): Promise<DocxTemplateSummary[]> {
+    const params = new URLSearchParams();
+    if (opts?.domain) params.set("domain", opts.domain);
+    if (opts?.locale) params.set("locale", opts.locale);
+    const query = params.toString();
+    const path = query ? `/docx-templates?${query}` : "/docx-templates";
+    const data = await apiRequest<{ docx_templates: DocxTemplateSummary[] }>(path);
+    return data.docx_templates ?? [];
+}
+
+export async function describeDocxTemplate(
+    template_id: string,
+    locale = "it",
+): Promise<{
+    template_id: string;
+    display_name: string;
+    prompt_md: string;
+    sidecar: DocxTemplateSidecar;
+}> {
+    return apiRequest("/docx-templates/describe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ template_id, locale }),
+    });
+}

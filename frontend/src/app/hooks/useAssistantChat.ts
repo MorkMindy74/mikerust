@@ -386,6 +386,7 @@ export function useAssistantChat({
                 content: currentMessage.content,
                 files: currentMessage.files,
                 workflow: currentMessage.workflow,
+                template: currentMessage.template,
             }));
 
             const model = message.model;
@@ -986,6 +987,8 @@ export function useAssistantChat({
                 const titleParts = [message.content];
                 if (message.workflow)
                     titleParts.push(`Workflow: ${message.workflow.title}`);
+                if (message.template)
+                    titleParts.push(`Template: ${message.template.title}`);
                 if (message.files?.length)
                     titleParts.push(
                         `Files: ${message.files.map((f) => f.filename).join(", ")}`,

@@ -3,16 +3,19 @@
 import {
     useState,
     useCallback,
+    useEffect,
     useMemo,
     useRef,
     forwardRef,
     useImperativeHandle,
 } from "react";
+import { useSearchParams } from "next/navigation";
 import {
     ArrowRight,
     Check,
     File,
     FileText,
+    FileType2,
     FolderOpen,
     Library,
     Square,
@@ -22,10 +25,12 @@ import { useTranslations } from "next-intl";
 import { AddDocButton } from "./AddDocButton";
 import { AddDocumentsModal } from "../shared/AddDocumentsModal";
 import { AssistantWorkflowModal } from "./AssistantWorkflowModal";
+import { AssistantTemplateModal } from "./AssistantTemplateModal";
 import { ApiKeyMissingModal } from "../shared/ApiKeyMissingModal";
 import { ModelToggle } from "./ModelToggle";
 import { useSelectedModel } from "@/app/hooks/useSelectedModel";
 import { useUserProfile } from "@/contexts/UserProfileContext";
+import { describeDocxTemplate } from "@/app/lib/mikeApi";
 import {
     getModelProvider,
     isModelAvailable,
@@ -62,9 +67,17 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
     ref,
 ) {
     const t = useTranslations("Assistant");
+    const tDocxTemplates = useTranslations("DocxTemplates");
     const [value, setValue] = useState("");
     const [attachedDocs, setAttachedDocs] = useState<MikeDocument[]>([]);
     const [selectedWorkflow, setSelectedWorkflow] = useState<{
+        id: string;
+        title: string;
+    } | null>(null);
+    // Active DOCX template chip — set via the picker modal or
+    // pre-populated from the URL `?template=` query param when the
+    // user lands on /assistant from the templates page.
+    const [selectedTemplate, setSelectedTemplate] = useState<{
         id: string;
         title: string;
     } | null>(null);
@@ -81,6 +94,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const [docSelectorOpen, setDocSelectorOpen] = useState(false);
     const [workflowModalOpen, setWorkflowModalOpen] = useState(false);
+    const [templateModalOpen, setTemplateModalOpen] = useState(false);
     const [apiKeyModalProvider, setApiKeyModalProvider] =
         useState<ModelProvider | null>(null);
 
@@ -92,6 +106,31 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
             });
         },
     }));
+
+    // Pre-populate the template chip when the user arrives via the
+    // `/assistant?template=...` deep link from the templates page.
+    // Calls describe_docx_template once to resolve the display name
+    // for the chip label, then hangs on to the id+title pair.
+    const searchParams = useSearchParams();
+    const templateParam = searchParams?.get("template") ?? null;
+    useEffect(() => {
+        if (!templateParam) return;
+        let cancelled = false;
+        describeDocxTemplate(templateParam, "it")
+            .then((data) => {
+                if (cancelled) return;
+                setSelectedTemplate({
+                    id: data.template_id,
+                    title: data.display_name,
+                });
+            })
+            .catch(() => {
+                /* template id stale or missing — silent, user can re-pick. */
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [templateParam]);
 
     const handleAddDocFromProject = useCallback((doc: MikeDocument) => {
         setAttachedDocs((prev) => {
@@ -139,12 +178,15 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
         setAttachedDocs([]);
         const wf = selectedWorkflow;
         setSelectedWorkflow(null);
+        const tpl = selectedTemplate;
+        setSelectedTemplate(null);
 
         onSubmit?.({
             role: "user",
             content: query,
             files: files.length > 0 ? files : undefined,
             workflow: wf ?? undefined,
+            template: tpl ?? undefined,
             model,
         });
     };
@@ -169,7 +211,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
             <div className="w-full">
                 <div className="border border-gray-300 rounded-[16px] md:rounded-[20px] bg-white">
                     {/* Attached chips */}
-                    {(selectedWorkflow || attachedDocs.length > 0) && (
+                    {(selectedWorkflow ||
+                        selectedTemplate ||
+                        attachedDocs.length > 0) && (
                         <div className="flex flex-wrap gap-1.5 px-2 pt-2">
                             {selectedWorkflow && (
                                 <div className="inline-flex items-center gap-1 pl-2.5 pr-1 py-0.5 rounded-full text-xs bg-blue-600 text-white border border-white/20 shadow backdrop-blur-sm">
@@ -181,6 +225,23 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                                         type="button"
                                         onClick={() =>
                                             setSelectedWorkflow(null)
+                                        }
+                                        className="rounded-full p-0.5 ml-0.5 text-white/60 hover:text-white hover:bg-white/20 transition-colors"
+                                    >
+                                        <X className="h-2.5 w-2.5" />
+                                    </button>
+                                </div>
+                            )}
+                            {selectedTemplate && (
+                                <div className="inline-flex items-center gap-1 pl-2.5 pr-1 py-0.5 rounded-full text-xs bg-amber-600 text-white border border-white/20 shadow backdrop-blur-sm">
+                                    <FileType2 className="h-2.5 w-2.5 shrink-0" />
+                                    <span className="max-w-[140px] truncate">
+                                        {selectedTemplate.title}
+                                    </span>
+                                    <button
+                                        type="button"
+                                        onClick={() =>
+                                            setSelectedTemplate(null)
                                         }
                                         className="rounded-full p-0.5 ml-0.5 text-white/60 hover:text-white hover:bg-white/20 transition-colors"
                                     >
@@ -278,6 +339,25 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                                     </span>
                                 </button>
                             )}
+                            <button
+                                type="button"
+                                onClick={() => setTemplateModalOpen(true)}
+                                aria-label={tDocxTemplates("pickTemplate")}
+                                className={`flex items-center gap-1.5 rounded-lg px-2 h-8 text-sm transition-colors ${
+                                    selectedTemplate
+                                        ? "text-amber-700 hover:bg-amber-50"
+                                        : "text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+                                }`}
+                            >
+                                {selectedTemplate ? (
+                                    <Check className="h-3.5 w-3.5" />
+                                ) : (
+                                    <FileType2 className="h-3.5 w-3.5" />
+                                )}
+                                <span className="hidden sm:inline">
+                                    {tDocxTemplates("pickTemplate")}
+                                </span>
+                            </button>
                         </div>
 
                         <div className="flex items-center gap-1">
@@ -322,6 +402,11 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                 }}
                 projectName={projectName}
                 projectCmNumber={projectCmNumber}
+            />
+            <AssistantTemplateModal
+                open={templateModalOpen}
+                onClose={() => setTemplateModalOpen(false)}
+                onSelect={(tpl) => setSelectedTemplate(tpl)}
             />
             <ApiKeyMissingModal
                 open={apiKeyModalProvider !== null}

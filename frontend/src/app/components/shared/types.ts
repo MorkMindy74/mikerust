@@ -200,6 +200,15 @@ export interface MikeMessage {
   content: string;
   files?: { filename: string; document_id?: string }[];
   workflow?: { id: string; title: string };
+  /**
+   * Active DOCX template at submission time. When set, the user
+   * message is prefixed with a `[Template: <id>]` marker that the
+   * chat handler intercepts to eagerly load the template's authoring
+   * contract into the system prompt — same lazy-via-tool pattern as
+   * workflows but with a stronger signal so the LLM knows the
+   * conversation will close with a `generate_docx` call.
+   */
+  template?: { id: string; title: string };
   model?: string;
   annotations?: MikeCitationAnnotation[];
   events?: AssistantEvent[];

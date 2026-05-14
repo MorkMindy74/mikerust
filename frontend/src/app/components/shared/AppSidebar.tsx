@@ -7,6 +7,7 @@ import {
     FolderOpen,
     Table2,
     Library,
+    FileType2,
     User,
     ChevronsUpDown,
     ChevronDown,
@@ -60,6 +61,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
         { href: "/projects", label: tSidebar("projects"), icon: FolderOpen },
         { href: "/tabular-reviews", label: tSidebar("tabularReviews"), icon: Table2 },
         { href: "/workflows", label: tSidebar("workflows"), icon: Library },
+        { href: "/docx-templates", label: tSidebar("docxTemplates"), icon: FileType2 },
     ];
     const [shouldAnimate, setShouldAnimate] = useState(false);
     const [isDropdownOpen, setIsDropdownOpen] = useState(false);

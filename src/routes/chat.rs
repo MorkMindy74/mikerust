@@ -929,6 +929,9 @@ When using edit_document, any edit that adds, removes, or reorders a numbered cl
 WORKFLOWS:
 When a user message begins with a [Workflow: <title> (id: <id>)] marker, the user has selected a workflow and you MUST apply it. Immediately call the read_workflow tool with that exact id to load the workflow's full prompt, then follow those instructions for the current turn. Do this before producing any other output or calling any other tools (aside from any document reads the workflow requires). Do not ask the user to confirm — the selection itself is the instruction to apply the workflow.
 
+DOCX TEMPLATES:
+When a user message begins with a [Template: <title> (id: <id>)] marker, the user has selected a DOCX template and you MUST produce a Word document using it. Immediately call describe_docx_template with that exact id to load the authoring contract (layout, section skeleton, required metadata, per-field guidance). Then collect the needed [PLACEHOLDER] values from the conversation, write the document body in Markdown following the section_skeleton, and finally call generate_docx(template_id=..., body_md=..., metadata={...}). Do NOT consider the user's request fulfilled until generate_docx has succeeded and you have presented the download to the user. The Template marker can co-occur with a Workflow marker — if both are present, apply the workflow's instructions while still producing the docx as the closing step.
+
 DOCUMENT NAMING IN PROSE:
 The chat-local labels ("doc-0", "doc-1", "doc-N", ...) are internal handles for tool calls and citation JSON ONLY. NEVER write them in your prose response or in any text the user reads — not in body text, not in headings, not in lists, not in tool-activity descriptions. The user does not know what "doc-0" means and seeing it is jarring. When referring to a document in prose, always use its filename. The only places "doc-N" identifiers are allowed are inside tool-call arguments and inside the <CITATIONS> JSON block's "doc_id" field.
 
@@ -1600,15 +1603,67 @@ async fn stream_chat_root(
 
     // Parse messages from the request body. The frontend sends the entire
     // running history; persist only the *last* user message.
-    let messages_in: Vec<(String, String)> = body
+    //
+    // Each message carries optional structured `workflow` and `template`
+    // chips set by the chat composer. The system prompt instructs the
+    // LLM to look for `[Workflow: <title> (id: <id>)]` and
+    // `[Template: <title> (id: <id>)]` markers at the start of the user
+    // message — but the markers aren't sent over the wire as inline
+    // text, they're carried as JSON fields. We materialise them into
+    // the content here so the LLM observes them where its instructions
+    // expect them to be.
+    type ParsedMessage = (
+        String,             // role
+        String,             // content (with markers prepended)
+        Option<String>,     // template_id if any, used downstream by chat handler
+    );
+    let messages_in: Vec<ParsedMessage> = body
         .get("messages")
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
                 .filter_map(|m| {
                     let role = m.get("role").and_then(|r| r.as_str())?.to_string();
-                    let content = m.get("content").and_then(|c| c.as_str()).unwrap_or("").to_string();
-                    Some((role, content))
+                    let content = m
+                        .get("content")
+                        .and_then(|c| c.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let wf_marker = m.get("workflow").and_then(|wf| {
+                        let id = wf.get("id").and_then(|v| v.as_str())?;
+                        let title =
+                            wf.get("title").and_then(|v| v.as_str()).unwrap_or("");
+                        Some(format!("[Workflow: {title} (id: {id})]"))
+                    });
+                    let template_id_for_chat = m
+                        .get("template")
+                        .and_then(|t| t.get("id"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let tpl_marker = m.get("template").and_then(|tpl| {
+                        let id = tpl.get("id").and_then(|v| v.as_str())?;
+                        let title =
+                            tpl.get("title").and_then(|v| v.as_str()).unwrap_or("");
+                        Some(format!("[Template: {title} (id: {id})]"))
+                    });
+                    // Compose: markers first, then a blank line, then
+                    // the user's actual text. Markers don't apply to
+                    // assistant or tool messages — only user picks chips.
+                    let augmented = if role == "user" && (wf_marker.is_some() || tpl_marker.is_some()) {
+                        let mut prefix = String::new();
+                        if let Some(m) = wf_marker {
+                            prefix.push_str(&m);
+                            prefix.push('\n');
+                        }
+                        if let Some(m) = tpl_marker {
+                            prefix.push_str(&m);
+                            prefix.push('\n');
+                        }
+                        format!("{prefix}\n{content}")
+                    } else {
+                        content
+                    };
+                    Some((role, augmented, template_id_for_chat))
                 })
                 .collect()
         })
@@ -1668,7 +1723,7 @@ async fn stream_chat_root(
         }
     }
 
-    if let Some((role, content)) = messages_in.last() {
+    if let Some((role, content, _tpl_id)) = messages_in.last() {
         if role == "user" && !content.trim().is_empty() {
             let user_msg_id = uuid::Uuid::new_v4().to_string();
             let _ = sqlx::query(
@@ -1683,15 +1738,22 @@ async fn stream_chat_root(
     }
 
     let messages: Vec<Message> = messages_in
-        .into_iter()
-        .filter_map(|(role, content)| {
+        .iter()
+        .filter_map(|(role, content, _template_id)| {
             let r = match role.as_str() {
                 "user" => Role::User,
                 "assistant" => Role::Assistant,
                 "tool" => Role::Tool,
                 _ => return None,
             };
-            Some(Message { role: r, content, images: vec![], tool_calls: vec![], tool_call_id: None, tool_name: None })
+            Some(Message {
+                role: r,
+                content: content.clone(),
+                images: vec![],
+                tool_calls: vec![],
+                tool_call_id: None,
+                tool_name: None,
+            })
         })
         .collect();
 
