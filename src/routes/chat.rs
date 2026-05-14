@@ -2216,6 +2216,7 @@ async fn stream_chat_root(
                             builtin_tools::dispatch(
                                 &state_clone,
                                 &auth.user_id,
+                                Some(&chat_id_clone),
                                 &doc_label_map,
                                 &call.name,
                                 &call.input,
@@ -2977,60 +2978,93 @@ async fn delete_chat(
     }
 
     // FK cascade has already removed every documents row that pointed
-    // at this chat. For each unique content_hash we just lost, check
-    // whether any other documents row (any chat / any user) still
-    // references the same bytes. If not, the binary + extracted-text
-    // files are safe to delete from disk. Hashes shared with another
-    // chat keep their files alive.
+    // at this chat. Two cleanup paths now:
+    //
+    //   - **Hash-keyed cache uploads** (`content_hash IS NOT NULL`,
+    //     used by chat composer attachments) — ref-count check before
+    //     deleting bytes: a hash shared with another chat keeps its
+    //     files alive.
+    //   - **Generated documents** (`content_hash IS NULL`, written by
+    //     `exec_generate_docx`) — each has a unique
+    //     `documents/<user_id>/<doc_id>` storage path, no dedup is
+    //     possible, so the file is freed unconditionally.
+    //
+    // Without this second branch generated `.docx`s would be left
+    // dangling on disk when the originating chat is deleted, slowly
+    // bloating `data/storage/`.
     if !docs_to_check.is_empty() {
         if let Ok(storage) = make_storage() {
             let mut seen_hashes: std::collections::HashSet<String> =
                 std::collections::HashSet::new();
+            let mut generated_swept = 0usize;
             for (doc_id, sp, txt, hash) in &docs_to_check {
-                let Some(hash) = hash.as_ref() else { continue };
-                if !seen_hashes.insert(hash.clone()) {
-                    continue;
-                }
-                let still_referenced: Option<(i64,)> = sqlx::query_as(
-                    "SELECT 1 FROM documents WHERE content_hash = ? LIMIT 1",
-                )
-                .bind(hash)
-                .fetch_optional(&state.db)
-                .await
-                .unwrap_or(None);
-                if still_referenced.is_some() {
-                    tracing::info!(
-                        "[chat] keeping cache files for hash {} (still referenced by another doc)",
-                        hash
-                    );
-                    continue;
-                }
-                if let Some(key) = sp.as_ref() {
-                    if let Err(e) = storage.delete(key).await {
-                        tracing::warn!(
-                            "[chat] failed to delete cache binary {} (doc {}): {}",
-                            key,
-                            doc_id,
-                            e
-                        );
+                match hash.as_ref() {
+                    Some(hash) => {
+                        if !seen_hashes.insert(hash.clone()) {
+                            continue;
+                        }
+                        let still_referenced: Option<(i64,)> = sqlx::query_as(
+                            "SELECT 1 FROM documents WHERE content_hash = ? LIMIT 1",
+                        )
+                        .bind(hash)
+                        .fetch_optional(&state.db)
+                        .await
+                        .unwrap_or(None);
+                        if still_referenced.is_some() {
+                            tracing::info!(
+                                "[chat] keeping cache files for hash {} \
+                                 (still referenced by another doc)",
+                                hash
+                            );
+                            continue;
+                        }
+                        if let Some(key) = sp.as_ref() {
+                            if let Err(e) = storage.delete(key).await {
+                                tracing::warn!(
+                                    "[chat] failed to delete cache binary {} (doc {}): {}",
+                                    key,
+                                    doc_id,
+                                    e
+                                );
+                            }
+                        }
+                        if let Some(key) = txt.as_ref() {
+                            if let Err(e) = storage.delete(key).await {
+                                tracing::warn!(
+                                    "[chat] failed to delete cache text {} (doc {}): {}",
+                                    key,
+                                    doc_id,
+                                    e
+                                );
+                            }
+                        }
                     }
-                }
-                if let Some(key) = txt.as_ref() {
-                    if let Err(e) = storage.delete(key).await {
-                        tracing::warn!(
-                            "[chat] failed to delete cache text {} (doc {}): {}",
-                            key,
-                            doc_id,
-                            e
-                        );
+                    None => {
+                        // Generated doc — storage path is unique per
+                        // doc_id, no other row points at it, free
+                        // unconditionally.
+                        if let Some(key) = sp.as_ref() {
+                            if let Err(e) = storage.delete(key).await {
+                                tracing::warn!(
+                                    "[chat] failed to delete generated doc binary {} (doc {}): {}",
+                                    key,
+                                    doc_id,
+                                    e
+                                );
+                            } else {
+                                generated_swept += 1;
+                            }
+                        }
                     }
                 }
             }
             tracing::info!(
-                "[chat] delete chat={} swept {} doc row(s), {} unique hash(es)",
+                "[chat] delete chat={} swept {} doc row(s) \
+                 ({} unique cache hash(es), {} generated doc(s))",
                 id,
                 docs_to_check.len(),
-                seen_hashes.len()
+                seen_hashes.len(),
+                generated_swept,
             );
         }
     }

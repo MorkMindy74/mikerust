@@ -163,9 +163,18 @@ pub fn schemas() -> Vec<ToolSchema> {
 /// `doc_label_map` maps the chat-local label (`doc-0`, `doc-1`, …) to the
 /// real `documents.id` UUID stored in SQLite. Built by the chat dispatcher
 /// from the message's attached files.
+///
+/// `chat_id` is the originating chat's UUID. Forwarded into tools that
+/// persist documents (today: `generate_docx`) so the new row carries the
+/// `documents.chat_id` FK — that way deleting the chat cascades the
+/// generated `.docx` away with it (see `delete_chat` cleanup in
+/// `src/routes/chat.rs`). `None` is acceptable for callers that aren't
+/// in a chat context (e.g. future REST-only tool runs), in which case
+/// the row will be NULL-chat-id as before.
 pub async fn dispatch(
     state: &AppState,
     user_id: &str,
+    chat_id: Option<&str>,
     doc_label_map: &HashMap<String, String>,
     name: &str,
     arguments: &Value,
@@ -174,7 +183,7 @@ pub async fn dispatch(
         READ_DOCUMENT => exec_read_document(state, user_id, doc_label_map, arguments).await,
         FIND_IN_DOCUMENT => exec_find_in_document(state, user_id, doc_label_map, arguments).await,
         READ_WORKFLOW => exec_read_workflow(state, user_id, arguments).await,
-        GENERATE_DOCX => exec_generate_docx(state, user_id, arguments).await,
+        GENERATE_DOCX => exec_generate_docx(state, user_id, chat_id, arguments).await,
         EDIT_DOCUMENT => exec_edit_document(state, user_id, doc_label_map, arguments).await,
         LIST_DOCX_TEMPLATES => exec_list_docx_templates(state, arguments).await,
         DESCRIBE_DOCX_TEMPLATE => exec_describe_docx_template(state, arguments).await,
@@ -377,7 +386,12 @@ fn build_read_workflow_response(
     payload
 }
 
-async fn exec_generate_docx(state: &AppState, user_id: &str, arguments: &Value) -> String {
+async fn exec_generate_docx(
+    state: &AppState,
+    user_id: &str,
+    chat_id: Option<&str>,
+    arguments: &Value,
+) -> String {
     let body = arguments.get("body").and_then(|v| v.as_str()).unwrap_or("");
     if body.is_empty() {
         return json!({"error": "body (Markdown) is required"}).to_string();
@@ -474,12 +488,19 @@ async fn exec_generate_docx(state: &AppState, user_id: &str, arguments: &Value) 
     }
 
     let size = bytes.len() as i64;
+    // chat_id is bound when the call came from a chat dispatch so the
+    // generated .docx cascades away with the chat on deletion (see
+    // `delete_chat` in `src/routes/chat.rs`). Tool runs that originate
+    // outside a chat context (none today; future REST surface) keep the
+    // column NULL — those rows are orphaned by design and need a
+    // separate cleanup story.
     if let Err(e) = sqlx::query(
-        "INSERT INTO documents (id, user_id, project_id, filename, file_type, size_bytes, storage_path, status) \
-         VALUES (?, ?, NULL, ?, 'docx', ?, ?, 'ready')",
+        "INSERT INTO documents (id, user_id, project_id, chat_id, filename, file_type, size_bytes, storage_path, status) \
+         VALUES (?, ?, NULL, ?, ?, 'docx', ?, ?, 'ready')",
     )
     .bind(&doc_id)
     .bind(user_id)
+    .bind(chat_id)
     .bind(&filename)
     .bind(size)
     .bind(&storage_path)
