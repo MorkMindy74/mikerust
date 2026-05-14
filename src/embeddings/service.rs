@@ -626,48 +626,37 @@ fn resolve_fastembed_cache_dir() -> PathBuf {
     PathBuf::from(home).join("mikerust-data").join("fastembed")
 }
 
-/// Files we need from the Xenova mirror of multilingual-e5-base on
-/// HuggingFace. Listed in the order they should be downloaded so the
-/// big `model_quantized.onnx` (~275 MB INT8 dynamic) comes last,
-/// after the tiny tokenizer metadata is on disk — that way a user
-/// who cancels mid-onnx-download still ends up with a coherent
-/// partial cache and only has to retry the heavy file on the next
-/// run.
+/// Files we need from `intfloat/multilingual-e5-base` on HuggingFace.
+/// Listed in the order they should be downloaded so the big
+/// `model.onnx` (~1.1 GB) comes last, after the tiny tokenizer
+/// metadata is on disk — that way a user who cancels mid-onnx-
+/// download still ends up with a coherent partial cache and only
+/// has to retry the heavy file on the next run.
 ///
-/// Why Xenova/* and not intfloat/*: the original `intfloat`
-/// repository ships only the FP32 model (~1.1 GB), which on CPU
-/// takes 5-10 s to build the session and ~80 ms per query embed.
-/// `Xenova/multilingual-e5-base` re-packages the SAME base model
-/// with multiple ONNX variants in `onnx/`; we pick the INT8 dynamic
-/// (`model_quantized.onnx`, 275 MB) for a ~2× CPU speedup with
-/// imperceptible retrieval-quality loss (≤1 MTEB point on
-/// multilingual retrieval — and the use case here is top-K=8 over
-/// monolingual Italian, where the loss disappears).
-///
-/// Same model architecture, same 768-dim output vector, same
-/// mean-pooling — drop-in compatible with the existing sqlite-vec
-/// `doc_chunks` schema (migration 0009). No re-indexing needed.
-///
-/// IMPORTANT: INT8 dynamic quantization is **weights-only**, not
-/// QDQ static. The Qualcomm QNN HTP backend (Hexagon NPU) requires
-/// QDQ-static models and will hang on init when handed this one.
-/// Keep `rag-qnn` disabled — see `feedback_no_hexagon_for_e5.md`.
+/// **Why not the Xenova INT8-dynamic mirror?** Tried 2026-05-14:
+/// `Xenova/multilingual-e5-base` ships `onnx/model_quantized.onnx`
+/// (~275 MB) which loads fine in Transformers.js but stalls
+/// `ort 2.0.0-rc.12`'s session-init indefinitely on ARM64 with
+/// the base CPU DLL. The graph uses INT8 op attribute sets that
+/// the C++ Microsoft runtime fails to optimise cleanly. Rolling
+/// back to FP32 + intfloat/* unblocks the user; the quantization
+/// lap goes back to the backlog (target: switch ort to alternative
+/// EP, or pre-process the model with onnxruntime tools, OR produce
+/// our own QDQ-static variant).
 const E5_BASE_FILES: &[(&str, &str)] = &[
     ("config.json", "config.json"),
     ("special_tokens_map.json", "special_tokens_map.json"),
     ("tokenizer_config.json", "tokenizer_config.json"),
     ("tokenizer.json", "tokenizer.json"),
-    ("onnx/model_quantized.onnx", "model_quantized.onnx"),
+    ("onnx/model.onnx", "model.onnx"),
 ];
 
-const HF_REPO: &str = "Xenova/multilingual-e5-base";
+const HF_REPO: &str = "intfloat/multilingual-e5-base";
 
-/// Cache subdirectory under FASTEMBED_CACHE_DIR. Bumped from
-/// `mike-e5-base` (FP32) to `mike-e5-base-quantized` (INT8 dynamic)
-/// so an existing FP32 cache from earlier MikeRust builds is left
-/// alone (user can delete it manually to reclaim ~1.1 GB) and the
-/// quantized variant downloads cleanly into its own folder.
-const CACHE_SUBDIR: &str = "mike-e5-base-quantized";
+/// Cache subdirectory under FASTEMBED_CACHE_DIR. Keep the
+/// historical name so existing FP32 caches from earlier builds are
+/// re-used (saves the 1.1 GB re-download).
+const CACHE_SUBDIR: &str = "mike-e5-base";
 
 /// Ensure every required E5 file is on disk under `dir`, downloading
 /// any that are missing and updating the shared `status` as bytes
@@ -708,7 +697,7 @@ async fn download_model_files(
         special_tokens_map: tokio::fs::read(dir.join("special_tokens_map.json")).await?,
         tokenizer_config: tokio::fs::read(dir.join("tokenizer_config.json")).await?,
         tokenizer: tokio::fs::read(dir.join("tokenizer.json")).await?,
-        onnx: tokio::fs::read(dir.join("model_quantized.onnx")).await?,
+        onnx: tokio::fs::read(dir.join("model.onnx")).await?,
     })
 }
 
