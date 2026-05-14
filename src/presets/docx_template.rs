@@ -797,6 +797,39 @@ mod tests {
     }
 
     #[test]
+    fn shipped_inventario_assets_table_is_repeating_and_anchored_to_insurance() {
+        // Anchors the inventario template: insurance-primary, repeating
+        // assets_table block, visible from adjacent professional domains.
+        let dir = crate::presets::config_subdir("docx-templates");
+        let templates = load_docx_templates(&dir).expect("load");
+        let inv = templates
+            .iter()
+            .find(|t| t.id == "it/inventario-beni-assicurati")
+            .expect("inventario present");
+        assert_eq!(inv.domain, "insurance");
+        for expected in ["legal", "finance", "real_estate", "compliance"] {
+            assert!(
+                inv.also_applicable_to.contains(&expected.to_string()),
+                "inventario should be applicable to {expected}, got {:?}",
+                inv.also_applicable_to
+            );
+        }
+        let assets = inv
+            .section_skeleton
+            .iter()
+            .find(|s| s.id == "assets_table")
+            .expect("assets_table section present");
+        assert!(assets.repeating, "assets_table must be repeating (one row per asset)");
+        // Required metadata covers the policy header and the asset list.
+        for f in ["POLIZZA_NUMERO", "COMPAGNIA", "CONTRAENTE", "ASSETS"] {
+            assert!(
+                inv.required_metadata.iter().any(|x| x == f),
+                "required metadata must include {f}"
+            );
+        }
+    }
+
+    #[test]
     fn shipped_iso_procedure_stays_compliance_only() {
         let dir = crate::presets::config_subdir("docx-templates");
         let templates = load_docx_templates(&dir).expect("load");
