@@ -242,6 +242,13 @@ rag-migraphx  = ["dep:ort", "ort/migraphx"]
 rag-nnapi     = ["dep:ort", "ort/nnapi"]
 rag-onednn    = ["dep:ort", "ort/onednn"]
 rag-openvino  = ["dep:ort", "ort/openvino"]
+# ⚠ Do NOT enable `rag-qnn` with the default embedding model
+# (multilingual-e5-base). The model is float32 / non-QDQ-quantized and
+# the QNN HTP backend requires INT8 QDQ; session-init silently hangs
+# instead of gracefully falling back to CPU. Re-enable this feature
+# ONLY after pairing it with a properly QDQ-quantized variant of the
+# embedding model (or another QNN-compatible model). Tested empirically
+# on Snapdragon X Elite, May 2026.
 rag-qnn       = ["dep:ort", "ort/qnn"]
 rag-rknpu     = ["dep:ort", "ort/rknpu"]
 rag-rocm      = ["dep:ort", "ort/rocm"]
