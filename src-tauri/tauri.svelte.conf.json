@@ -4,10 +4,10 @@
   "version": "0.1.0",
   "identifier": "com.mikerust.app",
   "build": {
-    "frontendDist": "../frontendMike/out",
-    "devUrl": "http://localhost:3000",
-    "beforeDevCommand": "npm --prefix ../frontendMike run dev",
-    "beforeBuildCommand": "npm --prefix ../frontendMike run build:tauri"
+    "frontendDist": "../frontend/dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "pnpm --dir ../frontend dev",
+    "beforeBuildCommand": "pnpm --dir ../frontend build"
   },
   "app": {
     "withGlobalTauri": false,
@@ -16,8 +16,8 @@
         "title": "MikeRust",
         "width": 1280,
         "height": 800,
-        "minWidth": 800,
-        "minHeight": 600,
+        "minWidth": 960,
+        "minHeight": 640,
         "resizable": true,
         "fullscreen": false
       }
