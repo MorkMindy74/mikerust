@@ -164,10 +164,18 @@ async function tagWIdsOnRenderedDom(
             { headers: token ? { Authorization: `Bearer ${token}` } : {} },
         );
         if (!resp.ok) {
-            console.warn(
-                "[DocxView] tracked-change-ids fetch failed",
-                resp.status,
-            );
+            // 404 is the normal answer for documents without tracked-change
+            // provenance — generated docs (generate_docx output) never had
+            // revisions, and uploaded docs without <w:ins>/<w:del> markers
+            // are likewise outside this feature's scope. Silent skip so the
+            // DevTools console stays clean. Other failures (auth, 5xx) are
+            // still worth surfacing.
+            if (resp.status !== 404) {
+                console.warn(
+                    "[DocxView] tracked-change-ids fetch failed",
+                    resp.status,
+                );
+            }
             return;
         }
         const data = (await resp.json()) as {
