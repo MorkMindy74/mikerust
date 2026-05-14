@@ -19,6 +19,7 @@
 //! parsing (one broken JSON does not stop the rest from loading).
 
 pub mod column;
+pub mod docx_template;
 pub mod model;
 pub mod workflow;
 
@@ -51,6 +52,38 @@ pub fn presets_dir(kind: &str) -> PathBuf {
     }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(found) = walk_ancestors_for(&exe, &dir_name) {
+            return found;
+        }
+    }
+    PathBuf::from(format!("./config/{dir_name}"))
+}
+
+/// Resolve any subdirectory under `config/` — used for registries
+/// whose folder name doesn't follow the `<kind>-presets` convention.
+/// Same ancestor-walking lookup as `presets_dir`. Today's only caller
+/// is the docx-template registry (`config/docx-templates/`).
+///
+/// Lookup order:
+///   1. `MIKE_<NAME>_DIR` env var (absolute path), where `<NAME>` is
+///      `dir_name` upper-cased with `-` rewritten to `_`.
+///   2. Walk ancestors from CWD for `config/<dir_name>/`.
+///   3. Walk ancestors from the current executable's path.
+///   4. Fallback to `./config/<dir_name>`.
+pub fn config_subdir(dir_name: &str) -> PathBuf {
+    let env_var = format!(
+        "MIKE_{}_DIR",
+        dir_name.to_ascii_uppercase().replace('-', "_")
+    );
+    if let Ok(dir) = std::env::var(&env_var) {
+        return PathBuf::from(dir);
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        if let Some(found) = walk_ancestors_for(&cwd, dir_name) {
+            return found;
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(found) = walk_ancestors_for(&exe, dir_name) {
             return found;
         }
     }

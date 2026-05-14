@@ -166,6 +166,15 @@ pub struct AppState {
     /// the Settings → Modelli LLM page. Empty when the file is missing
     /// or malformed — the page will just show empty dropdowns.
     pub model_catalogue: Arc<crate::presets::model::ModelCatalogue>,
+
+    /// DOCX template registry — sidecar JSON + companion `.dotx`
+    /// files under `config/docx-templates/<domain>/<slug>.{json,dotx}`.
+    /// Drives the closing-formatter pipeline that turns
+    /// LLM-produced Markdown into print-ready Word documents
+    /// styled per Italian professional conventions (see
+    /// `docs/TEMPLATE_PRONTUARIO.md`). Served via `GET /docx-templates`.
+    pub docx_templates:
+        Arc<Vec<crate::presets::docx_template::DocxTemplate>>,
 }
 
 impl AppState {
@@ -295,6 +304,27 @@ impl AppState {
             column_presets_dir.display()
         );
 
+        // DOCX template registry. Mirrors the workflow/column-preset
+        // pattern: drop a sidecar JSON (+ companion `.dotx`) into
+        // `config/docx-templates/<domain>/`, restart, ready. Same
+        // fail-soft policy.
+        let docx_templates_dir = crate::presets::config_subdir("docx-templates");
+        let docx_templates =
+            crate::presets::docx_template::load_docx_templates(&docx_templates_dir)
+                .unwrap_or_else(|e| {
+                    tracing::warn!(
+                        "[docx-templates] load failed from {}: {:#}",
+                        docx_templates_dir.display(),
+                        e
+                    );
+                    Vec::new()
+                });
+        tracing::info!(
+            "[docx-templates] {} template(s) loaded from {}",
+            docx_templates.len(),
+            docx_templates_dir.display()
+        );
+
         // LLM model catalogue. Same fail-soft policy: a missing/broken
         // `config/model.json` logs a warning and falls back to an empty
         // catalogue. The Settings → Modelli LLM page will render empty
@@ -337,6 +367,7 @@ impl AppState {
             workflow_presets: Arc::new(workflow_presets),
             column_presets: Arc::new(column_presets),
             model_catalogue: Arc::new(model_catalogue),
+            docx_templates: Arc::new(docx_templates),
         })
     }
 

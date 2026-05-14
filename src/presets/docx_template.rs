@@ -1,0 +1,559 @@
+//! DOCX template registry — sidecar JSON files under
+//! `config/docx-templates/<domain>/<slug>.json`, each paired with a
+//! Word `.dotx` template file of the same stem.
+//!
+//! Authoritative spec: [`docs/TEMPLATE_PRONTUARIO.md`]. Each entry
+//! here corresponds to one of the schede in the Prontuario and is
+//! referenced back via the optional `source_reference` field.
+//!
+//! Philosophy (from Panucci, restated in the Prontuario):
+//!
+//!   > Il Prontuario non serve per generare il contenuto. Quello si
+//!   > ottiene dialogando con Claude, iterando, affinando. Il
+//!   > Prontuario entra in gioco alla fine, quando il contenuto è
+//!   > pronto e devi trasformarlo in un documento stampabile.
+//!
+//! The template is the **closing formatter**, never the content
+//! generator. The LLM produces structured Markdown after iterating
+//! with the user; the renderer applies the right `.dotx`, binds
+//! `[PLACEHOLDERS]`, and emits a print-ready `.docx`.
+
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::path::Path;
+
+// ─────────────────────────────────────────────────────────────────────
+// Layout primitives
+// ─────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Paper {
+    pub size: String,
+    #[serde(default = "default_orientation")]
+    pub orientation: String,
+    /// `"standard"` for A4 ordinary, `"uso_bollo"` for notarial deeds.
+    /// When `uso_bollo`, the sibling `uso_bollo` block becomes required.
+    #[serde(default = "default_paper_format")]
+    pub format: String,
+}
+
+fn default_orientation() -> String {
+    "portrait".to_string()
+}
+
+fn default_paper_format() -> String {
+    "standard".to_string()
+}
+
+/// Special paper rules for notarial "uso bollo" deeds. Only present
+/// when `paper.format == "uso_bollo"`. Captures the constraints listed
+/// in Prontuario scheda 6: 25 lines per facciata, mirror margins,
+/// no blank lines allowed, marginal signature on every page except
+/// the last.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct UsoBollo {
+    /// Line spacing in typographic points (not `1.5` multiplier).
+    /// Standard is `28.35` for the canonical 25-lines/facciata layout.
+    pub line_spacing_pt_exact: f32,
+    pub lines_per_facciata: u32,
+    pub facciate_per_foglio: u32,
+    #[serde(default)]
+    pub mirror_margins: bool,
+    #[serde(default)]
+    pub duplex: bool,
+    #[serde(default)]
+    pub forbid_empty_lines: bool,
+    #[serde(default)]
+    pub marginal_signature_required: bool,
+    #[serde(default)]
+    pub signature_exclude_last_page: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MarginsCm {
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+    pub left: f32,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Typography {
+    pub body_font: String,
+    pub body_size_pt: f32,
+    pub line_spacing: f32,
+    #[serde(default)]
+    pub paragraph_after_pt: f32,
+    /// `"justify"` (legal/forense) or `"left"` (PA blocco americano).
+    #[serde(default = "default_alignment")]
+    pub alignment: String,
+    #[serde(default)]
+    pub first_line_indent_cm: f32,
+}
+
+fn default_alignment() -> String {
+    "justify".to_string()
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Footnotes {
+    pub font: String,
+    pub size_pt: f32,
+    pub line_spacing: f32,
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Authoring contract
+// ─────────────────────────────────────────────────────────────────────
+
+/// One step in the document's expected structure. The `id` is the
+/// canonical English snake_case identifier (memory: English IDs,
+/// localised display). The `title` is the heading text rendered into
+/// the Word document — typically Italian for `it/` templates, but the
+/// field carries whatever the template author wrote.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SectionSkeletonEntry {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Literal text to render in place of a heading — e.g. `"* * *"`
+    /// for the inter-block separator used in atto difensivo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guidance: Option<String>,
+    /// When `true`, this section is a *repeating block* (Prontuario
+    /// L3 automation) — e.g. one quesito → one risposta in CTU, one
+    /// process card → one row in ISO. Renderer expects the LLM to
+    /// produce a list under this section in the Markdown.
+    #[serde(default)]
+    pub repeating: bool,
+}
+
+/// Character-count vincoli, used by atto difensivo (D.M. 110/2023).
+/// Map of `atto_type` → max chars. Renderer warns when body exceeds.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CharacterLimits {
+    /// Map preserved verbatim so future `atto_type` values can be
+    /// added without recompiling.
+    #[serde(flatten)]
+    pub by_atto_type: std::collections::HashMap<String, u64>,
+}
+
+/// Few-shot example pointing at a Markdown file in the same template
+/// directory. Loaded lazily when the LLM asks for examples via
+/// `describe_docx_template`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct FewShotExample {
+    pub label: String,
+    /// Path relative to the template's sidecar JSON.
+    pub path: String,
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// DocxTemplate root
+// ─────────────────────────────────────────────────────────────────────
+
+/// One template as parsed from disk. Every field except the bare
+/// minimum (`id`, `display_name`, `paper`, `margins_cm`, `typography`)
+/// is optional so a new template can be drafted incrementally.
+///
+/// Serialisation back to JSON via `to_api_json()` adds the synthesised
+/// fields (`is_system: true`) that the route returns to the frontend.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct DocxTemplate {
+    #[serde(default = "default_schema_version")]
+    pub schema_version: u32,
+
+    pub id: String,
+    /// Map of locale code → display name. Renderer picks the entry
+    /// matching the user's UI locale; falls back to `en` then to the
+    /// first available entry.
+    pub display_name: std::collections::HashMap<String, String>,
+
+    pub category: String,
+    /// Canonical domain enum value — see `crate::domain::DOMAINS`.
+    pub domain: String,
+    pub locale: String,
+
+    #[serde(default = "default_automation_level")]
+    pub automation_level: String,
+    #[serde(default = "default_placeholder_syntax")]
+    pub placeholder_syntax: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_reference: Option<String>,
+
+    // ── layout ──────────────────────────────────────────────────────
+    pub paper: Paper,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uso_bollo: Option<UsoBollo>,
+    pub margins_cm: MarginsCm,
+    pub typography: Typography,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub footnotes: Option<Footnotes>,
+
+    /// Universal baseline (4 styles from Prontuario Parte III.1).
+    /// Keys are canonical English IDs; values are the Word style names
+    /// embedded in the companion `.dotx` (localised per template).
+    #[serde(default = "default_style_map_baseline")]
+    pub style_map_baseline: std::collections::BTreeMap<String, String>,
+
+    /// Template-specific style overrides on top of the baseline.
+    #[serde(default)]
+    pub style_map: std::collections::BTreeMap<String, String>,
+
+    #[serde(default)]
+    pub directives_supported: Vec<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header_block: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub footer_block: Option<String>,
+    /// `"manual"` (the LLM writes `1.`, `2.` in the heading text) or
+    /// `"auto"` (the template uses Word numbering definitions).
+    #[serde(default = "default_section_numbering")]
+    pub section_numbering: String,
+
+    // ── authoring contract ──────────────────────────────────────────
+    #[serde(default)]
+    pub section_skeleton: Vec<SectionSkeletonEntry>,
+
+    /// Per-field micro-prompts for the LLM, telling it how to extract
+    /// each required_metadata field from a chat conversation.
+    #[serde(default)]
+    pub field_prompts: std::collections::BTreeMap<String, String>,
+
+    /// Names of metadata fields the LLM must collect before the
+    /// renderer runs. Universal fields (LUOGO, DATA, MITTENTE, …) are
+    /// always implicitly required and don't need to be listed here.
+    #[serde(default)]
+    pub required_metadata: Vec<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub character_limits: Option<CharacterLimits>,
+
+    #[serde(default)]
+    pub few_shot_examples: Vec<FewShotExample>,
+
+    /// Optional author override appended to the auto-generated
+    /// `prompt_md`. Use for jurisdiction-specific tone notes that
+    /// don't fit cleanly in `field_prompts`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_md_extra: Option<String>,
+}
+
+fn default_schema_version() -> u32 {
+    1
+}
+
+fn default_automation_level() -> String {
+    "L1".to_string()
+}
+
+fn default_placeholder_syntax() -> String {
+    "square_brackets".to_string()
+}
+
+fn default_section_numbering() -> String {
+    "manual".to_string()
+}
+
+/// The 4 canonical paragraph styles every template inherits. Keys are
+/// the IDs the renderer references; values are what the companion
+/// `.dotx` actually defines (will be `"Corpo testo"` etc. for IT
+/// templates, `"Body Text"` for future EN ones).
+fn default_style_map_baseline() -> std::collections::BTreeMap<String, String> {
+    let mut m = std::collections::BTreeMap::new();
+    m.insert("body_text".to_string(), "Corpo testo".to_string());
+    m.insert("section_heading".to_string(), "Titolo sezione".to_string());
+    m.insert("citation".to_string(), "Citazione".to_string());
+    m.insert("footnote".to_string(), "Note piè pagina".to_string());
+    m
+}
+
+impl DocxTemplate {
+    /// Resolve a display name for the given locale, with English
+    /// fallback and last-resort first-entry pickup.
+    pub fn display_name_for(&self, locale: &str) -> String {
+        if let Some(name) = self.display_name.get(locale) {
+            return name.clone();
+        }
+        if let Some(name) = self.display_name.get("en") {
+            return name.clone();
+        }
+        self.display_name
+            .values()
+            .next()
+            .cloned()
+            .unwrap_or_else(|| self.id.clone())
+    }
+
+    /// Render the template as the JSON shape the `/docx-templates`
+    /// endpoint serves. Adds synthesised fields (`is_system: true`,
+    /// `is_owner: false`) so consumers see the same schema as future
+    /// user-created rows from the DB.
+    pub fn to_api_json(&self) -> Value {
+        let mut v = serde_json::to_value(self).unwrap_or(serde_json::json!({}));
+        if let Value::Object(ref mut map) = v {
+            map.insert("is_system".to_string(), Value::Bool(true));
+            map.insert("is_owner".to_string(), Value::Bool(false));
+        }
+        v
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Loader
+// ─────────────────────────────────────────────────────────────────────
+
+/// Walk every JSON file in `dir` (one level of subdirectory recursion
+/// for domain folders), parse each as a `DocxTemplate`, validate
+/// minimal invariants. Broken files are skipped with a `tracing::warn`
+/// — one bad template doesn't take down the rest.
+pub fn load_docx_templates(dir: &Path) -> Result<Vec<DocxTemplate>> {
+    let mut out: Vec<DocxTemplate> = Vec::new();
+    let files = match super::collect_json_files(dir) {
+        Ok(v) => v,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            tracing::info!(
+                "[docx-templates] directory {} not found; no templates loaded",
+                dir.display()
+            );
+            return Ok(out);
+        }
+        Err(e) => return Err(anyhow::anyhow!("read {}: {}", dir.display(), e)),
+    };
+
+    for path in files {
+        let bytes = match std::fs::read(&path) {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!(
+                    "[docx-templates] skip {} (read error): {}",
+                    path.display(),
+                    e
+                );
+                continue;
+            }
+        };
+        match serde_json::from_slice::<DocxTemplate>(&bytes) {
+            Ok(t) => {
+                if let Err(reason) = validate(&t) {
+                    tracing::warn!(
+                        "[docx-templates] skip {}: {reason}",
+                        path.display(),
+                    );
+                    continue;
+                }
+                tracing::info!(
+                    "[docx-templates] loaded {} (domain={}, locale={}, L={})",
+                    t.id,
+                    t.domain,
+                    t.locale,
+                    t.automation_level,
+                );
+                out.push(t);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "[docx-templates] skip {} (parse error): {}",
+                    path.display(),
+                    e
+                );
+            }
+        }
+    }
+    out.sort_by(|a, b| a.id.cmp(&b.id));
+    Ok(out)
+}
+
+/// Minimum invariants every loaded template must satisfy.
+fn validate(t: &DocxTemplate) -> Result<(), String> {
+    if t.id.is_empty() {
+        return Err("empty id".into());
+    }
+    if t.display_name.is_empty() {
+        return Err(format!("template {}: display_name map is empty", t.id));
+    }
+    if !crate::domain::is_valid(&t.domain) {
+        return Err(format!(
+            "template {}: domain {} not in canonical set",
+            t.id, t.domain
+        ));
+    }
+    if !matches!(t.automation_level.as_str(), "L1" | "L2" | "L3" | "L4") {
+        return Err(format!(
+            "template {}: automation_level {} not in [L1,L2,L3,L4]",
+            t.id, t.automation_level
+        ));
+    }
+    if t.paper.format == "uso_bollo" && t.uso_bollo.is_none() {
+        return Err(format!(
+            "template {}: paper.format=uso_bollo requires uso_bollo block",
+            t.id
+        ));
+    }
+    if !matches!(t.placeholder_syntax.as_str(), "square_brackets" | "docproperty" | "jinja") {
+        return Err(format!(
+            "template {}: placeholder_syntax {} unsupported",
+            t.id, t.placeholder_syntax
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn minimal_template_json(id: &str, domain: &str) -> String {
+        format!(
+            r#"{{
+                "id": "{id}",
+                "display_name": {{ "it": "Test {id}", "en": "Test {id}" }},
+                "category": "legal",
+                "domain": "{domain}",
+                "locale": "it-IT",
+                "paper": {{ "size": "A4" }},
+                "margins_cm": {{ "top": 2.5, "right": 2.5, "bottom": 2.5, "left": 3.0 }},
+                "typography": {{ "body_font": "Times New Roman", "body_size_pt": 12.0, "line_spacing": 1.5 }}
+            }}"#
+        )
+    }
+
+    #[test]
+    fn parses_minimal_template() {
+        let json = minimal_template_json("it/test", "legal");
+        let t: DocxTemplate = serde_json::from_str(&json).expect("parse minimal");
+        assert_eq!(t.id, "it/test");
+        assert_eq!(t.domain, "legal");
+        assert_eq!(t.automation_level, "L1"); // default
+        assert_eq!(t.placeholder_syntax, "square_brackets"); // default
+        assert_eq!(t.paper.format, "standard"); // default
+        assert_eq!(t.style_map_baseline.len(), 4); // baseline always present
+        assert!(t.style_map_baseline.contains_key("body_text"));
+        assert!(t.style_map_baseline.contains_key("section_heading"));
+        assert!(t.style_map_baseline.contains_key("citation"));
+        assert!(t.style_map_baseline.contains_key("footnote"));
+    }
+
+    #[test]
+    fn validate_rejects_invalid_domain() {
+        let mut t: DocxTemplate =
+            serde_json::from_str(&minimal_template_json("it/test", "legal")).unwrap();
+        t.domain = "made_up_domain".into();
+        let err = validate(&t).unwrap_err();
+        assert!(err.contains("domain"));
+    }
+
+    #[test]
+    fn validate_rejects_invalid_automation_level() {
+        let mut t: DocxTemplate =
+            serde_json::from_str(&minimal_template_json("it/test", "legal")).unwrap();
+        t.automation_level = "L9".into();
+        let err = validate(&t).unwrap_err();
+        assert!(err.contains("automation_level"));
+    }
+
+    #[test]
+    fn validate_rejects_uso_bollo_without_block() {
+        let mut t: DocxTemplate =
+            serde_json::from_str(&minimal_template_json("it/test", "legal")).unwrap();
+        t.paper.format = "uso_bollo".into();
+        // uso_bollo block missing
+        let err = validate(&t).unwrap_err();
+        assert!(err.contains("uso_bollo"));
+    }
+
+    #[test]
+    fn validate_accepts_uso_bollo_with_block() {
+        let mut t: DocxTemplate =
+            serde_json::from_str(&minimal_template_json("it/test", "legal")).unwrap();
+        t.paper.format = "uso_bollo".into();
+        t.uso_bollo = Some(UsoBollo {
+            line_spacing_pt_exact: 28.35,
+            lines_per_facciata: 25,
+            facciate_per_foglio: 4,
+            mirror_margins: true,
+            duplex: true,
+            forbid_empty_lines: true,
+            marginal_signature_required: true,
+            signature_exclude_last_page: true,
+        });
+        assert!(validate(&t).is_ok());
+    }
+
+    #[test]
+    fn display_name_falls_back_to_english_then_first() {
+        let t: DocxTemplate =
+            serde_json::from_str(&minimal_template_json("it/test", "legal")).unwrap();
+        assert_eq!(t.display_name_for("it"), "Test it/test");
+        assert_eq!(t.display_name_for("en"), "Test it/test");
+        // Locale we don't have → fallback to en
+        assert_eq!(t.display_name_for("ja"), "Test it/test");
+    }
+
+    #[test]
+    fn to_api_json_marks_system() {
+        let t: DocxTemplate =
+            serde_json::from_str(&minimal_template_json("it/test", "legal")).unwrap();
+        let v = t.to_api_json();
+        assert_eq!(v["is_system"], serde_json::json!(true));
+        assert_eq!(v["is_owner"], serde_json::json!(false));
+        assert_eq!(v["id"], serde_json::json!("it/test"));
+    }
+
+    #[test]
+    fn shipped_templates_all_load_cleanly() {
+        // Integration test: every JSON under config/docx-templates/
+        // that ships with the repo must parse + validate. Catches
+        // typos and schema drift on every CI run.
+        let dir = crate::presets::config_subdir("docx-templates");
+        if !dir.exists() {
+            // Skip silently when running from a stripped checkout
+            // without the config tree (e.g. `cargo publish` package).
+            return;
+        }
+        let templates =
+            load_docx_templates(&dir).expect("shipped templates must load");
+
+        // Phase 1.A acceptance: the 4 ★★★★★ templates from the Prontuario
+        // must all be present and valid after a fresh build.
+        let ids: Vec<&str> = templates.iter().map(|t| t.id.as_str()).collect();
+        for expected in [
+            "it/diffida-messa-in-mora",
+            "it/parcella-professionale",
+            "it/contratto-locazione",
+            "compliance/procedura-iso-sgi",
+        ] {
+            assert!(
+                ids.contains(&expected),
+                "missing shipped template {expected} (found: {ids:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn character_limits_parses_flexible_map() {
+        let json = r#"{
+            "id": "it/atto",
+            "display_name": { "it": "Atto" },
+            "category": "legal",
+            "domain": "legal",
+            "locale": "it-IT",
+            "paper": { "size": "A4" },
+            "margins_cm": { "top": 3.0, "right": 2.0, "bottom": 2.5, "left": 3.5 },
+            "typography": { "body_font": "Times New Roman", "body_size_pt": 12.0, "line_spacing": 1.5 },
+            "character_limits": {
+                "atto_di_citazione": 80000,
+                "memoria_ex_art_183_cpc": 50000,
+                "note_udienza": 10000
+            }
+        }"#;
+        let t: DocxTemplate = serde_json::from_str(json).expect("parse");
+        let limits = t.character_limits.expect("has limits");
+        assert_eq!(limits.by_atto_type["atto_di_citazione"], 80000);
+        assert_eq!(limits.by_atto_type["memoria_ex_art_183_cpc"], 50000);
+    }
+}

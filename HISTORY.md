@@ -12,6 +12,93 @@ diff. For the upstream-sync audit trail (which fixes were ported from
 
 ---
 
+## 2026-05-14 — DOCX template registry (Phase 1.A foundation)
+
+First lap of the structured-output system. The DOCX template registry
+becomes a first-class entity alongside workflows / column-presets /
+model catalogue, with sidecar JSON files describing layout, authoring
+contract, and automation level for each shipped template. Loaded at
+startup, exposed via `GET /docx-templates`, ready for the renderer
+pipeline (Phase 1.A.1, next lap).
+
+### Added — DocxTemplate registry
+
+- **`docs/TEMPLATE_PRONTUARIO.md`** — authoritative Italian-professional
+  template specification (Versione 1.0, May 2026): 9 schede + 5 sotto-
+  schede ad alto volume covering CTU, Atto difensivo, Comunicazione PA,
+  Risposta AdE, Commercialista, Rogito notarile, Diffida, Locazione,
+  Verbale, Istanza PA, Parcella, Procedura ISO, Ricorso tributario.
+  Each scheda lists paper size, margins, typography, structure, layout
+  conventions, automation level (L1-L4) and priority (★).
+- **`src/presets/docx_template.rs`** — schema parser mirroring the
+  workflow / column-preset registry pattern. Full type system:
+  `Paper` (with `format: standard | uso_bollo`), `UsoBollo` (special
+  notarial-deed constraints), `MarginsCm`, `Typography`, `Footnotes`,
+  `SectionSkeletonEntry` (with `repeating: bool` for L3 automation),
+  `CharacterLimits` (D.M. 110/2023 — atti difensivi),
+  `FewShotExample`, `DocxTemplate` root. Style-map baseline (4
+  canonical styles: `body_text`, `section_heading`, `citation`,
+  `footnote`) hard-coded as default — every template inherits, can
+  override. English snake_case canonical IDs everywhere (memory feedback),
+  Word style names embedded inside the `.dotx` files stay localised.
+- **`AppState.docx_templates`** populated at startup from
+  `config/docx-templates/<domain>/<slug>.json`. Same fail-soft policy
+  as the other registries: a broken template logs a warning and the
+  rest still load.
+- **`config_subdir(name)`** helper in `src/presets/mod.rs` for
+  resolving any config subfolder that doesn't follow the
+  `<kind>-presets` naming. Used by docx-templates (`config/docx-templates/`);
+  generalises cleanly to future registries.
+- **`GET /docx-templates`** route with optional `?domain=` and
+  `?locale=` filter query params. Returns each template's full
+  sidecar JSON plus synthesised `is_system: true` / `is_owner: false`.
+
+### Added — first 4 shipped templates (★★★★★)
+
+The four highest-priority templates from the Prontuario, all on disk
+at `config/docx-templates/`:
+
+- **`it/diffida-messa-in-mora`** (legal, L1) — Calibri 11 / 1.15 /
+  margini 2.5 cm, 1 pagina, formula `DIFFIDA E METTE IN MORA` con
+  termine perentorio in grassetto corsivo. 7 campi richiesti
+  (`DEBITORE`, `CF_PIVA`, `INDIRIZZO`, `DESCRIZIONE_INADEMPIMENTO`,
+  `IMPORTO`, `TERMINE_GG`, `ALLEGATO_PROVA`).
+- **`it/parcella-professionale`** (finance, L3) — Calibri 11 / 1.15 /
+  blocco americano. Voci di onorario come blocco ripetibile (L3),
+  contributo integrativo 4% (avvocati) o 2% (commercialisti), IVA 22%
+  con esenzione per regime forfetario, IBAN obbligatorio.
+- **`it/contratto-locazione`** (real_estate, L2) — TNR 11 / 1.5 /
+  margine sx 3 cm. Rami condizionali su `TIPO_CONTRATTO` ("Canone
+  libero 4+4" / "Canone concordato 3+2" / "Contratto transitorio")
+  che cambiano artt. 2 (durata) e 3 (aggiornamento ISTAT). 11 articoli
+  fissi, parti in MAIUSCOLETTO, foro inderogabile.
+- **`compliance/procedura-iso-sgi`** (compliance, L3) — Calibri 11 /
+  1.15 / margini 2.5 cm uniformi. Header con `[AZIENDA] · CODICE ·
+  REVISIONE · DATA`. Sezione 4.2.2 "Scheda processo" come blocco
+  ripetibile L3 con 15 campi fissi (Nome, Responsabile, Documenti,
+  Vincoli normativi, Input/Output, Indicatori, Rischi, Punti di forza,
+  ecc.). Domain `compliance` estende il sistema oltre il legal-tech.
+
+### Tests
+
+- 9 unit test in `src/presets/docx_template.rs`:
+  schema parsing (minimal + character_limits + display_name fallback),
+  validation (domain enum, automation_level enum, uso_bollo block
+  presence, placeholder_syntax enum), API-shape projection, and
+  `shipped_templates_all_load_cleanly` — integration test that opens
+  the real `config/docx-templates/` tree and verifies the 4 shipped
+  templates are all parseable + valid. All green.
+
+### Next
+
+Phase 1.A.1 (next commit): the actual rendering pipeline —
+`src/docx/` module that maps Markdown + YAML front-matter into the
+companion `.dotx`, binds `[PLACEHOLDERS]`, and emits print-ready
+`.docx`. Then the LLM tool `generate_docx` learns to accept
+`template_id` and pull `prompt_md` from the sidecar.
+
+---
+
 ## 2026-05-14 — ONNX Runtime: load-dynamic + every execution provider
 
 The embeddings pipeline switches from the statically-baked

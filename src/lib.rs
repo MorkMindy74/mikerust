@@ -159,6 +159,7 @@ pub async fn run_server_with_channels(
         .nest("/single-documents", routes::documents::router())
         .nest("/workflow",  routes::workflows::router())
         .nest("/column-presets", routes::presets::router())
+        .nest("/docx-templates", routes::docx_templates::router())
         .nest("/models", routes::models::router())
         .nest("/tabular-review", routes::tabular_reviews::router())
         .nest("/sync",     routes::sync::router())
