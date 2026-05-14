@@ -1723,15 +1723,57 @@ async fn stream_chat_root(
         }
     }
 
-    if let Some((role, content, _tpl_id)) = messages_in.last() {
-        if role == "user" && !content.trim().is_empty() {
+    // Persist the *last* user message. We store:
+    //   - the ORIGINAL content (raw user-typed text), not the
+    //     marker-augmented form that goes to the LLM — markers like
+    //     `[Workflow: ...]` are an LLM-side hint, putting them in the
+    //     replayable history would surface as literal text on chat
+    //     reopen.
+    //   - the structured `files` / `workflow` / `template` JSON blobs
+    //     so the composer pills come back when the chat is reopened
+    //     (see migration 0021).
+    let last_user_msg_json = body
+        .get("messages")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| {
+            arr.iter().rev().find(|m| {
+                m.get("role").and_then(|r| r.as_str()) == Some("user")
+            })
+        });
+    if let Some(msg) = last_user_msg_json {
+        let raw_content = msg
+            .get("content")
+            .and_then(|c| c.as_str())
+            .unwrap_or("")
+            .to_string();
+        if !raw_content.trim().is_empty() {
+            // Serialise structured metadata to JSON strings, NULL when
+            // absent/empty so the column matches the "no metadata"
+            // shape every existing row already carries.
+            let files_json = msg
+                .get("files")
+                .filter(|v| v.is_array() && !v.as_array().map(|a| a.is_empty()).unwrap_or(true))
+                .map(|v| v.to_string());
+            let workflow_json = msg
+                .get("workflow")
+                .filter(|v| v.is_object())
+                .map(|v| v.to_string());
+            let template_json = msg
+                .get("template")
+                .filter(|v| v.is_object())
+                .map(|v| v.to_string());
+
             let user_msg_id = uuid::Uuid::new_v4().to_string();
             let _ = sqlx::query(
-                "INSERT INTO messages (id, chat_id, role, content) VALUES (?, ?, 'user', ?)",
+                "INSERT INTO messages (id, chat_id, role, content, files, workflow, template) \
+                 VALUES (?, ?, 'user', ?, ?, ?, ?)",
             )
             .bind(&user_msg_id)
             .bind(&chat_id)
-            .bind(content)
+            .bind(&raw_content)
+            .bind(&files_json)
+            .bind(&workflow_json)
+            .bind(&template_json)
             .execute(&state.db)
             .await;
         }
@@ -2746,35 +2788,52 @@ async fn get_chat(
     let (chat_id, user_id, project_id, title, updated_at) =
         row.ok_or_else(|| err(StatusCode::NOT_FOUND, "Chat not found"))?;
 
-    let msg_rows: Vec<(String, String, Option<String>, String, Option<String>, Option<String>)> =
-        sqlx::query_as(
-            "SELECT id, role, content, created_at, annotations, events \
-             FROM messages WHERE chat_id = ? ORDER BY created_at ASC",
-        )
-        .bind(&chat_id)
-        .fetch_all(&state.db)
-        .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    type MsgRow = (
+        String,         // id
+        String,         // role
+        Option<String>, // content
+        String,         // created_at
+        Option<String>, // annotations (assistant)
+        Option<String>, // events (assistant)
+        Option<String>, // files (user)
+        Option<String>, // workflow (user)
+        Option<String>, // template (user)
+    );
+    let msg_rows: Vec<MsgRow> = sqlx::query_as(
+        "SELECT id, role, content, created_at, annotations, events, files, workflow, template \
+         FROM messages WHERE chat_id = ? ORDER BY created_at ASC",
+    )
+    .bind(&chat_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     let with_annot = msg_rows
         .iter()
-        .filter(|(_, role, _, _, ann, _)| role == "assistant" && ann.is_some())
+        .filter(|r| r.1 == "assistant" && r.4.is_some())
         .count();
     let with_events = msg_rows
         .iter()
-        .filter(|(_, role, _, _, _, ev)| role == "assistant" && ev.is_some())
+        .filter(|r| r.1 == "assistant" && r.5.is_some())
+        .count();
+    let with_files = msg_rows
+        .iter()
+        .filter(|r| r.1 == "user" && r.6.is_some())
         .count();
     tracing::info!(
-        "[chat] GET /chat/{}: {} messages total, {} assistant rows with annotations, {} with persistent events",
+        "[chat] GET /chat/{}: {} messages total, \
+         {} assistant rows w/ annotations, {} w/ persistent events, \
+         {} user rows w/ persisted files",
         chat_id,
         msg_rows.len(),
         with_annot,
         with_events,
+        with_files,
     );
 
     let messages: Vec<Value> = msg_rows
         .into_iter()
-        .map(|(mid, role, content, created_at, annotations, events)| {
+        .map(|(mid, role, content, created_at, annotations, events, files, workflow, template)| {
             let content_value = if role == "assistant" {
                 let mut arr = vec![json!({
                     "type": "content",
@@ -2805,13 +2864,38 @@ async fn get_chat(
                 .and_then(|s| serde_json::from_str::<Value>(s).ok())
                 .map(sanitise_annotations_quotes)
                 .unwrap_or_else(|| Value::Array(Vec::new()));
-            json!({
+            // User-side metadata — files / workflow / template (see
+            // migration 0021). Parse-on-read: if the stored JSON is
+            // corrupt the field is dropped silently, the user message
+            // still renders as plain text.
+            let mut entry = json!({
                 "id": mid,
                 "role": role,
                 "content": content_value,
                 "created_at": created_at,
                 "annotations": annotations_value,
-            })
+            });
+            if role == "user" {
+                if let Some(v) = files
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str::<Value>(s).ok())
+                {
+                    entry["files"] = v;
+                }
+                if let Some(v) = workflow
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str::<Value>(s).ok())
+                {
+                    entry["workflow"] = v;
+                }
+                if let Some(v) = template
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str::<Value>(s).ok())
+                {
+                    entry["template"] = v;
+                }
+            }
+            entry
         })
         .collect();
 
