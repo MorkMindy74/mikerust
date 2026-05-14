@@ -55,6 +55,18 @@ pub struct WorkflowPreset {
     /// Tabular column schema. Optional (assistant workflows omit it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub columns_config: Option<Vec<WorkflowColumn>>,
+    /// Optional DocxTemplate id this workflow's output should be
+    /// formatted with. When set on an `assistant`-type workflow, the
+    /// chat handler:
+    ///   1. Injects the template's authoring prompt (auto-generated
+    ///      from its sidecar fields) into the system message.
+    ///   2. Encourages the LLM to finish the conversation by calling
+    ///      `generate_docx(template_id=..., body_md=..., metadata=...)`.
+    /// Omitted → workflow produces plain chat output; the user can
+    /// still ask for a docx after the fact via the bare
+    /// `generate_docx` tool. The wiring is opt-in per template.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_output_template: Option<String>,
 }
 
 impl WorkflowPreset {
@@ -77,6 +89,7 @@ impl WorkflowPreset {
             "columns_config": columns,
             "practice": self.practice,
             "domain": self.domain,
+            "default_output_template": self.default_output_template,
             "created_at": "",
             "is_system": true,
             "is_owner": false,

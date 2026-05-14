@@ -301,6 +301,142 @@ impl DocxTemplate {
         }
         v
     }
+
+    /// Compose the system-prompt block that teaches an LLM how to
+    /// write a document for this specific template. Derived
+    /// **entirely** from the structured sidecar fields — margins,
+    /// typography, section skeleton, required metadata — so a change
+    /// to the JSON propagates to the prompt at the next restart
+    /// without manual edits. The author can still append a free-form
+    /// `prompt_md_extra` block for jurisdiction-specific tone notes.
+    ///
+    /// Output mirrors the "Schema del prompt di formattazione" in
+    /// `docs/TEMPLATE_PRONTUARIO.md` Parte V — same shape, same
+    /// section headers, same placeholder-syntax instruction. The LLM
+    /// reads this as the closing-formatter contract for the
+    /// document type it's about to produce.
+    pub fn auto_generated_prompt_md(&self, locale: &str) -> String {
+        let mut out = String::with_capacity(2048);
+        let kind = self.display_name_for(locale);
+        out.push_str(&format!("Generate a Word (.docx) document for: **{kind}**.\n\n"));
+
+        // ── Source reference (so the LLM knows where the spec lives).
+        if let Some(src) = &self.source_reference {
+            out.push_str(&format!("Authoritative spec: {src}\n\n"));
+        }
+
+        // ── Layout block.
+        out.push_str("LAYOUT (rendered automatically by the docx engine — do NOT include manual page-setup instructions in your output):\n");
+        out.push_str(&format!(
+            "- Paper: {} {}\n",
+            self.paper.size, self.paper.orientation
+        ));
+        if self.paper.format != "standard" {
+            out.push_str(&format!("- Special format: {}\n", self.paper.format));
+        }
+        out.push_str(&format!(
+            "- Margins (cm): top {} / right {} / bottom {} / left {}\n",
+            self.margins_cm.top,
+            self.margins_cm.right,
+            self.margins_cm.bottom,
+            self.margins_cm.left,
+        ));
+        out.push_str(&format!(
+            "- Body font: {} {}pt, line spacing {}, alignment {}\n",
+            self.typography.body_font,
+            self.typography.body_size_pt,
+            self.typography.line_spacing,
+            self.typography.alignment,
+        ));
+        if let Some(f) = &self.footnotes {
+            out.push_str(&format!(
+                "- Footnotes: {} {}pt, line spacing {}\n",
+                f.font, f.size_pt, f.line_spacing
+            ));
+        }
+        out.push('\n');
+
+        // ── Placeholder convention (always square brackets per the
+        //    Prontuario, but we read it from the field so a future
+        //    template variant can opt into Jinja or DOCPROPERTY).
+        out.push_str(&format!(
+            "PLACEHOLDERS: use the `{}` convention — e.g. `[NOME]`, \
+             `[DATA]`, `[PARTE_ASSISTITA.CF]`. Tokens are uppercase \
+             with `_` and `.` allowed. The docx engine substitutes \
+             every `[NAME]` against a metadata bag at render time. \
+             Tokens that don't match a bag key are left verbatim in \
+             the final document so the user sees the gap during \
+             proofread.\n\n",
+            self.placeholder_syntax,
+        ));
+
+        // ── Required metadata that the call to generate_docx must
+        //    carry. Universal fields (LUOGO, DATA, MITTENTE, etc.)
+        //    are inherited and always required — they're not listed
+        //    here because every template needs them.
+        if !self.required_metadata.is_empty() {
+            out.push_str("REQUIRED METADATA (must be present in the `metadata` argument when calling `generate_docx`):\n");
+            for field in &self.required_metadata {
+                if let Some(hint) = self.field_prompts.get(field) {
+                    out.push_str(&format!("- `{field}` — {hint}\n"));
+                } else {
+                    out.push_str(&format!("- `{field}`\n"));
+                }
+            }
+            out.push('\n');
+        }
+
+        // ── Section skeleton (the structural blueprint).
+        if !self.section_skeleton.is_empty() {
+            out.push_str("SECTION SKELETON (emit sections in this order, using Markdown headings for titles):\n");
+            for entry in &self.section_skeleton {
+                let title = entry.title.as_deref().unwrap_or("");
+                let render = entry.render.as_deref().unwrap_or("");
+                let rep = if entry.repeating { " [REPEATING BLOCK]" } else { "" };
+                let label = if !title.is_empty() {
+                    format!("**{title}**{rep}")
+                } else if !render.is_empty() {
+                    format!("literal: `{render}`{rep}")
+                } else {
+                    format!("`{}`{rep}", entry.id)
+                };
+                out.push_str(&format!("- {label}"));
+                if let Some(g) = &entry.guidance {
+                    out.push_str(&format!(" — {g}"));
+                }
+                out.push('\n');
+            }
+            out.push('\n');
+        }
+
+        // ── Character limits (D.M. 110/2023 — atti difensivi only,
+        //    but the field is generic).
+        if let Some(limits) = &self.character_limits {
+            out.push_str("CHARACTER LIMITS (apply by `atto_type` value):\n");
+            let mut entries: Vec<(&String, &u64)> = limits.by_atto_type.iter().collect();
+            entries.sort_by_key(|(k, _)| k.as_str());
+            for (k, v) in entries {
+                out.push_str(&format!("- `{k}`: max {v} characters\n"));
+            }
+            out.push_str("Exceeding the limit produces no invalidity but may be sanctioned by the judge — self-moderate.\n\n");
+        }
+
+        // ── Author override block (free-form tone notes).
+        if let Some(extra) = &self.prompt_md_extra {
+            out.push_str("ADDITIONAL AUTHOR NOTES:\n");
+            out.push_str(extra.trim());
+            out.push_str("\n\n");
+        }
+
+        out.push_str(&format!(
+            "When ready, call `generate_docx(template_id=\"{}\", body_md=..., metadata=...)`. \
+             Do NOT include layout instructions in the body — the engine handles them. \
+             Write Markdown body content, no front-matter.\n",
+            self.id,
+        ));
+
+        out
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -532,6 +668,51 @@ mod tests {
                 "missing shipped template {expected} (found: {ids:?})"
             );
         }
+    }
+
+    #[test]
+    fn auto_generated_prompt_md_contains_layout_and_skeleton() {
+        // Use the actual shipped Diffida template — anchors the test
+        // to a representative real-world sidecar.
+        let dir = crate::presets::config_subdir("docx-templates");
+        let templates = load_docx_templates(&dir).expect("load");
+        let diffida = templates
+            .iter()
+            .find(|t| t.id == "it/diffida-messa-in-mora")
+            .expect("diffida present");
+        let prompt = diffida.auto_generated_prompt_md("it");
+
+        // Layout invariants come straight from the sidecar fields.
+        assert!(prompt.contains("Diffida"), "display name missing");
+        assert!(prompt.contains("Paper: A4"), "paper missing");
+        assert!(prompt.contains("Calibri"), "font missing");
+        assert!(prompt.contains("11pt") || prompt.contains("11 pt"));
+        // Authoritative spec back-reference resolves to the Prontuario.
+        assert!(prompt.contains("TEMPLATE_PRONTUARIO.md"));
+        // Required metadata listed with field_prompts as hints.
+        assert!(prompt.contains("`DEBITORE`"));
+        assert!(prompt.contains("`IMPORTO`"));
+        assert!(prompt.contains("`TERMINE_GG`"));
+        // Section skeleton present.
+        assert!(prompt.contains("DIFFIDA E METTE IN MORA"));
+        // Closing instruction telling the LLM how to call the tool.
+        assert!(prompt.contains("generate_docx"));
+        assert!(prompt.contains(r#"template_id="it/diffida-messa-in-mora""#));
+        // Placeholder convention echoed.
+        assert!(prompt.contains("square_brackets"));
+    }
+
+    #[test]
+    fn auto_generated_prompt_md_marks_repeating_blocks() {
+        // Parcella has a `voci_onorario` repeating section.
+        let dir = crate::presets::config_subdir("docx-templates");
+        let templates = load_docx_templates(&dir).expect("load");
+        let parcella = templates
+            .iter()
+            .find(|t| t.id == "it/parcella-professionale")
+            .expect("parcella present");
+        let prompt = parcella.auto_generated_prompt_md("it");
+        assert!(prompt.contains("[REPEATING BLOCK]"));
     }
 
     #[test]

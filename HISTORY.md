@@ -12,6 +12,112 @@ diff. For the upstream-sync audit trail (which fixes were ported from
 
 ---
 
+## 2026-05-14 — DOCX template wiring (Phase 1.A.2 — LLM tools + HTTP endpoint)
+
+Glue between the renderer (Phase 1.A.1) and the rest of the system:
+LLM tools to discover and use templates, an HTTP endpoint for the
+frontend to download `.docx` files directly, and workflow → template
+wiring so a workflow can declare "I produce a Diffida" and the
+authoring contract flows through to the model in one round-trip.
+
+### Added — LLM tools
+
+- **`list_docx_templates(domain?, locale?)`** — returns every loaded
+  template with id, display_name, category, domain, automation_level,
+  required_metadata, and source_reference. Filters by canonical
+  domain enum or locale prefix. First step of the workflow:
+  "user wants to produce a structured doc → discover what's
+  available".
+- **`describe_docx_template(template_id)`** — returns the full
+  authoring contract: the auto-generated `prompt_md` (composed
+  programmatically from sidecar fields per `docs/TEMPLATE_PRONTUARIO.md`
+  Parte V) plus the raw sidecar for introspection. Second step:
+  "I picked the Diffida — how do I write it?". The model injects
+  the returned `prompt_md` into its working context and then writes
+  the body following the section_skeleton.
+- **`generate_docx(body_md, template_id?, metadata?, title?)`**
+  extended — when `template_id` is supplied, routes through the new
+  `src/docx::render` pipeline with `metadata` as the `[PLACEHOLDER]`
+  bag; when omitted, falls back to the legacy
+  `markdown_to_docx(title, body)` path for backwards compat. Response
+  includes `unresolved_placeholders` when any `[TOKEN]` was left
+  unfilled, so the LLM can surface the gap to the user instead of
+  pretending the document is complete.
+
+### Added — `DocxTemplate::auto_generated_prompt_md(locale)`
+
+Composes the closing-formatter contract entirely from structured
+sidecar fields — layout (paper, margins, typography, footnotes),
+placeholder syntax, required_metadata with per-field guidance from
+`field_prompts`, the full section_skeleton with `[REPEATING BLOCK]`
+markers for L3 templates, character_limits for atti difensivi, and
+the author override `prompt_md_extra` if present. Closes with the
+canonical "call `generate_docx(template_id="...", ...)`" instruction.
+
+Means: editing the sidecar JSON propagates to the LLM prompt at the
+next restart. Zero drift between what the engine renders and what
+the LLM thinks it should write. Two unit tests anchor the output to
+the shipped Diffida (lists DEBITORE/IMPORTO/TERMINE_GG, mentions
+the canonical "DIFFIDA E METTE IN MORA" formula) and Parcella
+(marks `voci_onorario` as `[REPEATING BLOCK]`).
+
+### Added — Workflow → Template wiring
+
+- `WorkflowPreset.default_output_template: Option<String>` — opt-in
+  field on the workflow sidecar. When set on an `assistant`-type
+  workflow, the chat handler doesn't need to pre-load anything —
+  the existing `read_workflow` tool now bundles the linked template
+  in its response when invoked.
+- `read_workflow` extended: short-circuits to the preset registry
+  first (previously DB-only — preset workflows would 404), and when
+  the workflow has a `default_output_template`, attaches the
+  template's id + display_name + automation_level + required_metadata
+  + auto-generated prompt_md as `default_output_template.*` in the
+  same JSON response. A `closing_instruction` field explicitly tells
+  the LLM "this workflow ends with a `generate_docx` call".
+
+### Added — `POST /docx-templates/{describe,render}`
+
+Frontend-facing HTTP endpoints (LLM-tool-equivalent but for the UI):
+
+- **`POST /docx-templates/describe`** — body `{ template_id, locale? }`,
+  returns the same payload as `describe_docx_template` tool. Powers
+  the workflow editor's "Preview authoring contract" affordance.
+- **`POST /docx-templates/render`** — body `{ template_id, body_md,
+  metadata, filename? }`, returns the rendered `.docx` bytes with
+  `Content-Disposition: attachment` and a custom
+  `X-Unresolved-Placeholders` header listing any `[TOKEN]` still
+  present. The UI uses this for "anteprima" / "scarica subito" flows
+  without persisting the doc in the user's documents list.
+
+Template ids contain `/` (e.g. `it/diffida-messa-in-mora`) so we
+pass them in the JSON body instead of the URL path — sidesteps
+URL-encoding pitfalls in clients.
+
+### Tests
+
+- `auto_generated_prompt_md_contains_layout_and_skeleton` —
+  anchors the prompt output to the real shipped Diffida sidecar.
+- `auto_generated_prompt_md_marks_repeating_blocks` — verifies
+  `[REPEATING BLOCK]` markup for L3 templates (Parcella).
+- Updated `schemas_have_required_fields` to expect 7 tools (was 5).
+- Updated `is_builtin_recognises_each_tool` to include the two new
+  tool names.
+
+Full crate test count: 296/296 green (the 2 new + the 294 baseline).
+
+### What's still deferred to later
+
+- The `read_workflow` extension only walks the preset registry for
+  the workflow itself; the DB branch can't carry
+  `default_output_template` yet because the SQL `workflows` table
+  doesn't have a corresponding column. Phase 2 will add a migration
+  + expose the field in the workflow editor.
+- Frontend `/account/templates` page (preview / list / link from
+  workflows) — Phase 2.
+
+---
+
 ## 2026-05-14 — DOCX renderer (Phase 1.A.1 — end-to-end rendering)
 
 The other half of the template subsystem: the actual pipeline that

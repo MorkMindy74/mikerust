@@ -23,11 +23,19 @@ const FIND_IN_DOCUMENT: &str = "find_in_document";
 const READ_WORKFLOW: &str = "read_workflow";
 const GENERATE_DOCX: &str = "generate_docx";
 const EDIT_DOCUMENT: &str = "edit_document";
+const LIST_DOCX_TEMPLATES: &str = "list_docx_templates";
+const DESCRIBE_DOCX_TEMPLATE: &str = "describe_docx_template";
 
 pub fn is_builtin(name: &str) -> bool {
     matches!(
         name,
-        READ_DOCUMENT | FIND_IN_DOCUMENT | READ_WORKFLOW | GENERATE_DOCX | EDIT_DOCUMENT
+        READ_DOCUMENT
+            | FIND_IN_DOCUMENT
+            | READ_WORKFLOW
+            | GENERATE_DOCX
+            | EDIT_DOCUMENT
+            | LIST_DOCX_TEMPLATES
+            | DESCRIBE_DOCX_TEMPLATE
     )
 }
 
@@ -84,14 +92,46 @@ pub fn schemas() -> Vec<ToolSchema> {
         ),
         fun(
             GENERATE_DOCX,
-            "Produce a downloadable .docx document. Pass `title` (file label) and `body` (Markdown). Returns the new document id and filename.",
+            "Produce a downloadable .docx document. Two modes:\n\
+             • **Template mode** (preferred): pass `template_id` (e.g. 'it/diffida-messa-in-mora') and `metadata` (the values for the template's `[PLACEHOLDERS]`). The body Markdown is rendered through the template's layout — typography, margins, styles all come from the template sidecar. Use `list_docx_templates` to discover templates and `describe_docx_template` to see the required metadata fields for a specific one.\n\
+             • **Plain mode** (legacy): omit `template_id`. Falls back to a minimal generic layout. Pass `title` for the filename.\n\
+             Returns the new document id and filename.",
             json!({
                 "type": "object",
                 "properties": {
                     "title": { "type": "string", "description": "Document title / base filename (no extension)." },
-                    "body":  { "type": "string", "description": "Document content in Markdown. Headings (#, ##, ###), bullet lists and bold/italic are honored." }
+                    "body":  { "type": "string", "description": "Document content in Markdown. Headings, bullet lists, bold/italic honoured. With a template_id, `[PLACEHOLDER]` tokens in the body are substituted against the metadata map." },
+                    "template_id": { "type": "string", "description": "Optional. The id of a docx-template from list_docx_templates (e.g. 'it/diffida-messa-in-mora'). When omitted, falls back to the plain renderer." },
+                    "metadata": {
+                        "type": "object",
+                        "description": "Map of [PLACEHOLDER] name → value, e.g. { \"DEBITORE\": \"Tizio S.r.l.\", \"IMPORTO\": \"€ 12.345,67\" }. Required when template_id is supplied. Universal fields (LUOGO, DATA, MITTENTE, OGGETTO, RIF_PRATICA, ...) should always be filled.",
+                        "additionalProperties": { "type": "string" }
+                    }
                 },
-                "required": ["title", "body"]
+                "required": ["body"]
+            }),
+        ),
+        fun(
+            LIST_DOCX_TEMPLATES,
+            "List the DOCX templates available to the closing formatter. Returns id, display_name, category, domain, automation_level, and required_metadata for each. Filter by `domain` (e.g. 'legal', 'finance', 'real_estate', 'compliance'). Call this FIRST when the user asks to produce a structured document (atto, diffida, parcella, contratto, ...) to pick the right template, then call describe_docx_template to see how to fill it, then generate_docx.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "domain": { "type": "string", "description": "Optional canonical domain filter: 'legal' | 'medical' | 'finance' | 'real_estate' | 'hr' | 'insurance' | 'ip' | 'compliance' | 'others'." },
+                    "locale": { "type": "string", "description": "Optional locale filter, e.g. 'it' to see only Italian templates." }
+                },
+                "required": []
+            }),
+        ),
+        fun(
+            DESCRIBE_DOCX_TEMPLATE,
+            "Get the full authoring contract for a specific DOCX template: auto-generated system-prompt block (layout + section skeleton + required fields + per-field guidance), source reference into the Prontuario, and raw sidecar JSON. Call this AFTER list_docx_templates and BEFORE generate_docx — the returned `prompt_md` is what teaches you how to write a correct body for this template.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "template_id": { "type": "string", "description": "The template id from list_docx_templates, e.g. 'it/diffida-messa-in-mora'." }
+                },
+                "required": ["template_id"]
             }),
         ),
         fun(
@@ -136,6 +176,8 @@ pub async fn dispatch(
         READ_WORKFLOW => exec_read_workflow(state, user_id, arguments).await,
         GENERATE_DOCX => exec_generate_docx(state, user_id, arguments).await,
         EDIT_DOCUMENT => exec_edit_document(state, user_id, doc_label_map, arguments).await,
+        LIST_DOCX_TEMPLATES => exec_list_docx_templates(state, arguments).await,
+        DESCRIBE_DOCX_TEMPLATE => exec_describe_docx_template(state, arguments).await,
         other => json!({"error": format!("unknown builtin tool: {other}")}).to_string(),
     }
 }
@@ -262,6 +304,20 @@ async fn exec_read_workflow(state: &AppState, user_id: &str, arguments: &Value) 
     if id.is_empty() {
         return json!({"error": "workflow_id is required"}).to_string();
     }
+
+    // ── First check the in-memory preset registry. System workflows
+    // (`builtin-*`) live there, not in the DB. Without this branch
+    // every preset workflow would 404 on read_workflow.
+    if let Some(preset) = state.workflow_presets.iter().find(|p| p.id == id) {
+        return augment_workflow_with_template(
+            state,
+            id,
+            &preset.title,
+            preset.prompt_md.as_deref().unwrap_or(""),
+            preset.default_output_template.as_deref(),
+        );
+    }
+
     let row: Option<(String, String)> =
         sqlx::query_as("SELECT title, prompt_md FROM workflows WHERE id = ? AND user_id = ?")
             .bind(id)
@@ -273,19 +329,127 @@ async fn exec_read_workflow(state: &AppState, user_id: &str, arguments: &Value) 
     let Some((title, prompt_md)) = row else {
         return json!({"error": format!("workflow {id} not found")}).to_string();
     };
-    json!({ "workflow_id": id, "title": title, "prompt_md": prompt_md }).to_string()
+    // User-created workflows don't carry default_output_template yet
+    // — that's a system-preset-only field for now. Phase 2 may surface
+    // it in the workflow editor UI and add the DB column.
+    augment_workflow_with_template(state, id, &title, &prompt_md, None)
+}
+
+/// Bundle workflow prompt with the linked DOCX template's authoring
+/// contract (if any) in a single tool response. Saves the LLM a
+/// round-trip when the workflow is wired to produce a docx.
+fn augment_workflow_with_template(
+    state: &AppState,
+    workflow_id: &str,
+    title: &str,
+    prompt_md: &str,
+    default_output_template: Option<&str>,
+) -> String {
+    let mut payload = json!({
+        "workflow_id": workflow_id,
+        "title": title,
+        "prompt_md": prompt_md,
+    });
+
+    if let Some(tpl_id) = default_output_template {
+        if let Some(template) = state.docx_templates.iter().find(|t| t.id == tpl_id) {
+            payload["default_output_template"] = json!({
+                "template_id": template.id,
+                "display_name": template.display_name_for("it"),
+                "automation_level": template.automation_level,
+                "required_metadata": template.required_metadata,
+                "prompt_md": template.auto_generated_prompt_md("it"),
+                "source_reference": template.source_reference,
+            });
+            payload["closing_instruction"] = json!(format!(
+                "This workflow produces a Word document. Once the user's request is clear, write the body in Markdown and call generate_docx(template_id=\"{}\", body_md=..., metadata=...). The template's authoring contract above (default_output_template.prompt_md) tells you what sections to emit and which fields to collect.",
+                template.id
+            ));
+        } else {
+            payload["default_output_template_missing"] = json!(format!(
+                "Workflow references template_id={tpl_id} but it isn't loaded. The user should drop the sidecar into config/docx-templates/. Continue without docx output."
+            ));
+        }
+    }
+    payload.to_string()
 }
 
 async fn exec_generate_docx(state: &AppState, user_id: &str, arguments: &Value) -> String {
-    let title = arguments.get("title").and_then(|v| v.as_str()).unwrap_or("Untitled").trim().to_string();
     let body = arguments.get("body").and_then(|v| v.as_str()).unwrap_or("");
     if body.is_empty() {
         return json!({"error": "body (Markdown) is required"}).to_string();
     }
-    let bytes = match crate::pdf::docx_writer::markdown_to_docx(&title, body) {
-        Ok(b) => b,
-        Err(e) => return json!({"error": format!("docx build: {e}")}).to_string(),
-    };
+    let template_id = arguments
+        .get("template_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
+    let explicit_title = arguments
+        .get("title")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    // ── Branch A: template-driven render via src/docx/ pipeline.
+    let (bytes, default_title, unresolved): (Vec<u8>, String, Vec<String>) =
+        if let Some(template_id) = template_id {
+            let template = state
+                .docx_templates
+                .iter()
+                .find(|t| t.id == template_id);
+            let Some(template) = template else {
+                return json!({
+                    "error": format!("template_id {template_id} not found"),
+                    "hint": "Call list_docx_templates to see available ids."
+                })
+                .to_string();
+            };
+
+            // metadata map[String→String]. Coerce numeric / bool
+            // values to string so the LLM can be sloppy.
+            let metadata: std::collections::HashMap<String, String> = arguments
+                .get("metadata")
+                .and_then(|v| v.as_object())
+                .map(|obj| {
+                    obj.iter()
+                        .map(|(k, v)| {
+                            let s = match v {
+                                Value::String(s) => s.clone(),
+                                Value::Number(n) => n.to_string(),
+                                Value::Bool(b) => b.to_string(),
+                                Value::Null => String::new(),
+                                other => other.to_string(),
+                            };
+                            (k.clone(), s)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let outcome = match crate::docx::render(template, body, &metadata) {
+                Ok(o) => o,
+                Err(e) => return json!({"error": format!("docx render: {e}")}).to_string(),
+            };
+            let title_default = template
+                .display_name_for("it")
+                .replace('/', "-");
+            (outcome.bytes, title_default, outcome.unresolved_placeholders)
+        } else {
+            // ── Branch B: backwards-compat plain render.
+            let title_for_legacy = explicit_title
+                .clone()
+                .unwrap_or_else(|| "Untitled".to_string());
+            let bytes =
+                match crate::pdf::docx_writer::markdown_to_docx(&title_for_legacy, body) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        return json!({"error": format!("docx build: {e}")}).to_string();
+                    }
+                };
+            (bytes, title_for_legacy, Vec::new())
+        };
+
+    let title = explicit_title.unwrap_or(default_title);
     let safe_title = sanitize_filename(&title);
     let filename = format!("{safe_title}.docx");
     let doc_id = uuid::Uuid::new_v4().to_string();
@@ -322,11 +486,87 @@ async fn exec_generate_docx(state: &AppState, user_id: &str, arguments: &Value) 
         return json!({"error": format!("db: {e}")}).to_string();
     }
 
-    json!({
+    let mut payload = json!({
         "doc_id": doc_id,
         "filename": filename,
         "size_bytes": size,
         "note": "Document persisted as a standalone document. Call read_document with this doc_id to verify content before describing it to the user."
+    });
+    if !unresolved.is_empty() {
+        payload["unresolved_placeholders"] = json!(unresolved);
+        payload["warning"] = json!(format!(
+            "{} placeholder(s) still present in the document — these metadata fields were not supplied: {}. The document is generated but the user will see the gaps. Consider regenerating with the missing fields filled.",
+            unresolved.len(),
+            unresolved.join(", ")
+        ));
+    }
+    payload.to_string()
+}
+
+async fn exec_list_docx_templates(state: &AppState, arguments: &Value) -> String {
+    let domain_filter = arguments
+        .get("domain")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let locale_filter = arguments
+        .get("locale")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let items: Vec<Value> = state
+        .docx_templates
+        .iter()
+        .filter(|t| {
+            domain_filter
+                .as_deref()
+                .is_none_or(|d| t.domain == d)
+        })
+        .filter(|t| {
+            locale_filter
+                .as_deref()
+                .is_none_or(|l| t.locale.starts_with(l))
+        })
+        .map(|t| {
+            json!({
+                "id": t.id,
+                "display_name": t.display_name_for("it"),
+                "category": t.category,
+                "domain": t.domain,
+                "locale": t.locale,
+                "automation_level": t.automation_level,
+                "required_metadata": t.required_metadata,
+                "source_reference": t.source_reference,
+            })
+        })
+        .collect();
+    json!({ "templates": items, "count": items.len() }).to_string()
+}
+
+async fn exec_describe_docx_template(state: &AppState, arguments: &Value) -> String {
+    let id = arguments
+        .get("template_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if id.is_empty() {
+        return json!({"error": "template_id is required"}).to_string();
+    }
+    let Some(template) = state.docx_templates.iter().find(|t| t.id == id) else {
+        return json!({
+            "error": format!("template {id} not found"),
+            "hint": "Call list_docx_templates to see available ids."
+        })
+        .to_string();
+    };
+    // Return both the auto-generated authoring prompt AND the raw
+    // sidecar so the model can introspect any field it wants. The
+    // prompt_md is the load-bearing payload — it's what the model
+    // injects into its own working context to know HOW to write a
+    // body for this template.
+    json!({
+        "template_id": template.id,
+        "display_name": template.display_name_for("it"),
+        "prompt_md": template.auto_generated_prompt_md("it"),
+        "sidecar": template.to_api_json(),
     })
     .to_string()
 }
@@ -465,8 +705,15 @@ mod tests {
 
     #[test]
     fn is_builtin_recognises_each_tool() {
-        for name in ["read_document", "find_in_document", "read_workflow",
-                     "generate_docx", "edit_document"] {
+        for name in [
+            "read_document",
+            "find_in_document",
+            "read_workflow",
+            "generate_docx",
+            "edit_document",
+            "list_docx_templates",
+            "describe_docx_template",
+        ] {
             assert!(is_builtin(name), "{name} should be builtin");
         }
         assert!(!is_builtin("unknown_tool"));
@@ -476,7 +723,7 @@ mod tests {
     #[test]
     fn schemas_have_required_fields() {
         let s = schemas();
-        assert_eq!(s.len(), 5);
+        assert_eq!(s.len(), 7);
         for sch in &s {
             assert_eq!(sch.kind, "function");
             assert!(!sch.function.name.is_empty());
@@ -488,6 +735,8 @@ mod tests {
         assert!(names.contains(&"find_in_document"));
         assert!(names.contains(&"read_workflow"));
         assert!(names.contains(&"generate_docx"));
+        assert!(names.contains(&"list_docx_templates"));
+        assert!(names.contains(&"describe_docx_template"));
         assert!(names.contains(&"edit_document"));
     }
 
