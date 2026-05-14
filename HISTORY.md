@@ -12,6 +12,102 @@ diff. For the upstream-sync audit trail (which fixes were ported from
 
 ---
 
+## 2026-05-14 — Medico-legale toolkit + chat-history persistence + generated-doc cleanup
+
+Three converging streams shipped on the same day, all addressing the
+"will my work still be here tomorrow?" question that the assistant
+chat keeps raising:
+
+### Added — Medico-legale toolkit (11 workflow-presets + 1 DOCX template)
+
+Maps the 7 operational modules of `docs/piano_toolkit_medico_legale.md`
+into MikeRust's preset registry under the canonical `medical` domain.
+All assets load automatically at the next backend boot. Designed to
+chain: each workflow references the `DOC-NN` codes minted by the
+inventario, so the entire perizia flows from one tabella inventario
+through timeline → diagnosi → ITT / IP → relazione finale without
+re-numbering or re-attaching documents.
+
+- **Tabular** (`config/workflow-presets/medical/`):
+  `medlegal-inventario-documenti` (Mod. 1, 8 cols),
+  `medlegal-timeline-cronologica` (Mod. 2, 8 cols),
+  `medlegal-diagnosi-strumentali` (Mod. 3b, 9 cols — the workflow
+  that classifies each reperto DIRETTA / INDIRETTA / ESCLUSIVA /
+  DA VALUTARE for the nesso causale),
+  `medlegal-postumi-temporanei-itt` (Mod. 4, 7 cols, includes the
+  equivalente-ITT-100% formula in the prompt),
+  `medlegal-postumi-permanenti-rc` (Mod. 5a, 9 cols — covers SIMLA
+  2016 / 2025 + micropermanenti Art. 138-139 D.Lgs. 209/2005 +
+  Balthazard),
+  `medlegal-danno-biologico-inail` (Mod. 5b, 6 cols — D.Lgs. 38/2000
+  + DM 12 luglio 2000 / DM 9 aprile 2008, soglie capitale / rendita),
+  `medlegal-invalidita-civile` (Mod. 5c, 6 cols — DM 5 febbraio
+  1992, soglie 33% / 46% / 67% / 74% / accompagnamento).
+- **Assistant** (narrative): `medlegal-diagnosi-ingresso` (Mod. 3a,
+  scheda strutturata da verbale PS), `medlegal-diagnosi-dimissione`
+  (Mod. 3c, scheda strutturata da lettera di dimissione),
+  `medlegal-nesso-causale` (Sez. 6 della relazione, sei sotto-sezioni
+  cronologico / topografico / continuità / esclusione / concausa /
+  conclusione), `medlegal-quality-check` (Mod. 7, 10-point checklist
+  pre-firma).
+- **DOCX template** (`config/docx-templates/it/relazione-medico-legale.json`):
+  A4 portrait, Calibri 11pt justify, 11 sezioni dal Premessa agli
+  Allegati. `also_applicable_to: [legal, insurance]` perché CTU e
+  perizie assicurative la usano trasversalmente. 8 required_metadata
+  (PERITO_NOME, PERITO_QUALIFICA, INCARICO_TIPO, DATA_EVENTO,
+  QUESITI, REGIME_APPLICABILE, IP_TOTALE, ITT_GIORNI_EQUIV).
+
+Registry totals at boot: **31 workflow-presets** (was 20, +11
+medical) and **6 DOCX templates** (was 5, +1 medical-legal).
+
+### Fixed — Chat reopen no longer loses uploaded files / workflow chip / template chip
+
+Migration `0021_messages_user_metadata.sql` plus surgical updates to
+`stream_chat` and `get_chat` close the symmetric gap left by
+migration 0020:
+
+- New nullable JSON columns on `messages`: `files`, `workflow`,
+  `template`. Same pattern as `annotations` (0012) and `events`
+  (0020) — one JSON blob per non-text aspect of a message.
+- `stream_chat` now also fixes a related bug: the user message
+  used to be stored with the marker-augmented content
+  (`[Workflow: …]` / `[Template: …]` prefix injected for the LLM),
+  which surfaced as literal text on chat reopen. Stored content is
+  now the raw user-typed text; markers stay in the LLM input only.
+- `get_chat` reads the three new columns and attaches them to user-
+  role entries in the response, matching the wire shape the
+  frontend's `getChat` already expects — no frontend change needed.
+- `tests/chat_history_smoke.rs` is new: two round-trip cases
+  exercising the full files/workflow/template/events path against
+  a tempdir SQLite.
+
+### Fixed — Generated `.docx` now linked to its originating chat (cascade cleanup)
+
+Pre-existing loophole: `exec_generate_docx` inserted into `documents`
+without `chat_id`, so deleting the chat orphaned the file on disk.
+Three pieces:
+
+- `builtin_tools::dispatch` gains a `chat_id: Option<&str>`
+  parameter forwarded to `exec_generate_docx`. The single chat call
+  site passes `Some(&chat_id_clone)`; `None` is kept legal for a
+  future REST-only tool surface.
+- `INSERT INTO documents` in `exec_generate_docx` now binds
+  `chat_id` so the FK cascade on chat deletion catches the row.
+- `delete_chat` cleanup loop gains a second branch for
+  non-hashed (generated) documents: each has a unique
+  `documents/<user_id>/<doc_id>` storage path with no possible
+  aliasing, so the file is freed unconditionally. Tracing now logs
+  the split between cache-hash deletions and generated-doc
+  deletions.
+
+Net effect on the user-visible side: the toolkit produces relazioni
+medico-legali whose DOC-NN inventario, timeline, diagnosi, ITT,
+IP, nesso, and final `.docx` all persist together for the lifetime
+of the chat, then disappear cleanly when the chat is deleted. No
+orphans on either end.
+
+---
+
 ## 2026-05-14 — ort load-dynamic resolved: onnxruntime 1.24.2 ABI match (critical RAG fix)
 
 After three failed attempts that diagnosed the wrong cause, the
