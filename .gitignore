@@ -17,16 +17,33 @@
 coverage/
 
 # ─── Frontend build / cache ─────────────────────────────────────────
-/frontend/node_modules
-/frontend/.next
+# Covers BOTH the new Svelte frontend (frontend/) and the legacy
+# Next.js frontend kept for reference (frontendMike/). node_modules and
+# framework caches use **/ so the patterns survive directory renames.
+**/node_modules/
+**/.next/
+**/.turbo/
+**/.swc/
+**/.parcel-cache/
+**/.vite/
+**/.svelte-kit/
+**/.eslintcache
+# Build output directories — anchored per known frontend dir to avoid
+# matching an unrelated source folder that happens to be named dist/.
 /frontend/out
 /frontend/dist
 /frontend/build
-/frontend/.turbo
-/frontend/.swc
-/frontend/.parcel-cache
 /frontend/.cache
-/frontend/.eslintcache
+/frontendMike/out
+/frontendMike/dist
+/frontendMike/build
+/frontendMike/.cache
+# Test-runner output (Vitest / Playwright).
+**/playwright-report/
+**/test-results/
+**/.vitest/
+# Vite bundle-analysis report.
+**/stats.html
 # TypeScript incremental build cache — wherever next/tsc drops it.
 **/tsconfig.tsbuildinfo
 *.tsbuildinfo
