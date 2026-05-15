@@ -200,10 +200,15 @@ pub async fn run_server_with_channels(
         })
         .unwrap_or_else(|| {
             vec![
+                // Legacy Next.js dev server (frontendMike)
                 "http://localhost:3000".to_string(),
                 "http://localhost:3001".to_string(),
                 "http://127.0.0.1:3000".to_string(),
                 "http://127.0.0.1:3001".to_string(),
+                // New Svelte+Vite dev server (frontend) — Vite default port
+                "http://localhost:5173".to_string(),
+                "http://127.0.0.1:5173".to_string(),
+                // Tauri WebView origins (both dev and prod)
                 "tauri://localhost".to_string(),
                 "https://tauri.localhost".to_string(),
             ]
