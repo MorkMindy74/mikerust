@@ -1,0 +1,49 @@
+MikeRust frontend
+=================
+Copyright (c) 2026 MikeRust contributors.
+
+This product is licensed under the GNU Affero General Public License,
+version 3.0 only (AGPL-3.0-only). See LICENSE for the full terms.
+
+Third-party open-source dependencies (all permissively licensed):
+
+Runtime
+-------
+- svelte                          (MIT)         — UI framework
+- @tauri-apps/api                 (MIT/Apache)  — Tauri IPC bindings
+- @tauri-apps/plugin-stronghold   (MIT/Apache)  — encrypted token vault
+- @tauri-apps/plugin-single-instance (MIT/Apache) — single-instance guard
+- @tauri-apps/plugin-dialog       (MIT/Apache)  — native file pickers
+- @tauri-apps/plugin-window-state (MIT/Apache)  — window geometry persistence
+- @tanstack/table-core            (MIT)         — headless table primitives
+- svelte-virtual                  (MIT)         — list virtualization
+- lucide-svelte                   (ISC)         — icon set
+- marked                          (MIT)         — Markdown parser
+- dompurify                       (Apache-2.0)  — HTML sanitization
+- pdfjs-dist                      (Apache-2.0)  — PDF viewer
+- shiki                           (MIT)         — syntax highlighting
+- @intlify/core-base              (MIT)         — i18n primitives
+
+Build / dev
+-----------
+- vite                            (MIT)         — bundler / dev server
+- @sveltejs/vite-plugin-svelte    (MIT)         — Svelte integration
+- tailwindcss                     (MIT)         — utility CSS
+- @tailwindcss/vite               (MIT)         — Vite plugin
+- typescript                      (Apache-2.0)  — type system
+- svelte-check                    (MIT)         — type-check Svelte files
+- @tauri-apps/cli                 (MIT/Apache)  — Tauri build CLI
+- vitest                          (MIT)         — unit testing
+- @vitest/ui                      (MIT)         — Vitest UI
+- @playwright/test                (Apache-2.0)  — end-to-end testing
+- eslint                          (MIT)         — linter
+- eslint-plugin-svelte            (MIT)         — Svelte lint rules
+- prettier                        (MIT)         — formatter
+- prettier-plugin-svelte          (MIT)         — Svelte formatter
+- license-checker                 (BSD-3-Clause) — license audit
+
+Audit command:
+  pnpm license-audit
+
+License copies for the dependencies above are reproduced in
+node_modules/*/LICENSE files at build time.

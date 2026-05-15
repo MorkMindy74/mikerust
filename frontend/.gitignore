@@ -1,0 +1,21 @@
+node_modules/
+dist/
+.svelte-kit/
+.DS_Store
+*.log
+coverage/
+.vite/
+.turbo/
+test-results/
+playwright-report/
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+
+# Env (do not commit user-specific values)
+.env
+.env.local
+.env.*.local

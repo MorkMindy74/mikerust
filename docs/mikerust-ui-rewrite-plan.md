@@ -858,7 +858,7 @@ cargo tauri build --config src-tauri/tauri.legacy.conf.json  # produce installer
 
 | Plugin | Stato | Note |
 |---|---|---|
-| `tauri-plugin-single-instance` | **MVP — Fase 8** | Previene doppio launch (porta 3001 collide). Decisione Q3. |
+| `tauri-plugin-single-instance` | **MVP — Fase 8** (crate Rust, no API JS) | Previene doppio launch (porta 3001 collide). Decisione Q3. Si aggiunge in `src-tauri/Cargo.toml`, NON con `pnpm add`. |
 | `tauri-plugin-stronghold` | **MVP — Fase 3** | Persistenza cifrata del token "Mantieni accesso" (decisione Q10). Master-password derivata dal PIN. |
 | `tauri-plugin-updater` | **Post-MVP** (schema endpoint definito ora — §23 Q4) | Endpoint `https://updates.mikerust.app/{target}/{current_version}`, firma minisign. Generare chiave pubblica e committarla nel conf quando si attiva. |
 | `tauri-plugin-dialog` | **MVP — Fase 5** | File picker nativo per `.mikeprj` import (più ergonomico di `<input type=file>` in Tauri WebView). |

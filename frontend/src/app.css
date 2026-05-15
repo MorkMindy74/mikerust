@@ -1,0 +1,128 @@
+/* Copyright (c) 2026 MikeRust contributors. Licensed under AGPL-3.0-only. */
+
+@import "tailwindcss";
+
+@theme {
+  /* Brand — Tailwind Orange (palette ruggine, da brand audit) */
+  --color-brand-50:  #fff7ed;
+  --color-brand-100: #ffedd5;
+  --color-brand-200: #fed7aa;
+  --color-brand-300: #fdba74;
+  --color-brand-400: #fb923c;
+  --color-brand-500: #ea580c;
+  --color-brand-600: #c2410c;
+  --color-brand-700: #9a3412;
+  --color-brand-800: #7c2d12;
+  --color-brand-900: #431407;
+
+  /* Superfici (light) */
+  --color-surface-0:   #ffffff;
+  --color-surface-50:  #f9fafb;
+  --color-surface-100: #f3f4f6;
+  --color-surface-200: #e5e7eb;
+  --color-surface-300: #d1d5db;
+
+  /* Testo (light) */
+  --color-text-primary:   #111827;
+  --color-text-secondary: #6b7280;
+  --color-text-disabled:  #9ca3af;
+  --color-text-inverse:   #ffffff;
+
+  /* Stato semantico */
+  --color-success-500: #16a34a;
+  --color-warning-500: #f59e0b;
+  --color-danger-500:  #dc2626;
+  --color-info-500:    #2563eb;
+
+  /* Layout */
+  --sidebar-width: 272px;
+  --topbar-height: 56px;
+  --content-max-width: 1080px;
+
+  /* Interattivo */
+  --color-active-bg:  #f3f4f6;
+  --color-hover-bg:   #f9fafb;
+  --color-focus-ring: var(--color-brand-500);
+
+  /* Typography (sistema-prima, Geist override quando bundlato) */
+  --font-sans: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* Radius */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+
+  /* Shadows */
+  --shadow-xs:    0 1px 1px 0 rgb(0 0 0 / 0.04);
+  --shadow-sm:    0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-md:    0 4px 6px -1px rgb(0 0 0 / 0.1);
+  --shadow-lg:    0 10px 15px -3px rgb(0 0 0 / 0.1);
+  --shadow-modal: 0 20px 60px -10px rgb(0 0 0 / 0.15);
+
+  /* Motion */
+  --transition-fast:   120ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-medium: 200ms cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Componenti specifici (da brand audit) */
+  --cta-pill-bg:       #111111;
+  --cta-pill-fg:       #ffffff;
+  --cta-pill-radius:   999px;
+  --cta-pill-padding:  0.625rem 1.25rem;
+
+  --badge-level-bg:    var(--color-brand-50);
+  --badge-level-fg:    var(--color-brand-600);
+
+  --badge-assistant-bg: #dbeafe;
+  --badge-assistant-fg: #1e40af;
+  --badge-tabular-bg:   #ede9fe;
+  --badge-tabular-fg:   #6d28d9;
+}
+
+@media (prefers-color-scheme: dark) {
+  @theme {
+    --color-surface-0:   #0b0b0e;
+    --color-surface-50:  #111114;
+    --color-surface-100: #18181c;
+    --color-surface-200: #232328;
+    --color-surface-300: #2f2f36;
+    --color-text-primary:   #f3f4f6;
+    --color-text-secondary: #9ca3af;
+    --color-text-disabled:  #6b7280;
+    --color-active-bg: #18181c;
+    --color-hover-bg:  #111114;
+  }
+}
+
+html, body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--color-surface-0);
+  color: var(--color-text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#app {
+  min-height: 100%;
+  display: grid;
+}
+
+/* Streaming caret per §9.5 — usato in ChatMessage */
+.streaming-caret {
+  display: inline-block;
+  width: 0.5ch;
+  height: 1em;
+  margin-left: 1px;
+  background-color: currentColor;
+  vertical-align: text-bottom;
+  animation: caret-blink 1s steps(1) infinite;
+}
+@keyframes caret-blink {
+  50% { opacity: 0; }
+}

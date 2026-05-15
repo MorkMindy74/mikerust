@@ -1,0 +1,51 @@
+                    GNU AFFERO GENERAL PUBLIC LICENSE
+                       Version 3, 19 November 2007
+
+ Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>
+ Everyone is permitted to copy and distribute verbatim copies of this
+ license document, but changing it is not allowed.
+
+This MikeRust frontend (the source code under `frontend/`) is licensed
+under the GNU Affero General Public License, version 3.0 only
+(AGPL-3.0-only).
+
+The full text of the license is published by the Free Software
+Foundation at: https://www.gnu.org/licenses/agpl-3.0.txt
+
+A copy of the full license text MUST be distributed alongside this
+software. If your distribution does not include the full text yet,
+download it from the URL above and place it in this file before
+redistribution.
+
+------------------------------------------------------------------------
+
+  Copyright (c) 2026 MikeRust contributors. All rights reserved.
+
+  This program is free software: you can redistribute it and/or modify
+  it under the terms of the GNU Affero General Public License as
+  published by the Free Software Foundation, version 3.0 only of the
+  License.
+
+  This program is distributed in the hope that it will be useful, but
+  WITHOUT ANY WARRANTY; without even the implied warranty of
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+  Affero General Public License for more details.
+
+  You should have received a copy of the GNU Affero General Public
+  License along with this program.  If not, see
+  <https://www.gnu.org/licenses/agpl-3.0.txt>.
+
+------------------------------------------------------------------------
+
+This frontend is a CLEAN-ROOM REWRITE that does NOT derive from the
+upstream AGPL project "Mike". It was authored independently starting
+2026-05-15 in Svelte 5, in a new directory tree (`frontend/`), without
+copying code from `frontendMike/` or from any Mike repository.
+
+See `../docs/mikerust-ui-rewrite-plan.md` for the architectural plan
+and anti-contamination rules followed during development.
+
+Re-licensing notice: as the sole copyright holder, the project owner
+may re-license future releases under any terms (Apache 2.0, MIT, BSL,
+proprietary, dual). Previously distributed releases remain under
+AGPL-3.0 for whoever received them.
