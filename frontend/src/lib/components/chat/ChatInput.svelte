@@ -30,6 +30,7 @@
     X,
     Upload,
     FolderSearch,
+    ChevronDown,
   } from 'lucide-svelte'
 
   /** Formats the backend can ingest (plus images for multimodal models). */
@@ -361,21 +362,28 @@
     <div class="flex-1"></div>
 
     {#if modelOptions.length}
-      <select
-        value={currentModel}
-        onchange={(e) => pickModel((e.currentTarget as HTMLSelectElement).value)}
-        aria-label={t('Assistant.selectModel')}
-        class="h-8 max-w-44 rounded-(--radius-md) bg-transparent px-1.5 text-xs
-               text-(--color-text-secondary) hover:text-(--color-text-primary)
-               focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-brand-500)"
-      >
-        {#if !currentModel}
-          <option value="">{t('Assistant.selectModel')}</option>
-        {/if}
-        {#each modelOptions as opt (opt.value)}
-          <option value={opt.value}>{opt.label}</option>
-        {/each}
-      </select>
+      <div class="relative">
+        <select
+          value={currentModel}
+          onchange={(e) => pickModel((e.currentTarget as HTMLSelectElement).value)}
+          aria-label={t('Assistant.selectModel')}
+          class="h-8 max-w-44 appearance-none rounded-(--radius-md) bg-transparent pl-1.5 pr-6 text-xs
+                 text-(--color-text-secondary) hover:text-(--color-text-primary) cursor-pointer
+                 focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-brand-500)"
+        >
+          {#if !currentModel}
+            <option value="">{t('Assistant.selectModel')}</option>
+          {/if}
+          {#each modelOptions as opt (opt.value)}
+            <option value={opt.value}>{opt.label}</option>
+          {/each}
+        </select>
+        <span
+          class="pointer-events-none absolute right-1 top-1/2 -translate-y-1/2 text-(--color-text-secondary)"
+        >
+          <ChevronDown size={14} />
+        </span>
+      </div>
     {/if}
 
     {#if streaming}

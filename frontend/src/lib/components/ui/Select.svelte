@@ -9,6 +9,7 @@
 
 <script lang="ts" generics="T extends string | number">
   import type { HTMLSelectAttributes } from 'svelte/elements'
+  import { ChevronDown } from 'lucide-svelte'
 
   interface Props extends Omit<HTMLSelectAttributes, 'class' | 'value' | 'size'> {
     value?: T
@@ -49,28 +50,38 @@
     </label>
   {/if}
 
-  <select
-    id={selectId}
-    bind:value
-    class="bg-(--color-surface-0) text-(--color-text-primary)
-           border rounded-(--radius-md) px-3 pr-8
-           transition-colors duration-(--transition-fast)
-           focus:outline-none focus:ring-2 focus:ring-(--color-brand-500) focus:border-(--color-brand-500)
-           disabled:opacity-50 disabled:cursor-not-allowed
-           appearance-none cursor-pointer
-           bg-[url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 20 20%22 fill=%22%236b7280%22><path fill-rule=%22evenodd%22 d=%22M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z%22 clip-rule=%22evenodd%22/></svg>')]
-           bg-no-repeat bg-[length:16px_16px] bg-[position:right_0.625rem_center]
-           {sizeClass}
-           {error ? 'border-(--color-danger-500)' : 'border-(--color-surface-200)'}"
-    {...rest}
-  >
-    {#if placeholder}
-      <option value="" disabled selected={value === undefined || value === ''}>{placeholder}</option>
-    {/if}
-    {#each options as opt (opt.value)}
-      <option value={opt.value} disabled={opt.disabled}>{opt.label}</option>
-    {/each}
-  </select>
+  <!-- relative wrapper so the chevron sits over the select -->
+  <div class="relative">
+    <select
+      id={selectId}
+      bind:value
+      class="w-full bg-(--color-surface-0) text-(--color-text-primary)
+             border rounded-(--radius-md) px-3 pr-9
+             transition-colors duration-(--transition-fast)
+             focus:outline-none focus:ring-2 focus:ring-(--color-brand-500) focus:border-(--color-brand-500)
+             disabled:opacity-50 disabled:cursor-not-allowed
+             appearance-none cursor-pointer
+             {sizeClass}
+             {error ? 'border-(--color-danger-500)' : 'border-(--color-surface-200)'}"
+      {...rest}
+    >
+      {#if placeholder}
+        <option value="" disabled selected={value === undefined || value === ''}>
+          {placeholder}
+        </option>
+      {/if}
+      {#each options as opt (opt.value)}
+        <option value={opt.value} disabled={opt.disabled}>{opt.label}</option>
+      {/each}
+    </select>
+    <!-- Dropdown affordance — always visible, click passes through. -->
+    <span
+      class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2
+             text-(--color-text-secondary)"
+    >
+      <ChevronDown size={16} />
+    </span>
+  </div>
 
   {#if error}
     <p class="text-xs text-(--color-danger-500)">{error}</p>
