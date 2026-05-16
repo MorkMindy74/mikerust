@@ -5,12 +5,15 @@
     id: string
     label: string
     sublabel?: string
+    /** Optional filter key (e.g. domain) matched against the filter select. */
+    tag?: string
   }
 </script>
 
 <script lang="ts">
   import Modal from './Modal.svelte'
   import Input from './Input.svelte'
+  import Select from './Select.svelte'
   import Button from './Button.svelte'
   import Spinner from './Spinner.svelte'
   import EmptyState from './EmptyState.svelte'
@@ -25,6 +28,10 @@
     loading?: boolean
     /** Pre-selected ids. */
     initial?: string[]
+    /** When set, renders a filter select that matches `PickerItem.tag`. */
+    filterOptions?: { value: string; label: string }[]
+    /** Current filter value (bindable). Empty string = no filter. */
+    filterValue?: string
     onpick: (ids: string[]) => void
   }
 
@@ -35,6 +42,8 @@
     multi = false,
     loading = false,
     initial = [],
+    filterOptions,
+    filterValue = $bindable(''),
     onpick,
   }: Props = $props()
 
@@ -51,7 +60,11 @@
   })
 
   const filtered = $derived(
-    items.filter((i) => i.label.toLowerCase().includes(query.trim().toLowerCase()))
+    items.filter((i) => {
+      if (!i.label.toLowerCase().includes(query.trim().toLowerCase())) return false
+      if (filterValue && i.tag !== filterValue) return false
+      return true
+    })
   )
 
   function toggle(id: string) {
@@ -73,11 +86,16 @@
 
 <Modal bind:open {title} size="md">
   <div class="space-y-3">
-    <Input bind:value={query} placeholder={t('Common.search')} size="sm">
-      {#snippet iconBefore()}
-        <Search size={14} />
-      {/snippet}
-    </Input>
+    <div class="flex items-center gap-2">
+      <Input bind:value={query} placeholder={t('Common.search')} size="sm" class="flex-1">
+        {#snippet iconBefore()}
+          <Search size={14} />
+        {/snippet}
+      </Input>
+      {#if filterOptions}
+        <Select options={filterOptions} bind:value={filterValue} size="sm" class="w-40" />
+      {/if}
+    </div>
 
     <div class="h-72 overflow-y-auto -mx-1 px-1">
       {#if loading}

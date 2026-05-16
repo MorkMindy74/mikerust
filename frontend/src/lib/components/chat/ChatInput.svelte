@@ -17,7 +17,8 @@
   import { templatesApi } from '$lib/api/templates'
   import { projectsApi } from '$lib/api/projects'
   import { templateDisplayName } from '$lib/types/template'
-  import { domainLabel } from '$lib/types/domain'
+  import { DOMAINS, domainLabel } from '$lib/types/domain'
+  import { userStore } from '$lib/stores/user.svelte'
   import { toastStore } from '$lib/stores/toast.svelte'
   import type { SendAttachments } from '$lib/stores/chat.svelte'
   import type { FileRef, TemplateRef, WorkflowRef } from '$lib/types/chat'
@@ -57,6 +58,16 @@
   let pickerOpen = $state(false)
   let pickerItems = $state<PickerItem[]>([])
   let pickerLoading = $state(false)
+  // Workflow picker domain filter — resets to the user's default on open.
+  let pickerDomain = $state('')
+  const pickerFilterOptions = $derived(
+    pickerKind === 'workflow'
+      ? [
+          { value: '', label: t('Domains.filterPlaceholder') },
+          ...DOMAINS.map((d) => ({ value: d, label: domainLabel(d) })),
+        ]
+      : undefined
+  )
 
   // Consume a template queued by the DOCX-templates "Apply to chat" flow.
   $effect(() => {
@@ -100,6 +111,8 @@
     pickerItems = []
     pickerLoading = true
     pickerOpen = true
+    // The workflow picker defaults to the user's domain; resets each open.
+    pickerDomain = kind === 'workflow' ? userStore.defaultDomain : ''
     try {
       if (kind === 'doc') {
         const r = await documentsApi.list()
@@ -117,6 +130,7 @@
           id: w.id,
           label: w.title,
           sublabel: domainLabel(w.domain),
+          tag: w.domain,
         }))
       } else {
         const r = await templatesApi.list()
@@ -378,5 +392,7 @@
   items={pickerItems}
   loading={pickerLoading}
   multi={pickerKind === 'doc'}
+  filterOptions={pickerFilterOptions}
+  bind:filterValue={pickerDomain}
   onpick={onPick}
 />
