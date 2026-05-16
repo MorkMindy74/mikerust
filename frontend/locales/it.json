@@ -776,7 +776,11 @@
     "inheritsColumns": "Eredita {n} colonne da questo workflow.",
     "scopedToDomain": "Workflow tabellari nel dominio {domain}.",
     "deleteConfirmTitle": "Eliminare la revisione?",
-    "deleteConfirmBody": "\"{title}\" verrà eliminata definitivamente."
+    "deleteConfirmBody": "\"{title}\" verrà eliminata definitivamente.",
+    "noDocuments": "Nessun documento allegato. Aggiungi documenti per eseguire la revisione.",
+    "cellDetail": "Dettaglio cella",
+    "documentColumn": "Documento",
+    "runError": "Esecuzione della revisione non riuscita"
   },
   "Documents": {
     "title": "Documenti",

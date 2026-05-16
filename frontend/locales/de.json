@@ -732,7 +732,11 @@
     "inheritsColumns": "Übernimmt {n} Spalten aus diesem Workflow.",
     "scopedToDomain": "Tabellarische Workflows der Domäne {domain}.",
     "deleteConfirmTitle": "Prüfung löschen?",
-    "deleteConfirmBody": "„{title}“ wird endgültig gelöscht."
+    "deleteConfirmBody": "„{title}“ wird endgültig gelöscht.",
+    "noDocuments": "Keine Dokumente angehängt. Fügen Sie Dokumente hinzu, um die Prüfung auszuführen.",
+    "cellDetail": "Zellendetail",
+    "documentColumn": "Dokument",
+    "runError": "Prüfungslauf fehlgeschlagen"
   },
   "Documents": {
     "title": "Dokumente",

@@ -229,6 +229,16 @@ const T = {
   'Settings.followSystemPrompt': { en: 'Follow the system prompt to continue.', it: 'Segui la richiesta di sistema per continuare.', fr: "Suivez l'invite du système pour continuer.", de: 'Folgen Sie der Systemaufforderung, um fortzufahren.', es: 'Sigue la indicación del sistema para continuar.', pt: 'Siga a solicitação do sistema para continuar.' },
   'Settings.biometricVerifyAria': { en: 'Biometric verification', it: 'Verifica biometrica', fr: 'Vérification biométrique', de: 'Biometrische Überprüfung', es: 'Verificación biométrica', pt: 'Verificação biométrica' },
 
+  // Keys added with the tabular-review grid.
+  'TabularReviews.run': { en: 'Run', it: 'Esegui', fr: 'Exécuter', de: 'Ausführen', es: 'Ejecutar', pt: 'Executar' },
+  'TabularReviews.running': { en: 'Running…', it: 'Esecuzione…', fr: 'Exécution…', de: 'Wird ausgeführt…', es: 'Ejecutando…', pt: 'A executar…' },
+  'TabularReviews.clearResults': { en: 'Clear results', it: 'Cancella risultati', fr: 'Effacer les résultats', de: 'Ergebnisse löschen', es: 'Borrar resultados', pt: 'Limpar resultados' },
+  'TabularReviews.noDocuments': { en: 'No documents attached. Add documents to run the review.', it: 'Nessun documento allegato. Aggiungi documenti per eseguire la revisione.', fr: 'Aucun document joint. Ajoutez des documents pour exécuter la revue.', de: 'Keine Dokumente angehängt. Fügen Sie Dokumente hinzu, um die Prüfung auszuführen.', es: 'No hay documentos adjuntos. Añade documentos para ejecutar la revisión.', pt: 'Nenhum documento anexado. Adicione documentos para executar a revisão.' },
+  'TabularReviews.addDocuments': { en: 'Add documents', it: 'Aggiungi documenti', fr: 'Ajouter des documents', de: 'Dokumente hinzufügen', es: 'Añadir documentos', pt: 'Adicionar documentos' },
+  'TabularReviews.cellDetail': { en: 'Cell detail', it: 'Dettaglio cella', fr: 'Détail de la cellule', de: 'Zellendetail', es: 'Detalle de la celda', pt: 'Detalhe da célula' },
+  'TabularReviews.documentColumn': { en: 'Document', it: 'Documento', fr: 'Document', de: 'Dokument', es: 'Documento', pt: 'Documento' },
+  'TabularReviews.runError': { en: 'The review run failed', it: "Esecuzione della revisione non riuscita", fr: "Échec de l'exécution de la revue", de: 'Prüfungslauf fehlgeschlagen', es: 'Falló la ejecución de la revisión', pt: 'Falha na execução da revisão' },
+
   // Keys added with the DOCX-template detail modal.
   'DocxTemplates.detailTitle': { en: 'Template', it: 'Template', fr: 'Modèle', de: 'Vorlage', es: 'Plantilla', pt: 'Modelo' },
   'DocxTemplates.generate': { en: 'Generate document', it: 'Genera documento', fr: 'Générer le document', de: 'Dokument erzeugen', es: 'Generar documento', pt: 'Gerar documento' },

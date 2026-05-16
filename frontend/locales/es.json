@@ -732,7 +732,11 @@
     "inheritsColumns": "Hereda {n} columnas de este flujo de trabajo.",
     "scopedToDomain": "Mostrando flujos de trabajo tabulares del dominio {domain}.",
     "deleteConfirmTitle": "¿Eliminar la revisión?",
-    "deleteConfirmBody": "«{title}» se eliminará de forma permanente."
+    "deleteConfirmBody": "«{title}» se eliminará de forma permanente.",
+    "noDocuments": "No hay documentos adjuntos. Añade documentos para ejecutar la revisión.",
+    "cellDetail": "Detalle de la celda",
+    "documentColumn": "Documento",
+    "runError": "Falló la ejecución de la revisión"
   },
   "Documents": {
     "title": "Documentos",

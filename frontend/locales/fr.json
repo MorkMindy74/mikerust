@@ -732,7 +732,11 @@
     "inheritsColumns": "Hérite de {n} colonnes de ce workflow.",
     "scopedToDomain": "Affichage des workflows tabulaires du domaine {domain}.",
     "deleteConfirmTitle": "Supprimer la revue ?",
-    "deleteConfirmBody": "« {title} » sera supprimée définitivement."
+    "deleteConfirmBody": "« {title} » sera supprimée définitivement.",
+    "noDocuments": "Aucun document joint. Ajoutez des documents pour exécuter la revue.",
+    "cellDetail": "Détail de la cellule",
+    "documentColumn": "Document",
+    "runError": "Échec de l'exécution de la revue"
   },
   "Documents": {
     "title": "Documents",

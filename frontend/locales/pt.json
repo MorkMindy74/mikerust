@@ -732,7 +732,11 @@
     "inheritsColumns": "Herda {n} colunas deste fluxo de trabalho.",
     "scopedToDomain": "A mostrar fluxos de trabalho tabulares do domínio {domain}.",
     "deleteConfirmTitle": "Eliminar a revisão?",
-    "deleteConfirmBody": "“{title}” será eliminada definitivamente."
+    "deleteConfirmBody": "“{title}” será eliminada definitivamente.",
+    "noDocuments": "Nenhum documento anexado. Adicione documentos para executar a revisão.",
+    "cellDetail": "Detalhe da célula",
+    "documentColumn": "Documento",
+    "runError": "Falha na execução da revisão"
   },
   "Documents": {
     "title": "Documentos",

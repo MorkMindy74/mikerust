@@ -1,13 +1,24 @@
 // Copyright (c) 2026 MikeRust contributors. Licensed under AGPL-3.0-only.
 
 import { api } from './client'
+import { apiBase } from '$lib/stores/api-base.svelte'
+import { authStore } from '$lib/stores/auth.svelte'
 import type { Domain } from '$lib/types/domain'
 import type { CreateTabularReviewBody, TabularReview } from '$lib/types/tabular'
+import type { WorkflowColumn } from '$lib/types/workflow'
 
 // `type` (not interface) — assignable to the client's query Record.
 export type TabularFilter = {
   project_id?: string
   domain?: Domain
+}
+
+/** Body for `PATCH /tabular-review/{id}`. */
+export interface PatchTabularBody {
+  title?: string
+  columns_config?: WorkflowColumn[]
+  /** Reconciles the review's attached documents to exactly this set. */
+  document_ids?: string[]
 }
 
 /** Wrappers for `src/routes/tabular_reviews.rs`. All require auth. */
@@ -16,6 +27,7 @@ export const tabularApi = {
   list: (filter?: TabularFilter) =>
     api<TabularReview[]>('/tabular-review', { query: filter }),
 
+  /** GET /tabular-review/{id} — review metadata + document rows + cells. */
   get: (id: string) => api<TabularReview>(`/tabular-review/${encodeURIComponent(id)}`),
 
   create: (body: CreateTabularReviewBody) =>
@@ -24,6 +36,125 @@ export const tabularApi = {
       body,
     }),
 
+  /** Update title / columns / attached documents. Returns the fresh review. */
+  patch: (id: string, body: PatchTabularBody) =>
+    api<TabularReview>(`/tabular-review/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body,
+    }),
+
   remove: (id: string) =>
     api<{ ok: boolean }>(`/tabular-review/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  /** Regenerate a single cell; returns its new status + content. */
+  regenerateCell: (id: string, row_id: string, column_key: string) =>
+    api<{ row_id: string; column_key: string; status: string; content: string }>(
+      `/tabular-review/${encodeURIComponent(id)}/regenerate-cell`,
+      { method: 'POST', body: { row_id, column_key } },
+    ),
+
+  /** Reset cells to pending — all rows, or just the given ones. */
+  clearCells: (id: string, row_ids?: string[]) =>
+    api<{ ok: boolean }>(`/tabular-review/${encodeURIComponent(id)}/clear-cells`, {
+      method: 'POST',
+      body: { row_ids },
+    }),
+}
+
+export interface GenerateCallbacks {
+  onCell: (rowId: string, columnKey: string, status: string, content: string) => void
+  onError: (message: string) => void
+  onDone: () => void
+}
+
+/**
+ * Stream a review run. POSTs to `/tabular-review/{id}/generate` and
+ * parses the `data: {type}` SSE stream — `cell_update` events update
+ * one cell, `done` ends the run. Returns an AbortController.
+ */
+export function streamGenerate(id: string, cb: GenerateCallbacks): AbortController {
+  const ctrl = new AbortController()
+
+  void (async () => {
+    let res: Response
+    try {
+      res = await fetch(
+        new URL(
+          `/tabular-review/${encodeURIComponent(id)}/generate`,
+          apiBase.url || 'http://127.0.0.1:3001',
+        ),
+        {
+          method: 'POST',
+          headers: {
+            Accept: 'text/event-stream',
+            Authorization: `Bearer ${authStore.token ?? ''}`,
+          },
+          signal: ctrl.signal,
+        },
+      )
+    } catch (e) {
+      if ((e as Error).name !== 'AbortError') cb.onError((e as Error).message)
+      cb.onDone()
+      return
+    }
+
+    if (!res.ok || !res.body) {
+      let detail = `stream failed (${res.status})`
+      try {
+        const j = (await res.json()) as { detail?: string }
+        if (j.detail) detail = j.detail
+      } catch {
+        /* keep status */
+      }
+      cb.onError(detail)
+      cb.onDone()
+      return
+    }
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buf = ''
+    const dispatch = (chunk: string) => {
+      for (const line of chunk.split('\n')) {
+        const l = line.replace(/^\s+/, '')
+        if (!l.startsWith('data:')) continue
+        const data = l.slice(5).trim()
+        if (!data || data === '[DONE]') continue
+        let ev: Record<string, unknown>
+        try {
+          ev = JSON.parse(data)
+        } catch {
+          continue
+        }
+        if (ev.type === 'cell_update') {
+          cb.onCell(
+            String(ev.row_id ?? ''),
+            String(ev.column_key ?? ''),
+            String(ev.status ?? ''),
+            String(ev.content ?? ''),
+          )
+        } else if (ev.type === 'error') {
+          cb.onError(String(ev.message ?? 'stream error'))
+        }
+      }
+    }
+    try {
+      for (;;) {
+        const { value, done } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        let idx: number
+        while ((idx = buf.indexOf('\n\n')) >= 0) {
+          dispatch(buf.slice(0, idx))
+          buf = buf.slice(idx + 2)
+        }
+      }
+      if (buf.trim()) dispatch(buf)
+    } catch (e) {
+      if ((e as Error).name !== 'AbortError') cb.onError((e as Error).message)
+    }
+    cb.onDone()
+  })()
+
+  return ctrl
 }

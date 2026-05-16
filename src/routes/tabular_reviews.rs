@@ -1,14 +1,23 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    routing::get,
+    response::{sse::Event, IntoResponse, Response, Sse},
+    routing::{get, post},
     Json, Router,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::sync::Arc;
+use std::{convert::Infallible, sync::Arc};
+use tokio_stream::wrappers::ReceiverStream;
 
-use crate::{auth::middleware::AuthUser, AppState};
+use crate::{
+    auth::middleware::AuthUser,
+    llm::{self, Message, StreamParams},
+    routes::chat::build_local_config,
+    routes::user::{fetch_llm_settings, LlmSettings},
+    storage::make_storage,
+    AppState,
+};
 
 type ApiResult = Result<Json<Value>, (StatusCode, Json<Value>)>;
 
@@ -19,7 +28,15 @@ fn err(status: StatusCode, msg: &str) -> (StatusCode, Json<Value>) {
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(list_tabular_reviews).post(create_tabular_review))
-        .route("/{id}", get(get_tabular_review).delete(delete_tabular_review))
+        .route(
+            "/{id}",
+            get(get_tabular_review)
+                .patch(patch_tabular_review)
+                .delete(delete_tabular_review),
+        )
+        .route("/{id}/generate", post(generate_cells))
+        .route("/{id}/regenerate-cell", post(regenerate_cell))
+        .route("/{id}/clear-cells", post(clear_cells))
 }
 
 // ---------------------------------------------------------------------------
@@ -105,9 +122,6 @@ struct CreateTabularReviewBody {
     project_id: Option<String>,
     workflow_id: Option<String>,
     columns_config: Option<Value>,
-    /// Domain inherited from the source workflow at creation time;
-    /// caller can override to bridge cross-domain reviews. Falls back
-    /// to `legal` (schema default) when unset/invalid.
     domain: Option<String>,
 }
 
@@ -140,25 +154,84 @@ async fn create_tabular_review(
 }
 
 // ---------------------------------------------------------------------------
-// GET /tabular-review/:id
+// Shared: load a review (verifying ownership) + its rows.
+// ---------------------------------------------------------------------------
+
+/// One document row of a review, with its per-column cells.
+struct ReviewRow {
+    id: String,
+    document_id: Option<String>,
+    filename: Option<String>,
+    status: String,
+    cells: Vec<Value>,
+}
+
+async fn load_review_meta(
+    state: &AppState,
+    user_id: &str,
+    id: &str,
+) -> Result<TabularReviewRow, (StatusCode, Json<Value>)> {
+    sqlx::query_as::<_, TabularReviewRow>(
+        "SELECT id, title, project_id, workflow_id, columns_config, created_at, updated_at, domain \
+         FROM tabular_reviews WHERE id = ? AND user_id = ?",
+    )
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+    .ok_or_else(|| err(StatusCode::NOT_FOUND, "Tabular review not found"))
+}
+
+async fn load_review_rows(
+    state: &AppState,
+    review_id: &str,
+) -> Result<Vec<ReviewRow>, (StatusCode, Json<Value>)> {
+    let rows: Vec<(String, Option<String>, Option<String>, String, String)> = sqlx::query_as(
+        "SELECT r.id, r.document_id, d.filename, r.status, r.cells \
+         FROM tabular_review_rows r \
+         LEFT JOIN documents d ON d.id = r.document_id \
+         WHERE r.tabular_review_id = ? \
+         ORDER BY r.row_index, r.created_at",
+    )
+    .bind(review_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    Ok(rows
+        .into_iter()
+        .map(|(id, document_id, filename, status, cells)| ReviewRow {
+            id,
+            document_id,
+            filename,
+            status,
+            cells: serde_json::from_str::<Vec<Value>>(&cells).unwrap_or_default(),
+        })
+        .collect())
+}
+
+fn row_json(r: &ReviewRow) -> Value {
+    json!({
+        "id": r.id,
+        "document_id": r.document_id,
+        "filename": r.filename,
+        "status": r.status,
+        "cells": r.cells,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// GET /tabular-review/:id  — review metadata + document rows with cells
 // ---------------------------------------------------------------------------
 async fn get_tabular_review(
     State(state): State<Arc<AppState>>,
     auth: AuthUser,
     Path(id): Path<String>,
 ) -> ApiResult {
-    let row: Option<TabularReviewRow> = sqlx::query_as(
-        "SELECT id, title, project_id, workflow_id, columns_config, created_at, updated_at, domain \
-         FROM tabular_reviews WHERE id = ? AND user_id = ?",
-    )
-    .bind(&id)
-    .bind(&auth.user_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
-
     let (id, title, project_id, workflow_id, columns_config, created_at, updated_at, domain) =
-        row.ok_or_else(|| err(StatusCode::NOT_FOUND, "Tabular review not found"))?;
+        load_review_meta(&state, &auth.user_id, &id).await?;
+    let rows = load_review_rows(&state, &id).await?;
 
     Ok(Json(json!({
         "id": id,
@@ -168,8 +241,96 @@ async fn get_tabular_review(
         "columns_config": serde_json::from_str::<Value>(&columns_config).unwrap_or(json!([])),
         "domain": domain,
         "created_at": created_at,
-        "updated_at": updated_at
+        "updated_at": updated_at,
+        "rows": rows.iter().map(row_json).collect::<Vec<_>>(),
     })))
+}
+
+// ---------------------------------------------------------------------------
+// PATCH /tabular-review/:id  — update title / columns / attached documents
+// ---------------------------------------------------------------------------
+#[derive(Deserialize)]
+struct PatchBody {
+    title: Option<String>,
+    columns_config: Option<Value>,
+    /// When present, reconciles the review's document rows to exactly
+    /// this set: rows for new ids are created, rows for dropped ids
+    /// are deleted (cascading their cells).
+    document_ids: Option<Vec<String>>,
+}
+
+async fn patch_tabular_review(
+    State(state): State<Arc<AppState>>,
+    auth: AuthUser,
+    Path(id): Path<String>,
+    Json(body): Json<PatchBody>,
+) -> ApiResult {
+    load_review_meta(&state, &auth.user_id, &id).await?;
+
+    if let Some(title) = body.title.as_deref() {
+        sqlx::query("UPDATE tabular_reviews SET title = ? WHERE id = ?")
+            .bind(title)
+            .bind(&id)
+            .execute(&state.db)
+            .await
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    }
+
+    if let Some(cols) = body.columns_config.as_ref() {
+        sqlx::query("UPDATE tabular_reviews SET columns_config = ? WHERE id = ?")
+            .bind(cols.to_string())
+            .bind(&id)
+            .execute(&state.db)
+            .await
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    }
+
+    if let Some(doc_ids) = body.document_ids.as_ref() {
+        let existing: Vec<(String, Option<String>)> = sqlx::query_as(
+            "SELECT id, document_id FROM tabular_review_rows WHERE tabular_review_id = ?",
+        )
+        .bind(&id)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+        // Delete rows whose document is no longer in the set.
+        for (row_id, doc) in &existing {
+            let keep = doc.as_ref().map(|d| doc_ids.contains(d)).unwrap_or(false);
+            if !keep {
+                let _ = sqlx::query("DELETE FROM tabular_review_rows WHERE id = ?")
+                    .bind(row_id)
+                    .execute(&state.db)
+                    .await;
+            }
+        }
+        // Insert rows for documents not yet present.
+        let present: Vec<String> = existing.iter().filter_map(|(_, d)| d.clone()).collect();
+        for (idx, doc_id) in doc_ids.iter().enumerate() {
+            if present.contains(doc_id) {
+                continue;
+            }
+            let row_id = uuid::Uuid::new_v4().to_string();
+            let _ = sqlx::query(
+                "INSERT INTO tabular_review_rows (id, tabular_review_id, document_id, row_index, cells, status) \
+                 VALUES (?, ?, ?, ?, '[]', 'pending')",
+            )
+            .bind(&row_id)
+            .bind(&id)
+            .bind(doc_id)
+            .bind(idx as i64)
+            .execute(&state.db)
+            .await;
+        }
+    }
+
+    sqlx::query("UPDATE tabular_reviews SET updated_at = datetime('now') WHERE id = ?")
+        .bind(&id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    get_tabular_review(State(state), auth, Path(id)).await
 }
 
 // ---------------------------------------------------------------------------
@@ -190,5 +351,366 @@ async fn delete_tabular_review(
     if result.rows_affected() == 0 {
         return Err(err(StatusCode::NOT_FOUND, "Tabular review not found"));
     }
+    Ok(Json(json!({ "ok": true })))
+}
+
+// ---------------------------------------------------------------------------
+// Cell extraction helpers
+// ---------------------------------------------------------------------------
+
+/// Load a document's plain text (extracted-text sidecar, else extracted
+/// from the binary on the fly). Returns `None` when unavailable.
+async fn load_document_text(state: &AppState, user_id: &str, doc_id: &str) -> Option<String> {
+    let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT storage_path, extracted_text_path FROM documents \
+         WHERE id = ? AND user_id = ?",
+    )
+    .bind(doc_id)
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+    let (storage_path, text_path) = row?;
+    let storage = make_storage().ok()?;
+
+    if let Some(key) = text_path.as_ref() {
+        if let Ok(bytes) = storage.get(key).await {
+            let text = String::from_utf8_lossy(&bytes).into_owned();
+            if !text.trim().is_empty() {
+                return Some(text);
+            }
+        }
+    }
+    // Fall back to extracting from the binary.
+    let key = storage_path?;
+    let bytes = storage.get(&key).await.ok()?;
+    let path = std::path::Path::new(&key);
+    crate::sync::scanner::extract_text_dispatch(path, &bytes)
+        .ok()
+        .map(|(text, _)| text)
+        .filter(|t| !t.trim().is_empty())
+}
+
+/// Pick the model used for tabular extraction: the user's `tabular_model`,
+/// falling back to `main_model`. Returns `None` when neither is set.
+fn pick_tabular_model(s: &LlmSettings) -> Option<String> {
+    s.tabular_model
+        .clone()
+        .filter(|m| !m.trim().is_empty())
+        .or_else(|| s.main_model.clone().filter(|m| !m.trim().is_empty()))
+}
+
+const DOC_TEXT_LIMIT: usize = 60_000;
+
+/// Run a single extraction: returns the model's answer or an error string.
+async fn extract_cell(
+    model: &str,
+    settings: &LlmSettings,
+    column_label: &str,
+    column_prompt: &str,
+    column_format: &str,
+    doc_text: &str,
+) -> Result<String, String> {
+    let system = format!(
+        "You are a data-extraction assistant. From the document supplied by the user, \
+         extract the value for one column of a review table.\n\
+         Column: {column_label}\n\
+         Instruction: {column_prompt}\n\
+         Expected output format: {column_format}\n\
+         Reply with ONLY the extracted value — concise, no preamble, no explanation. \
+         If the document does not contain the information, reply exactly \"N/A\"."
+    );
+    let truncated: String = doc_text.chars().take(DOC_TEXT_LIMIT).collect();
+
+    let params = StreamParams {
+        model: model.to_string(),
+        system_prompt: system,
+        messages: vec![Message::user(truncated)],
+        tools: vec![],
+        max_iterations: 1,
+        enable_thinking: false,
+        local_config: build_local_config(model, Some(settings)),
+        claude_api_key: settings.claude_api_key.clone(),
+        gemini_api_key: settings.gemini_api_key.clone(),
+        gemini_region: settings.gemini_region.clone(),
+    };
+
+    let result = match llm::provider_for_model(model) {
+        llm::Provider::Claude => llm::claude::complete(params).await,
+        llm::Provider::OpenAI => llm::local::complete(params).await,
+        llm::Provider::Gemini => llm::gemini::complete(params).await,
+    };
+    result
+        .map(|t| t.trim().to_string())
+        .map_err(|e| e.to_string())
+}
+
+/// Column definitions reduced to the (key, label, prompt, format) tuples
+/// the extractor needs.
+fn parse_columns(columns_config: &str) -> Vec<(String, String, String, String)> {
+    serde_json::from_str::<Vec<Value>>(columns_config)
+        .unwrap_or_default()
+        .into_iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let key = c
+                .get("key")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("col_{}", i + 1));
+            let label = c
+                .get("label")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&key)
+                .to_string();
+            let prompt = c
+                .get("prompt")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let format = c
+                .get("format")
+                .and_then(|v| v.as_str())
+                .unwrap_or("free_text")
+                .to_string();
+            (key, label, prompt, format)
+        })
+        .collect()
+}
+
+fn cell(key: &str, status: &str, content: &str) -> Value {
+    json!({ "key": key, "status": status, "content": content })
+}
+
+async fn persist_cells(state: &AppState, row_id: &str, cells: &[Value], status: &str) {
+    let _ = sqlx::query("UPDATE tabular_review_rows SET cells = ?, status = ? WHERE id = ?")
+        .bind(serde_json::to_string(cells).unwrap_or_else(|_| "[]".to_string()))
+        .bind(status)
+        .bind(row_id)
+        .execute(&state.db)
+        .await;
+}
+
+fn sse(payload: Value) -> Result<Event, Infallible> {
+    Ok(Event::default().data(payload.to_string()))
+}
+
+// ---------------------------------------------------------------------------
+// POST /tabular-review/:id/generate  — SSE stream of cell updates
+// ---------------------------------------------------------------------------
+async fn generate_cells(
+    State(state): State<Arc<AppState>>,
+    auth: AuthUser,
+    Path(id): Path<String>,
+) -> Result<Response, (StatusCode, Json<Value>)> {
+    let meta = load_review_meta(&state, &auth.user_id, &id).await?;
+    let columns = parse_columns(&meta.4);
+    if columns.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "The review has no columns."));
+    }
+    let rows = load_review_rows(&state, &id).await?;
+    if rows.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "The review has no documents."));
+    }
+    let settings = fetch_llm_settings(&state.db, &auth.user_id)
+        .await
+        .unwrap_or_default();
+    let Some(model) = pick_tabular_model(&settings) else {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "No tabular-review model configured. Set one in Settings → Models.",
+        ));
+    };
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(64);
+    let state_bg = state.clone();
+    let user_id = auth.user_id.clone();
+
+    tokio::spawn(async move {
+        for row in rows {
+            let Some(doc_id) = row.document_id.clone() else {
+                continue;
+            };
+            // Existing cells keyed for skip-if-done.
+            let mut cells: Vec<Value> = columns
+                .iter()
+                .map(|(key, _, _, _)| {
+                    row.cells
+                        .iter()
+                        .find(|c| c.get("key").and_then(|v| v.as_str()) == Some(key.as_str()))
+                        .cloned()
+                        .unwrap_or_else(|| cell(key, "pending", ""))
+                })
+                .collect();
+
+            let doc_text = load_document_text(&state_bg, &user_id, &doc_id).await;
+
+            for (ci, (key, label, prompt, format)) in columns.iter().enumerate() {
+                let done = cells[ci].get("status").and_then(|v| v.as_str()) == Some("done");
+                if done {
+                    continue;
+                }
+                cells[ci] = cell(key, "generating", "");
+                let _ = tx
+                    .send(sse(json!({
+                        "type": "cell_update", "row_id": row.id,
+                        "column_key": key, "status": "generating", "content": ""
+                    })))
+                    .await;
+
+                let (status, content) = match doc_text.as_deref() {
+                    None => (
+                        "error".to_string(),
+                        "Document text unavailable".to_string(),
+                    ),
+                    Some(text) => {
+                        match extract_cell(&model, &settings, label, prompt, format, text).await {
+                            Ok(answer) => ("done".to_string(), answer),
+                            Err(e) => ("error".to_string(), e),
+                        }
+                    }
+                };
+                cells[ci] = cell(key, &status, &content);
+                let _ = tx
+                    .send(sse(json!({
+                        "type": "cell_update", "row_id": row.id,
+                        "column_key": key, "status": status, "content": content
+                    })))
+                    .await;
+                persist_cells(&state_bg, &row.id, &cells, "done").await;
+            }
+        }
+        let _ = sqlx::query("UPDATE tabular_reviews SET updated_at = datetime('now') WHERE id = ?")
+            .bind(&id)
+            .execute(&state_bg.db)
+            .await;
+        let _ = tx.send(sse(json!({ "type": "done" }))).await;
+    });
+
+    Ok(Sse::new(ReceiverStream::new(rx))
+        .keep_alive(axum::response::sse::KeepAlive::default())
+        .into_response())
+}
+
+// ---------------------------------------------------------------------------
+// POST /tabular-review/:id/regenerate-cell  { row_id, column_key }
+// ---------------------------------------------------------------------------
+#[derive(Deserialize)]
+struct RegenBody {
+    row_id: String,
+    column_key: String,
+}
+
+async fn regenerate_cell(
+    State(state): State<Arc<AppState>>,
+    auth: AuthUser,
+    Path(id): Path<String>,
+    Json(body): Json<RegenBody>,
+) -> ApiResult {
+    let meta = load_review_meta(&state, &auth.user_id, &id).await?;
+    let columns = parse_columns(&meta.4);
+    let Some((key, label, prompt, format)) =
+        columns.iter().find(|(k, _, _, _)| k == &body.column_key)
+    else {
+        return Err(err(StatusCode::BAD_REQUEST, "Unknown column."));
+    };
+
+    let row: Option<(Option<String>, String)> = sqlx::query_as(
+        "SELECT document_id, cells FROM tabular_review_rows \
+         WHERE id = ? AND tabular_review_id = ?",
+    )
+    .bind(&body.row_id)
+    .bind(&id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    let Some((Some(doc_id), cells_json)) = row else {
+        return Err(err(StatusCode::NOT_FOUND, "Row not found."));
+    };
+
+    let settings = fetch_llm_settings(&state.db, &auth.user_id)
+        .await
+        .unwrap_or_default();
+    let Some(model) = pick_tabular_model(&settings) else {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "No tabular-review model configured.",
+        ));
+    };
+
+    let (status, content) = match load_document_text(&state, &auth.user_id, &doc_id).await {
+        None => (
+            "error".to_string(),
+            "Document text unavailable".to_string(),
+        ),
+        Some(text) => match extract_cell(&model, &settings, label, prompt, format, &text).await {
+            Ok(answer) => ("done".to_string(), answer),
+            Err(e) => ("error".to_string(), e),
+        },
+    };
+
+    // Merge the regenerated cell back into the row's cell array.
+    let mut cells: Vec<Value> = serde_json::from_str(&cells_json).unwrap_or_default();
+    let updated = cell(key, &status, &content);
+    if let Some(slot) = cells
+        .iter_mut()
+        .find(|c| c.get("key").and_then(|v| v.as_str()) == Some(key.as_str()))
+    {
+        *slot = updated.clone();
+    } else {
+        cells.push(updated.clone());
+    }
+    persist_cells(&state, &body.row_id, &cells, "done").await;
+
+    Ok(Json(json!({
+        "row_id": body.row_id,
+        "column_key": key,
+        "status": status,
+        "content": content,
+    })))
+}
+
+// ---------------------------------------------------------------------------
+// POST /tabular-review/:id/clear-cells  { row_ids? }
+// ---------------------------------------------------------------------------
+#[derive(Deserialize)]
+struct ClearBody {
+    /// When omitted, clears every row of the review.
+    row_ids: Option<Vec<String>>,
+}
+
+async fn clear_cells(
+    State(state): State<Arc<AppState>>,
+    auth: AuthUser,
+    Path(id): Path<String>,
+    Json(body): Json<ClearBody>,
+) -> ApiResult {
+    load_review_meta(&state, &auth.user_id, &id).await?;
+
+    match body.row_ids {
+        Some(ids) => {
+            for row_id in ids {
+                let _ = sqlx::query(
+                    "UPDATE tabular_review_rows SET cells = '[]', status = 'pending' \
+                     WHERE id = ? AND tabular_review_id = ?",
+                )
+                .bind(&row_id)
+                .bind(&id)
+                .execute(&state.db)
+                .await;
+            }
+        }
+        None => {
+            let _ = sqlx::query(
+                "UPDATE tabular_review_rows SET cells = '[]', status = 'pending' \
+                 WHERE tabular_review_id = ?",
+            )
+            .bind(&id)
+            .execute(&state.db)
+            .await;
+        }
+    }
+
     Ok(Json(json!({ "ok": true })))
 }

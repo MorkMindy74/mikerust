@@ -32,7 +32,7 @@ use std::collections::HashMap;
 /// Mistral and OpenAI have fixed public endpoints; `local:` reads the
 /// user's BYO base URL. The model name is the per-provider stored model
 /// field, falling back to the id with its prefix stripped.
-fn build_local_config(
+pub fn build_local_config(
     model: &str,
     settings: Option<&crate::routes::user::LlmSettings>,
 ) -> Option<LocalConfig> {
