@@ -1,8 +1,9 @@
 <!-- Copyright (c) 2026 MikeRust contributors. Licensed under AGPL-3.0-only. -->
 <!--
   PDF renderer. Renders every page to a canvas with a transparent,
-  selectable text layer over it (so cited passages can be highlighted
-  and text can be copied). Zoom via buttons or ctrl/⌘ + wheel.
+  selectable text layer (so cited passages highlight and text copies).
+  Opens fit-to-width; zoom / fit buttons + ctrl-wheel; Ctrl+G focuses
+  the go-to-page field.
 -->
 <script lang="ts">
   import { getDocument, TextLayer } from '$lib/utils/pdf'
@@ -10,7 +11,7 @@
   import { PAGE_BREAK_SENTINEL } from '$lib/types/citation'
   import Spinner from '$lib/components/ui/Spinner.svelte'
   import { i18n } from '$lib/stores/i18n.svelte'
-  import { ZoomIn, ZoomOut } from 'lucide-svelte'
+  import { ZoomIn, ZoomOut, MoveHorizontal, MoveVertical, Maximize2 } from 'lucide-svelte'
 
   interface Props {
     bytes: Uint8Array
@@ -22,21 +23,41 @@
 
   let { bytes, quote, page, revision = 0 }: Props = $props()
 
-  let scale = $state(1.3)
+  type FitMode = 'width' | 'height' | 'page' | null
+
+  let scale = $state(1)
+  let fitMode = $state<FitMode>('width')
   let numPages = $state(0)
   let currentPage = $state(1)
+  let gotoValue = $state('')
   let loading = $state(true)
   let err = $state<string | null>(null)
   let scrollEl: HTMLDivElement
   let pagesEl: HTMLDivElement
+  let gotoEl = $state<HTMLInputElement>()
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let pdfDoc: any = null
   let renderToken = 0
+  let ready = false
+  /** Page natural size (CSS px at scale 1). */
+  let naturalW = 0
+  let naturalH = 0
 
   function pageHint(): number | null {
     if (page == null) return null
     const n = typeof page === 'number' ? page : parseInt(String(page), 10)
     return Number.isFinite(n) ? n : null
+  }
+
+  /** Compute the scale for the current fit mode against the viewport. */
+  function applyFit() {
+    if (!fitMode || !scrollEl || naturalW === 0) return
+    const availW = scrollEl.clientWidth - 32
+    const availH = scrollEl.clientHeight - 32
+    const sw = availW / naturalW
+    const sh = availH / naturalH
+    const s = fitMode === 'width' ? sw : fitMode === 'height' ? sh : Math.min(sw, sh)
+    scale = Math.max(0.2, Math.min(5, Math.round(s * 100) / 100))
   }
 
   async function renderAll() {
@@ -100,7 +121,6 @@
         return
       }
     }
-    // Quote not found anywhere — at least jump to the cited page.
     if (hint) {
       const pageEl = pagesEl.querySelector<HTMLElement>(`.pdf-page[data-page="${hint}"]`)
       pageEl?.scrollIntoView({ block: 'start', behavior: 'smooth' })
@@ -110,20 +130,33 @@
   async function load() {
     loading = true
     err = null
+    ready = false
     try {
       // getDocument takes ownership of the buffer — hand it a copy.
       pdfDoc = await getDocument({ data: bytes.slice() }).promise
       numPages = pdfDoc.numPages
+      const first = await pdfDoc.getPage(1)
+      const vp1 = first.getViewport({ scale: 1 })
+      naturalW = vp1.width
+      naturalH = vp1.height
+      applyFit()
       await renderAll()
     } catch (e) {
       err = (e as Error).message
     } finally {
       loading = false
+      ready = true
     }
   }
 
+  function setFit(mode: Exclude<FitMode, null>) {
+    fitMode = mode
+    applyFit()
+  }
+
   function zoom(delta: number) {
-    scale = Math.min(4, Math.max(0.4, Math.round((scale + delta) * 100) / 100))
+    fitMode = null
+    scale = Math.min(5, Math.max(0.2, Math.round((scale + delta) * 100) / 100))
   }
 
   function onWheel(e: WheelEvent) {
@@ -144,21 +177,46 @@
     }
   }
 
+  function gotoPage() {
+    const n = parseInt(gotoValue, 10)
+    if (!Number.isFinite(n) || n < 1 || n > numPages) return
+    pagesEl
+      ?.querySelector<HTMLElement>(`.pdf-page[data-page="${n}"]`)
+      ?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+  }
+
   // Initial load + reload when the document bytes change.
   $effect(() => {
     void bytes
     void load()
   })
 
-  // Re-render on zoom.
-  let firstScale = true
+  // Re-render whenever the scale changes (after the first load).
   $effect(() => {
     void scale
-    if (firstScale) {
-      firstScale = false
-      return
+    if (ready) void renderAll()
+  })
+
+  // Re-fit on viewport resize while a fit mode is active.
+  $effect(() => {
+    function onResize() {
+      if (fitMode) applyFit()
     }
-    void renderAll()
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  })
+
+  // Ctrl/⌘+G focuses the go-to-page field.
+  $effect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'g') {
+        e.preventDefault()
+        gotoEl?.focus()
+        gotoEl?.select()
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
   })
 
   // Re-run the highlight pass when the tab is re-targeted to a new quote.
@@ -167,6 +225,10 @@
     void quote
     if (!loading) applyHighlight()
   })
+
+  const fitBtn =
+    'p-1 rounded hover:bg-(--color-hover-bg) text-(--color-text-secondary)'
+  const fitBtnOn = 'p-1 rounded bg-(--color-active-bg) text-(--color-brand-700)'
 </script>
 
 <div class="flex flex-col h-full min-h-0">
@@ -190,24 +252,44 @@
   </div>
 
   {#if !loading && !err}
-    <div class="flex items-center justify-between px-3 h-9 shrink-0 border-t border-(--color-surface-200) text-xs text-(--color-text-secondary)">
-      <span>{i18n.t('Documents.viewer.page')} {currentPage} {i18n.t('Documents.viewer.of')} {numPages}</span>
+    <div class="flex items-center justify-between gap-2 px-3 h-9 shrink-0 border-t border-(--color-surface-200) text-xs text-(--color-text-secondary)">
       <div class="flex items-center gap-1">
-        <button
-          type="button"
-          class="p-1 rounded hover:bg-(--color-hover-bg)"
-          aria-label={i18n.t('Documents.viewer.zoomOut')}
-          onclick={() => zoom(-0.15)}
-        >
+        <span>{i18n.t('Documents.viewer.page')}</span>
+        <input
+          bind:this={gotoEl}
+          bind:value={gotoValue}
+          onkeydown={(e) => e.key === 'Enter' && gotoPage()}
+          inputmode="numeric"
+          placeholder={String(currentPage)}
+          class="w-10 h-6 text-center rounded border border-(--color-surface-200)
+                 bg-(--color-surface-0) focus:outline-none focus:ring-1 focus:ring-(--color-brand-500)"
+        />
+        <span>{i18n.t('Documents.viewer.of')} {numPages}</span>
+      </div>
+      <div class="flex items-center gap-0.5">
+        <button type="button" class={fitMode === 'width' ? fitBtnOn : fitBtn}
+          aria-label={i18n.t('Documents.viewer.fitWidth')} title={i18n.t('Documents.viewer.fitWidth')}
+          onclick={() => setFit('width')}>
+          <MoveHorizontal size={14} />
+        </button>
+        <button type="button" class={fitMode === 'height' ? fitBtnOn : fitBtn}
+          aria-label={i18n.t('Documents.viewer.fitHeight')} title={i18n.t('Documents.viewer.fitHeight')}
+          onclick={() => setFit('height')}>
+          <MoveVertical size={14} />
+        </button>
+        <button type="button" class={fitMode === 'page' ? fitBtnOn : fitBtn}
+          aria-label={i18n.t('Documents.viewer.fitPage')} title={i18n.t('Documents.viewer.fitPage')}
+          onclick={() => setFit('page')}>
+          <Maximize2 size={14} />
+        </button>
+        <span class="w-px h-4 bg-(--color-surface-200) mx-1"></span>
+        <button type="button" class={fitBtn}
+          aria-label={i18n.t('Documents.viewer.zoomOut')} onclick={() => zoom(-0.15)}>
           <ZoomOut size={14} />
         </button>
         <span class="tabular-nums w-10 text-center">{Math.round(scale * 100)}%</span>
-        <button
-          type="button"
-          class="p-1 rounded hover:bg-(--color-hover-bg)"
-          aria-label={i18n.t('Documents.viewer.zoomIn')}
-          onclick={() => zoom(0.15)}
-        >
+        <button type="button" class={fitBtn}
+          aria-label={i18n.t('Documents.viewer.zoomIn')} onclick={() => zoom(0.15)}>
           <ZoomIn size={14} />
         </button>
       </div>
