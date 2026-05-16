@@ -276,7 +276,7 @@ const T = {
 
   'Sync.browse': { en: 'Browse…', it: 'Sfoglia…', fr: 'Parcourir…', de: 'Durchsuchen…', es: 'Examinar…', pt: 'Procurar…' },
   'Sidebar.deleteChatTitle': { en: 'Delete chat?', it: 'Eliminare la chat?', fr: 'Supprimer le chat ?', de: 'Chat löschen?', es: '¿Eliminar el chat?', pt: 'Eliminar o chat?' },
-  'Sidebar.deleteChatBody': { en: '"{title}" and its messages will be permanently deleted.', it: '"{title}" e i suoi messaggi verranno eliminati definitivamente.', fr: '« {title} » et ses messages seront supprimés définitivement.', de: '„{title}“ und seine Nachrichten werden endgültig gelöscht.', es: '«{title}» y sus mensajes se eliminarán de forma permanente.', pt: '“{title}” e as suas mensagens serão eliminados definitivamente.' },
+  'Sidebar.deleteChatBody': { en: '"{title}", its messages and the documents uploaded or generated in it will be permanently deleted.', it: '"{title}", i suoi messaggi e i documenti caricati o generati al suo interno verranno eliminati definitivamente.', fr: '« {title} », ses messages et les documents importés ou générés dans ce chat seront supprimés définitivement.', de: '„{title}“, seine Nachrichten und die darin hochgeladenen oder erzeugten Dokumente werden endgültig gelöscht.', es: '«{title}», sus mensajes y los documentos subidos o generados en él se eliminarán de forma permanente.', pt: '“{title}”, as suas mensagens e os documentos carregados ou gerados nele serão eliminados definitivamente.' },
 
   // Keys added with the project detail view.
   'Projects.isolationLabel': { en: 'Retrieval scope', it: 'Ambito di recupero', fr: 'Périmètre de recherche', de: 'Abrufbereich', es: 'Ámbito de recuperación', pt: 'Âmbito de recuperação' },

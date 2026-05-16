@@ -3,6 +3,7 @@
 <script lang="ts">
   import Modal from './Modal.svelte'
   import Button from './Button.svelte'
+  import { i18n } from '$lib/stores/i18n.svelte'
 
   interface Props {
     open?: boolean
@@ -20,12 +21,15 @@
     open = $bindable(false),
     title,
     message,
-    confirmLabel = 'Confirm',
-    cancelLabel = 'Cancel',
+    confirmLabel,
+    cancelLabel,
     danger = false,
     onconfirm,
     oncancel,
   }: Props = $props()
+
+  const confirmText = $derived(confirmLabel ?? i18n.t('Common.confirm'))
+  const cancelText = $derived(cancelLabel ?? i18n.t('Common.cancel'))
 
   let busy = $state(false)
 
@@ -62,9 +66,9 @@
 <Modal bind:open {title} size="sm" closeOnBackdrop={!busy} closeOnEsc={!busy} onclose={oncancel}>
   <p class="text-sm text-(--color-text-secondary)">{message}</p>
   {#snippet footer()}
-    <Button variant="ghost" onclick={cancel} disabled={busy}>{cancelLabel}</Button>
+    <Button variant="ghost" onclick={cancel} disabled={busy}>{cancelText}</Button>
     <Button variant={danger ? 'danger' : 'primary'} loading={busy} onclick={confirm}>
-      {confirmLabel}
+      {confirmText}
     </Button>
   {/snippet}
 </Modal>

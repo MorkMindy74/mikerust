@@ -94,7 +94,7 @@
     "deleteChatDisabledActive": "Chiudi prima questa chat per poterla eliminare",
     "renameChat": "Rinomina chat",
     "deleteChatTitle": "Eliminare la chat?",
-    "deleteChatBody": "\"{title}\" e i suoi messaggi verranno eliminati definitivamente."
+    "deleteChatBody": "\"{title}\", i suoi messaggi e i documenti caricati o generati al suo interno verranno eliminati definitivamente."
   },
   "Account": {
     "title": "Account",

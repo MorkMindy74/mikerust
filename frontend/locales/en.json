@@ -94,7 +94,7 @@
     "deleteChatDisabledActive": "Close this chat first to delete it",
     "renameChat": "Rename chat",
     "deleteChatTitle": "Delete chat?",
-    "deleteChatBody": "\"{title}\" and its messages will be permanently deleted."
+    "deleteChatBody": "\"{title}\", its messages and the documents uploaded or generated in it will be permanently deleted."
   },
   "Account": {
     "title": "Account",
