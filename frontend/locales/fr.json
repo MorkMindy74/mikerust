@@ -92,7 +92,9 @@
     "search": "Rechercher des chats",
     "deleteChat": "Supprimer le chat",
     "deleteChatDisabledActive": "Fermez d'abord ce chat pour pouvoir le supprimer",
-    "renameChat": "Renommer le chat"
+    "renameChat": "Renommer le chat",
+    "deleteChatTitle": "Supprimer le chat ?",
+    "deleteChatBody": "« {title} » et ses messages seront supprimés définitivement."
   },
   "Account": {
     "title": "Compte",

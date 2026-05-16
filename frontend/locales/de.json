@@ -92,7 +92,9 @@
     "search": "Chats durchsuchen",
     "deleteChat": "Chat löschen",
     "deleteChatDisabledActive": "Schließen Sie diesen Chat zuerst, um ihn zu löschen",
-    "renameChat": "Chat umbenennen"
+    "renameChat": "Chat umbenennen",
+    "deleteChatTitle": "Chat löschen?",
+    "deleteChatBody": "„{title}“ und seine Nachrichten werden endgültig gelöscht."
   },
   "Account": {
     "title": "Konto",

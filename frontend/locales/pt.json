@@ -92,7 +92,9 @@
     "search": "Pesquisar conversas",
     "deleteChat": "Eliminar conversa",
     "deleteChatDisabledActive": "Feche primeiro esta conversa para a poder eliminar",
-    "renameChat": "Renomear conversa"
+    "renameChat": "Renomear conversa",
+    "deleteChatTitle": "Eliminar o chat?",
+    "deleteChatBody": "“{title}” e as suas mensagens serão eliminados definitivamente."
   },
   "Account": {
     "title": "Conta",

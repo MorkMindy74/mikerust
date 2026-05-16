@@ -92,7 +92,9 @@
     "search": "Search chats",
     "deleteChat": "Delete chat",
     "deleteChatDisabledActive": "Close this chat first to delete it",
-    "renameChat": "Rename chat"
+    "renameChat": "Rename chat",
+    "deleteChatTitle": "Delete chat?",
+    "deleteChatBody": "\"{title}\" and its messages will be permanently deleted."
   },
   "Account": {
     "title": "Account",

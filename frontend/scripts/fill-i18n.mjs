@@ -273,6 +273,8 @@ const T = {
   'Workflows.columnFormat': { en: 'Format', it: 'Formato', fr: 'Format', de: 'Format', es: 'Formato', pt: 'Formato' },
 
   'Sync.browse': { en: 'Browse…', it: 'Sfoglia…', fr: 'Parcourir…', de: 'Durchsuchen…', es: 'Examinar…', pt: 'Procurar…' },
+  'Sidebar.deleteChatTitle': { en: 'Delete chat?', it: 'Eliminare la chat?', fr: 'Supprimer le chat ?', de: 'Chat löschen?', es: '¿Eliminar el chat?', pt: 'Eliminar o chat?' },
+  'Sidebar.deleteChatBody': { en: '"{title}" and its messages will be permanently deleted.', it: '"{title}" e i suoi messaggi verranno eliminati definitivamente.', fr: '« {title} » et ses messages seront supprimés définitivement.', de: '„{title}“ und seine Nachrichten werden endgültig gelöscht.', es: '«{title}» y sus mensajes se eliminarán de forma permanente.', pt: '“{title}” e as suas mensagens serão eliminados definitivamente.' },
 
   // Keys added with the project detail view.
   'Projects.isolationLabel': { en: 'Retrieval scope', it: 'Ambito di recupero', fr: 'Périmètre de recherche', de: 'Abrufbereich', es: 'Ámbito de recuperación', pt: 'Âmbito de recuperação' },

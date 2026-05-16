@@ -92,7 +92,9 @@
     "search": "Buscar chats",
     "deleteChat": "Eliminar chat",
     "deleteChatDisabledActive": "Cierre primero este chat para poder eliminarlo",
-    "renameChat": "Renombrar chat"
+    "renameChat": "Renombrar chat",
+    "deleteChatTitle": "¿Eliminar el chat?",
+    "deleteChatBody": "«{title}» y sus mensajes se eliminarán de forma permanente."
   },
   "Account": {
     "title": "Cuenta",

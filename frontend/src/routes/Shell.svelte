@@ -12,6 +12,7 @@
   import IconButton from '$lib/components/ui/IconButton.svelte'
   import Logo from '$lib/components/ui/Logo.svelte'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
+  import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import ThemeToggle from '$lib/components/ui/ThemeToggle.svelte'
   import Workflows from './Workflows.svelte'
   import Templates from './Templates.svelte'
@@ -73,6 +74,14 @@
   )
 
   let chatsCollapsed = $state(false)
+  let deleteChatTarget = $state<{ id: string; title: string | null } | null>(null)
+
+  async function confirmDeleteChat() {
+    if (!deleteChatTarget) return
+    const id = deleteChatTarget.id
+    deleteChatTarget = null
+    await chatStore.remove(id)
+  }
 
   $effect(() => {
     void chatStore.refreshChats()
@@ -172,7 +181,7 @@
                   label={i18n.t('Common.delete')}
                   size="sm"
                   class="opacity-0 group-hover:opacity-100"
-                  onclick={() => chatStore.remove(c.id)}
+                  onclick={() => (deleteChatTarget = { id: c.id, title: c.title })}
                 >
                   <Trash2 size={13} />
                 </IconButton>
@@ -232,3 +241,15 @@
     </div>
   {/if}
 </AppShell>
+
+<ConfirmDialog
+  open={deleteChatTarget !== null}
+  title={i18n.t('Sidebar.deleteChatTitle')}
+  message={i18n.t('Sidebar.deleteChatBody', {
+    title: deleteChatTarget?.title || i18n.t('Assistant.untitledChat'),
+  })}
+  confirmLabel={i18n.t('Common.delete')}
+  danger
+  onconfirm={confirmDeleteChat}
+  oncancel={() => (deleteChatTarget = null)}
+/>

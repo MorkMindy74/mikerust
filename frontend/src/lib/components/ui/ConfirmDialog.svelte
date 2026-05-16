@@ -29,6 +29,19 @@
 
   let busy = $state(false)
 
+  // Enter confirms; Esc is handled by the Modal (closeOnEsc → oncancel).
+  $effect(() => {
+    if (!open) return
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Enter' && !busy) {
+        e.preventDefault()
+        void confirm()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })
+
   function cancel() {
     if (busy) return
     open = false
