@@ -1,0 +1,86 @@
+<!-- Copyright (c) 2026 MikeRust contributors. Licensed under AGPL-3.0-only. -->
+<script lang="ts">
+  import Card from '$lib/components/ui/Card.svelte'
+  import Toggle from '$lib/components/ui/Toggle.svelte'
+  import Spinner from '$lib/components/ui/Spinner.svelte'
+  import ChangePinForm from './ChangePinForm.svelte'
+  import BiometricPrompt from '$lib/components/auth/BiometricPrompt.svelte'
+  import { authApi } from '$lib/api/auth'
+  import { authStore } from '$lib/stores/auth.svelte'
+  import { toastStore } from '$lib/stores/toast.svelte'
+  import { ApiError } from '$lib/types/error'
+
+  let probing = $state(true)
+  let available = $state(false)
+  let enabled = $state(false)
+  let busy = $state(false)
+
+  $effect(() => {
+    authApi
+      .biometricAvailable()
+      .then((b) => {
+        available = b.available
+        enabled = b.enabled
+      })
+      .catch(() => {
+        available = false
+      })
+      .finally(() => {
+        probing = false
+      })
+  })
+
+  async function onToggle(next: boolean) {
+    busy = true
+    try {
+      if (next) {
+        await authApi.biometricEnable()
+        enabled = true
+        authStore.setBiometricEnrolled(true)
+        toastStore.success('Biometric unlock enabled')
+      } else {
+        await authApi.biometricDisable()
+        enabled = false
+        authStore.setBiometricEnrolled(false)
+        toastStore.info('Biometric unlock disabled')
+      }
+    } catch (err) {
+      // revert the optimistic toggle
+      enabled = !next
+      toastStore.danger('Biometric change failed', {
+        detail: err instanceof ApiError ? err.detail : (err as Error).message,
+      })
+    } finally {
+      busy = false
+    }
+  }
+</script>
+
+<div class="space-y-4">
+  <Card title="PIN">
+    <ChangePinForm />
+  </Card>
+
+  <Card title="Biometric unlock">
+    {#if probing}
+      <div class="flex items-center gap-2 text-sm text-(--color-text-secondary)">
+        <Spinner size="sm" />
+        Checking device support…
+      </div>
+    {:else if !available}
+      <p class="text-sm text-(--color-text-secondary)">
+        No biometric hardware detected on this device (Windows Hello / Touch ID).
+      </p>
+    {:else}
+      <Toggle
+        checked={enabled}
+        disabled={busy}
+        label="Unlock with biometric"
+        description="Use Windows Hello instead of typing your PIN."
+        onchange={onToggle}
+      />
+    {/if}
+  </Card>
+</div>
+
+<BiometricPrompt open={busy} reason="Verify to update biometric settings" />

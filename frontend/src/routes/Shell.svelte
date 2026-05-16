@@ -14,6 +14,7 @@
   import ThemeToggle from '$lib/components/ui/ThemeToggle.svelte'
   import Workflows from './Workflows.svelte'
   import Templates from './Templates.svelte'
+  import Settings from './Settings.svelte'
   import { router, type FeatureRoute } from '$lib/stores/router.svelte'
   import { authStore } from '$lib/stores/auth.svelte'
   import { userStore } from '$lib/stores/user.svelte'
@@ -24,7 +25,7 @@
     Table2,
     Workflow,
     FileText,
-    Settings,
+    Settings as SettingsIcon,
   } from 'lucide-svelte'
 
   interface NavEntry {
@@ -39,7 +40,7 @@
     { route: 'tabular', label: 'Tabular reviews', icon: Table2 },
     { route: 'workflows', label: 'Workflows', icon: Workflow },
     { route: 'templates', label: 'Templates', icon: FileText },
-    { route: 'settings', label: 'Settings', icon: Settings },
+    { route: 'settings', label: 'Settings', icon: SettingsIcon },
   ]
 
   const activeLabel = $derived(
@@ -97,6 +98,8 @@
     <Workflows />
   {:else if router.current === 'templates'}
     <Templates />
+  {:else if router.current === 'settings'}
+    <Settings />
   {:else}
     <div class="p-8">
       <EmptyState
