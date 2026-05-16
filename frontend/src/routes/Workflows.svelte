@@ -177,7 +177,7 @@
               <td class="px-3 py-2.5 text-(--color-text-secondary)">
                 {#if w.is_system}
                   <span class="inline-flex items-center gap-1.5">
-                    <Logo size={13} spin="none" class="text-(--color-brand-500)" />MikeRust
+                    <Logo size={13} activity="idle" />MikeRust
                   </span>
                 {:else}
                   {t('Workflows.originSelf')}

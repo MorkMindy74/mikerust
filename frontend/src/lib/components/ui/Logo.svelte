@@ -1,34 +1,58 @@
 <!-- Copyright (c) 2026 MikeRust contributors. Licensed under AGPL-3.0-only. -->
 <!--
-  MikeRust mark — a 16-ray sunburst. Inherits `currentColor`, so the
-  caller sets the colour. `spin` drives the ambient animation:
-    · idle   — a slow, quiet rotation (default)
-    · active — a faster spin, for "the assistant is working" states
-    · none   — static
-  Honours prefers-reduced-motion (animation disabled).
+  MikeRust mark — the 3×3 rust-gradient grid (src/assets/mikerust_logo_3x3.svg).
+  `activity` pulses the bottom-right square and recolours the grid:
+    · idle     — static, native rust palette
+    · thinking — pulsing, rust (an LLM call is in flight)
+    · docx     — pulsing, blue (generating a .docx from a template)
+    · upload   — pulsing, green (extracting text from an uploaded file)
+  Honours prefers-reduced-motion (no pulse).
 -->
 <script lang="ts">
   interface Props {
     size?: number
-    spin?: 'idle' | 'active' | 'none'
+    activity?: 'idle' | 'thinking' | 'docx' | 'upload'
     class?: string
   }
 
-  let { size = 40, spin = 'idle', class: extraClass = '' }: Props = $props()
+  let { size = 40, activity = 'idle', class: extraClass = '' }: Props = $props()
 
-  const RAYS = 16
-  const rays = Array.from({ length: RAYS }, (_, i) => (i * 360) / RAYS)
+  // Grid geometry mirrors mikerust_logo_3x3.svg (group translated to 250,250).
+  const COORD = [-135, -45, 45]
+  const FILLS = [
+    ['#431407', '#7C2D0A', '#9A3412'],
+    ['#7C2D0A', '#C2410C', '#EA580C'],
+    ['#9A3412', '#EA580C', '#F97316'],
+  ]
+  const cells = COORD.flatMap((y, row) =>
+    COORD.map((x, col) => ({
+      x,
+      y,
+      fill: FILLS[row][col],
+      // The bright bottom-right square is the one that pulses.
+      corner: row === 2 && col === 2,
+    })),
+  )
 </script>
 
 <svg
-  class="mike-logo mike-logo-{spin} {extraClass}"
+  class="mike-logo mike-logo-{activity} {extraClass}"
   width={size}
   height={size}
-  viewBox="0 0 100 100"
-  fill="currentColor"
-  aria-hidden="true"
+  viewBox="105 105 280 280"
+  role="img"
+  aria-label="MikeRust"
 >
-  {#each rays as angle (angle)}
-    <rect x="47.4" y="7" width="5.2" height="30" rx="2.6" transform="rotate({angle} 50 50)" />
-  {/each}
+  <g transform="translate(250,250)">
+    {#each cells as c (`${c.x},${c.y}`)}
+      <rect
+        x={c.x}
+        y={c.y}
+        width="80"
+        height="80"
+        fill={c.fill}
+        class={c.corner ? 'mike-logo-cell mike-logo-corner' : 'mike-logo-cell'}
+      />
+    {/each}
+  </g>
 </svg>

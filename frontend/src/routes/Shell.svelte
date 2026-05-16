@@ -100,7 +100,7 @@
     <Sidebar>
       {#snippet brand()}
         <span class="flex items-center gap-2">
-          <Logo size={20} spin="none" class="text-(--color-brand-500)" />
+          <Logo size={20} activity="idle" />
           <span class="text-base font-semibold text-(--color-brand-600)">MikeRust</span>
         </span>
       {/snippet}

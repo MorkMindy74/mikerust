@@ -19,6 +19,12 @@
   let pin = $state('')
   let submitting = $state(false)
   let formError = $state<string | null>(null)
+  let formEl = $state<HTMLFormElement>()
+
+  // Focus the PIN field as soon as the unlock screen appears.
+  $effect(() => {
+    formEl?.querySelector('input')?.focus()
+  })
 
   let biometricAvailable = $state(false)
   let biometricBusy = $state(false)
@@ -97,7 +103,7 @@
   }
 </script>
 
-<form class="space-y-4" onsubmit={submitPin}>
+<form class="space-y-4" bind:this={formEl} onsubmit={submitPin}>
   <Input
     label={i18n.t('Auth.pin')}
     type="password"

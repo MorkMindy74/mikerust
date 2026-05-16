@@ -41,7 +41,7 @@
     {#if chatStore.messages.length === 0}
       <div class="h-full flex flex-col items-center justify-center text-center px-6 gap-2">
         <div class="flex items-center gap-3">
-          <Logo size={42} spin={chatStore.streaming ? 'active' : 'idle'} class="text-(--color-brand-500)" />
+          <Logo size={42} activity={chatStore.streaming ? 'thinking' : 'idle'} />
           <h2 class="text-2xl font-semibold text-(--color-text-primary)">
             {t('Assistant.greeting', { name: greetingName })}
           </h2>

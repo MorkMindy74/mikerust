@@ -193,25 +193,29 @@ body {
 
 /* ── MikeRust logo ───────────────────────────────────────────────── */
 
-.mike-logo {
-  transform-origin: 50% 50%;
+/* Hide the native scrollbar on horizontally-scrolled strips. */
+.no-scrollbar { scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+
+.mike-logo-cell {
+  transform-box: fill-box;
+  transform-origin: center;
 }
-.mike-logo-idle {
-  animation: mike-logo-spin 22s linear infinite;
+/* While MikeRust is busy, the bottom-right square pulses small→large→small. */
+.mike-logo-thinking .mike-logo-corner,
+.mike-logo-docx .mike-logo-corner,
+.mike-logo-upload .mike-logo-corner {
+  animation: mike-logo-pulse 1.3s ease-in-out infinite;
 }
-.mike-logo-active {
-  animation: mike-logo-spin 2.4s linear infinite;
+@keyframes mike-logo-pulse {
+  0%, 100% { transform: scale(0.78); }
+  50% { transform: scale(1.08); }
 }
-@keyframes mike-logo-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
+/* Activity colour: rust (default) → blue (docx) → green (upload). */
+.mike-logo-docx { filter: hue-rotate(198deg) saturate(1.05); }
+.mike-logo-upload { filter: hue-rotate(95deg) saturate(0.95); }
 @media (prefers-reduced-motion: reduce) {
-  .mike-logo-idle,
-  .mike-logo-active {
-    animation: none;
-  }
+  .mike-logo-corner { animation: none; }
 }
 
 /* ── Citation pills ──────────────────────────────────────────────── */
