@@ -181,10 +181,18 @@ mod tests {
     }
 
     #[test]
-    fn supports_mcp_tools_yes_for_known_cloud_models() {
-        // Force-disable env override so we only test the default
-        // capability table.
+    fn supports_mcp_tools_capability_table() {
+        // All three groups mutate the process-global MRUST_FORCE_MCP_TOOLS
+        // env var, so they live in one test: split across separate #[test]s
+        // they race under the parallel test runner.
+
+        // Force override ON: even local/unknown models report true.
+        unsafe { std::env::set_var("MRUST_FORCE_MCP_TOOLS", "1") };
+        assert!(supports_mcp_tools("local:gemma3"));
+        assert!(supports_mcp_tools("foobar-7b"));
         unsafe { std::env::remove_var("MRUST_FORCE_MCP_TOOLS") };
+
+        // Default table: known cloud models report true.
         assert!(supports_mcp_tools("claude-opus-4-7"));
         assert!(supports_mcp_tools("claude-sonnet-4-6"));
         assert!(supports_mcp_tools("gemini-2.5-pro"));
@@ -192,25 +200,13 @@ mod tests {
         assert!(supports_mcp_tools("gpt-4o"));
         assert!(supports_mcp_tools("gpt-4.1"));
         assert!(supports_mcp_tools("openai:gpt-4o"));
-    }
 
-    #[test]
-    fn supports_mcp_tools_no_for_local_or_unknown() {
-        unsafe { std::env::remove_var("MRUST_FORCE_MCP_TOOLS") };
-        // local: prefix → conservative default OFF
+        // Default table: local: prefix and bare unknown / vLLM names are
+        // OFF until the user opts in.
         assert!(!supports_mcp_tools("local:llama3.2:3b"));
         assert!(!supports_mcp_tools("local:gemma3"));
-        // Bare unknown / vLLM names → OFF until the user opts in.
         assert!(!supports_mcp_tools("localllm-main"));
         assert!(!supports_mcp_tools("foobar-7b"));
-    }
-
-    #[test]
-    fn supports_mcp_tools_force_override() {
-        unsafe { std::env::set_var("MRUST_FORCE_MCP_TOOLS", "1") };
-        assert!(supports_mcp_tools("local:gemma3"));
-        assert!(supports_mcp_tools("foobar-7b"));
-        unsafe { std::env::remove_var("MRUST_FORCE_MCP_TOOLS") };
     }
 
     #[test]

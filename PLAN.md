@@ -1,46 +1,219 @@
-# PLAN_MISSING — Funzionalità mancanti nel nuovo frontend Svelte
+# MikeRust — Piano di sviluppo
 
-> **Scopo del documento.** Il nuovo frontend (Svelte 5 + Tauri, cartella `frontend/`)
-> è una riscrittura clean-room ancora incompleta rispetto all'applicazione
-> precedente. Questo piano elenca, area per area, **cosa manca** e **come deve
-> comportarsi** ogni funzionalità da costruire.
+> **Ultimo aggiornamento:** maggio 2026 — documento consolidato (l'ex `PLAN.md`
+> e `PLAN_MISSING.md` sono stati fusi qui).
 >
-> **Come usare questo piano.** Ogni sezione descrive il *comportamento* atteso —
-> cosa vede l'utente, cosa succede a ogni interazione, quali endpoint del backend
-> vengono chiamati e con quale semantica. Il documento è una **specifica
-> funzionale**: chi implementa deve riprodurre il comportamento scrivendo codice
-> nuovo, non ricopiarlo. Non vengono indicati nomi di componenti, funzioni,
-> metodi o proprietà esistenti: solo funzionalità, contratti API di rete e UX.
+> **Scopo.** MikeRust è una riscrittura clean-room del progetto
+> [willchen96/mike](https://github.com/willchen96/mike) orientata all'uso
+> **locale e sovrano**: nessun cloud, nessun servizio esterno obbligatorio, un
+> singolo eseguibile desktop. Questo documento descrive cosa è MikeRust, come è
+> costruito, come si avvia, e tiene la **specifica funzionale** area per area con
+> il relativo stato di avanzamento.
 >
-> **Cosa è già contratto stabile e quindi citabile.** I percorsi degli endpoint
-> HTTP del backend e i nomi dei tipi di evento SSE sono un contratto di rete del
-> backend Rust: vengono citati perché chi implementa deve parlarci. Tutto il
-> resto è descritto come comportamento.
->
-> **Convenzioni del progetto da rispettare sempre.**
-> - Ogni stringa visibile all'utente passa dal sistema i18n (6 lingue: it/en/fr/de/es/pt). Mai testo hard-coded.
-> - Gli identificatori di schema (valori enum, chiavi JSON, parametri di rotta) restano in inglese snake_case; si localizzano solo le etichette visibili.
-> - Le preferenze utente si salvano lato server tramite gli endpoint `/user/*`, non in `localStorage`.
+> **Come leggere le sezioni funzionali (9 in poi).** Ogni sezione descrive il
+> *comportamento* atteso — cosa vede l'utente, cosa succede a ogni interazione,
+> quali endpoint del backend vengono chiamati e con quale semantica. È una
+> specifica: chi implementa riproduce il comportamento scrivendo codice nuovo.
+> Il blocco **Stato attuale** di ciascuna sezione è la fotografia di *analisi
+> iniziale dei gap*; lo **stato reale e aggiornato** è nella tabella di sintesi
+> della sezione 9. I percorsi degli endpoint HTTP e i nomi degli eventi SSE sono
+> contratto di rete del backend Rust e vanno citati testualmente.
 
 ---
 
-## Stato di sintesi
+## 1. Cosa è MikeRust
 
-| Area | Stato attuale | Priorità |
+Assistente AI per documenti, desktop-first, completamente locale. Un singolo
+eseguibile Tauri racchiude: backend axum, database SQLite, frontend Svelte. Le
+chiamate LLM vanno a provider configurati dall'utente (Claude, Gemini, OpenAI,
+Mistral, o un endpoint OpenAI-compatibile locale tipo Ollama/vLLM); tutto il
+resto — auth, storage, RAG, indici, corpora — vive sulla macchina dell'utente.
+
+Casi d'uso principali: assistente con citazioni verificabili, revisione tabellare
+di documenti (estrazione strutturata), generazione di documenti `.docx` da
+template, gestione di progetti con basi di conoscenza isolate.
+
+---
+
+## 2. Architettura
+
+```text
+mike-tauri.exe  (unico eseguibile)
+├── Tauri webview       ← mostra il frontend Svelte (build statica in frontend/dist/)
+└── tokio thread        ← axum su 127.0.0.1:<porta dinamica> (solo loopback)
+        ├── SQLite   (mike.db — zero setup, migrazioni automatiche all'avvio)
+        ├── Auth     (PIN Argon2id + Windows Hello / Touch ID, sessioni opaque-token)
+        ├── Storage  (filesystem locale, percorso canonicalizzato)
+        ├── RAG      (embeddings ONNX via ort, indici locali)
+        ├── PDF/DOCX (pdfium-render per estrazione; docx writer per generazione)
+        ├── LLM      (Claude / Gemini / OpenAI / Mistral / OpenAI-compat locale)
+        └── MCP      (client JSON-RPC verso qualsiasi server HTTP/SSE MCP)
+```
+
+La porta del backend è **dinamica**: il backend fa il bind su `127.0.0.1:0`,
+il sistema sceglie una porta libera, il guscio Tauri la riceve e la inietta nel
+webview come `api_base_url`. In sviluppo standalone si può fissare via `PORT`.
+
+---
+
+## 3. Struttura del workspace
+
+```text
+MikeRust/
+├── Cargo.toml          ← workspace (members: "." e "src-tauri"), edition 2024
+├── src/                ← crate `mike` (libreria + bin standalone)
+│   ├── lib.rs          ← run_server(port); espone l'app axum
+│   ├── main.rs         ← bin standalone (cargo run)
+│   ├── auth/           ← PIN Argon2id, biometrica, middleware, sessioni, rate-limit
+│   ├── db/             ← AppState, pool SQLite, runner migrazioni
+│   ├── routes/         ← auth, user, chat, projects, documents, workflows,
+│   │                     tabular_reviews, docx_templates, presets, models,
+│   │                     corpora, eurlex, italian_legal, sync, health
+│   ├── llm/            ← claude, gemini, local (OpenAI-compat), summarize, builtin_tools
+│   ├── mcp/            ← client MCP JSON-RPC (HTTP/SSE)
+│   ├── pdf/            ← estrazione PDF (pdfium-render) e DOCX (ZIP+XML)
+│   ├── docx/           ← generazione .docx (package/document_xml/styles_xml)
+│   ├── presets/        ← workflow, column, docx_template (caricati da config/)
+│   ├── corpora/        ← EUR-Lex, Legale Italiano, adapter manifest plugin
+│   ├── sync/           ← scanner cartelle locali → indice RAG
+│   ├── embeddings/     ← modello ONNX, sessioni
+│   ├── mikeprj/        ← export/import progetto cifrato (.mikeprj)
+│   └── storage/        ← filesystem locale
+├── src-tauri/          ← crate `mike-tauri` (guscio desktop; dipende da `mike`)
+│   ├── tauri.conf.json ← finestra, bundle, risorse
+│   └── src/lib.rs      ← avvia il thread axum + Tauri::Builder
+├── frontend/           ← frontend Svelte 5 + Vite 6 + Tailwind v4 (TS strict)
+│   └── src/
+│       ├── routes/     ← Boot, Unlock, Setup, Shell, Assistant, Workflows,
+│       │                 Tabular, Projects, Templates, Settings, Playground
+│       ├── lib/components/ ← auth, chat, documents, docx, projects, settings,
+│       │                     tabular, workflow, layout, ui, domain
+│       ├── lib/stores/  ← runes-based ($state): chat, projects, tabular, ecc.
+│       ├── lib/api/     ← wrapper fetch tipati per gli endpoint del backend
+│       └── lib/i18n/    ← bundle 6 lingue (it/en/fr/de/es/pt)
+├── migrations/         ← 0001 … 0023 (SQL, applicate in ordine all'avvio)
+├── config/             ← preset versionati: workflow-presets/, column-presets/,
+│                          docx-templates/, corpora-plugins/, model.json
+└── libs/pdfium/        ← pdfium.dll / .so / .dylib
+```
+
+---
+
+## 4. Avvio e build
+
+### Sviluppo — Tauri (consigliato)
+
+```bash
+cargo tauri dev          # compila backend + guscio, avvia Vite, apre la finestra
+```
+
+### Sviluppo — backend e frontend separati
+
+```bash
+cargo run                # backend axum standalone (usa PORT se impostata)
+cd frontend && pnpm dev   # Vite su :5173 — il package manager è pnpm, non npm
+```
+
+### Build desktop
+
+```bash
+cd frontend && pnpm build   # svelte-check + vite build → frontend/dist/
+cargo tauri build           # compila mike-tauri.exe + installer
+```
+
+### Verifiche
+
+```bash
+cd frontend && pnpm typecheck   # svelte-check (deve dare 0 errori)
+cd frontend && pnpm test        # vitest (unit test del frontend)
+cargo test --workspace          # test Rust (unit + doc + integration)
+```
+
+---
+
+## 5. Variabili d'ambiente
+
+### Backend
+
+| Variabile | Richiesta | Default | Note |
+|---|---|---|---|
+| `DATABASE_URL` | No | `sqlite://mike.db` | |
+| `STORAGE_PATH` | No | `./data/storage` | canonicalizzato all'avvio |
+| `PORT` | No | `0` (dinamica) | fissare solo per dev standalone |
+| `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` / ecc. | Per LLM | — | normalmente le chiavi si salvano via `/user/llm-settings` |
+| `VLLM_BASE_URL` | Per LLM locale | — | endpoint OpenAI-compatibile |
+| `MRUST_FORCE_MCP_TOOLS` | No | — | forza l'abilitazione dei tool MCP anche su modelli locali |
+
+### Frontend
+
+In modalità Tauri l'URL del backend è iniettato dal guscio (`api_base_url`). In
+dev standalone il frontend punta al backend via la porta nota.
+
+---
+
+## 6. Convenzioni di progetto (da rispettare sempre)
+
+- Ogni stringa visibile all'utente passa dal sistema i18n (6 lingue: it/en/fr/de/es/pt). Mai testo hard-coded.
+- Gli identificatori di schema (valori enum, chiavi JSON, parametri di rotta) restano in inglese snake_case; si localizzano solo le etichette visibili.
+- Le preferenze utente si salvano lato server tramite gli endpoint `/user/*`, non in `localStorage`.
+- Il disclaimer "l'AI può sbagliare / non è consulenza legale" è obbligatorio sotto il compositore della chat.
+- I commit vanno su `main` direttamente e non includono trailer `Co-Authored-By`.
+
+---
+
+## 7. Stato dei test
+
+| Suite | Stato |
+|---|---|
+| `cargo test --workspace` | 358 passed, 0 failed, 14 ignored (3 perf + 11 ONNX che richiedono modelli) |
+| Doctests Rust | verdi |
+| `svelte-check` | 0 errori, 0 warning (~3500 file) |
+| `vite build` | verde |
+| `vitest` (frontend) | unit test presenti per le utility pure (`highlight`, `citations`, ecc.) |
+
+---
+
+## 8. Differenze rispetto a Mike originale
+
+| Aspetto | Mike (originale) | MikeRust |
 |---|---|---|
-| 1. Assistente — citazioni e visualizzatore fonti | Assente | **Alta** |
-| 2. Assistente — eventi di tool/lettura/creazione documenti | Eventi ricevuti ma scartati | **Alta** |
-| 3. Assistente — selettore modello, titolo automatico, blocchi di ragionamento | Assente | Media |
-| 4. Visualizzatore documenti multi-formato | Assente | **Alta** |
-| 5. Workflow — modifica, eliminazione, editor a pagina intera | Solo creazione | Media |
-| 6. Tabular review — griglia, esecuzione, celle, chat di review | Solo lista + creazione + eliminazione | **Alta** |
-| 7. Progetti — dettaglio, documenti, cartelle, versioni, export/import | Solo lista CRUD | **Alta** |
-| 8. Template DOCX — dettaglio, generazione, applica-a-chat | Solo lista in lettura | Media |
-| 9. Documenti — caricamento, stato indicizzazione, conversione | Assente (nessuna schermata) | Media |
-| 10. Impostazioni — Fonti dati (sync locale, EUR-Lex, corpora) | Sezione disabilitata | Media |
-| 11. Banner stato embedding | Assente | Bassa |
-| 12. Approvazione tool MCP in chat | Assente | Bassa |
-| 13. Regressione i18n nelle Impostazioni | Stringhe hard-coded in inglese | **Alta (difetto)** |
+| Backend | Express + TypeScript | **Rust axum** |
+| Auth | Supabase Auth | **PIN Argon2id + Windows Hello / Touch ID** |
+| Database | Supabase Postgres | **SQLite (zero setup)** |
+| Storage | Cloudflare R2 | **Filesystem locale** |
+| Frontend | Next.js | **Svelte 5 + Vite** |
+| Deploy | Web (OpenNext) | **Desktop Tauri (exe singolo)** |
+| LLM | Claude + Gemini | Claude + Gemini + **OpenAI + Mistral + locale** |
+| MCP | No | **Sì** |
+| Dipendenze cloud | Supabase, R2, OpenNext | **Nessuna** |
+
+---
+
+## 9. Stato funzionalità (sintesi aggiornata)
+
+Stato reale a maggio 2026. Build, typecheck e suite di test sono verdi; dove
+indicato "Implementato" i componenti esistono e compilano, ma una QA funzionale
+completa non è stata rieseguita in questa revisione.
+
+| Area | Stato | Note |
+|---|---|---|
+| 1. Assistente — citazioni interattive | ✅ Implementato | pillole, tooltip, click → visualizzatore |
+| 2. Assistente — eventi tool/documento | ✅ Implementato | coperti tutti gli eventi SSE emessi dal backend (`citations`, `content_delta`, `tool_call_*`, `doc_created`, `error`); gli eventi `reasoning_*`/`doc_read`/`doc_find`/`doc_edited`/`doc_replicate`/`workflow_applied` restano specifica futura, non ancora emessi dal backend |
+| 3. Assistente — modello, titolo auto, modifiche tracciate | 🟡 Parziale | selettore modello e generazione titolo presenti; card di modifica tracciata (accetta/rifiuta) ancora da completare |
+| 4. Visualizzatore documenti multi-formato | ✅ Implementato | PDF / DOCX / XLSX / testo, pannello a schede |
+| 5. Workflow — editor, modifica, eliminazione | ✅ Implementato | editor a pagina intera |
+| 6. Tabular review — griglia, esecuzione, celle, chat | ✅ Implementato | `TabularDetail` |
+| 7. Progetti — dettaglio, documenti, cartelle, versioni | ✅ Implementato | `ProjectDetail` |
+| 8. Template DOCX — dettaglio, generazione, **editor** | ✅ Implementato | dettaglio/describe/render/applica-a-chat + editor a pagina intera (tutti i campi) con persistenza su `config/docx-templates/user/` |
+| 9. Documenti — caricamento, stato indicizzazione | ✅ Implementato | |
+| 10. Impostazioni — Fonti dati (sync, EUR-Lex, corpora) | ✅ Implementato | `SyncSection`/`EurlexSection`/`CorpusSection` |
+| 11. Banner stato embedding | ✅ Implementato | `EmbeddingBanner` |
+| 12. Approvazione tool MCP in chat | 🟠 Area aperta | dialogo asincrono ancora non del tutto risolto |
+| 13. Regressione i18n nelle Impostazioni | ✅ Risolto | stringhe estratte in chiavi i18n |
+
+> Le sezioni che seguono mantengono la specifica funzionale dettagliata. Il
+> blocco **Stato attuale** di ciascuna riflette l'analisi iniziale dei gap;
+> la tabella qui sopra è la fonte di verità sullo stato corrente.
 
 ---
 
@@ -519,11 +692,12 @@ con l'editabilità della modalità di isolamento (oggi assente dalla modale).
 
 ---
 
-## 8. Template DOCX — Dettaglio, generazione, applica-a-chat
+## 8. Template DOCX — Dettaglio, generazione, applica-a-chat, **editor**
 
 ### Stato attuale
-Funziona solo la lista in sola lettura con filtri (ricerca, dominio, locale).
-Mancano: la modale di dettaglio, l'applica-a-chat, la generazione/resa.
+Lista, modale di dettaglio (`describe`), applica-a-chat e finestra di resa
+(`render`) sono implementati. **In sviluppo**: l'editor dei template, che
+permette di creare e modificare template DOCX dell'utente.
 
 ### Comportamento atteso
 
@@ -544,10 +718,45 @@ resa che raccoglie i valori dei campi di metadati richiesti e produce il
 documento; va gestita l'intestazione di risposta che segnala i segnaposto non
 risolti, mostrandoli all'utente.
 
+### Editor dei template DOCX
+
+**Modello di persistenza.** I template di sistema vivono in
+`config/docx-templates/` come file JSON di sola lettura. I template dell'utente
+vivono in `config/docx-templates/user/` come file JSON **scrivibili**: creare o
+modificare un template significa scrivere un file JSON in quella cartella. Gli
+endpoint di lettura (`list`, `describe`, `render`) uniscono le due sorgenti; i
+template di sistema non sono mai modificabili né eliminabili dall'interfaccia.
+
+**Endpoint di scrittura del backend.**
+- `POST /docx-templates` — crea un nuovo template utente; il corpo è la
+  definizione JSON completa; il backend assegna un id sotto `user/`, valida e
+  scrive il file. Restituisce la definizione salvata.
+- `PUT /docx-templates/{id}` — aggiorna un template utente esistente; rifiuta
+  con errore se l'id appartiene a un template di sistema.
+- `DELETE /docx-templates/{id}` — elimina un template utente; rifiuta i
+  template di sistema.
+Dopo ogni scrittura lo stato in memoria dei template (`state.docx_templates`)
+va riallineato in modo che `list`/`describe`/`render` vedano subito le modifiche.
+
+**Editor a pagina intera (scope "core + layout completo").** Copre **tutti** i
+campi del modello `DocxTemplate`, non solo quelli di authoring:
+- *Anagrafica*: nome localizzato (per le 6 lingue), categoria, dominio e domini
+  "applicabile anche a", locale, livello di automazione, sintassi dei segnaposto,
+  riferimento di origine.
+- *Layout e tipografia*: formato carta, uso bollo, margini, tipografia/font,
+  note a piè di pagina, style map (baseline + override), direttive supportate,
+  blocco intestazione e piè di pagina, numerazione delle sezioni.
+- *Contenuto*: scheletro delle sezioni, prompt per campo, metadati richiesti,
+  limiti di caratteri, esempi few-shot, testo extra del prompt.
+I template di sistema si aprono nell'editor in sola lettura, con possibilità di
+**duplicarli** in un nuovo template utente modificabile.
+
 ### Da fare
-1. Modale di dettaglio con `describe` e campi metadati.
-2. Azione "Applica alla chat" e collegamento diretto template → Assistente.
-3. Finestra di resa che raccoglie i metadati, chiama `render`, scarica il `.docx` e segnala i segnaposto non risolti.
+1. ✅ Modale di dettaglio con `describe` e campi metadati.
+2. ✅ Azione "Applica alla chat" e collegamento diretto template → Assistente.
+3. ✅ Finestra di resa che raccoglie i metadati, chiama `render`, scarica il `.docx`.
+4. ✅ Endpoint di scrittura del backend (`POST /docx-templates/save` e `/delete`) su `config/docx-templates/user/` con merge in lettura.
+5. ✅ Editor a pagina intera con copertura completa dei campi e duplica-da-sistema.
 
 ---
 

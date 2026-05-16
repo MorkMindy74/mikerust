@@ -1,9 +1,10 @@
 <!-- Copyright (c) 2026 MikeRust contributors. Licensed under AGPL-3.0-only. -->
 <!--
-  DOCX Templates screen. Read-only registry view (GET /docx-templates) —
-  the backend has no write endpoint; templates are added by dropping a
-  .dotx + sidecar JSON into config/docx-templates/. Filter by domain,
-  locale and free-text search; level (L1/L2/L3) and domain badges.
+  DOCX Templates screen. Lists the template registry (GET /docx-templates),
+  merging shipped system templates with writable user templates. Filter by
+  domain, locale and free-text search. A row opens the detail modal; the
+  edit action opens the full-page editor (system templates read-only,
+  duplicable into editable user templates).
 -->
 <script lang="ts">
   import Badge from '$lib/components/ui/Badge.svelte'
@@ -11,18 +12,34 @@
   import Input from '$lib/components/ui/Input.svelte'
   import Spinner from '$lib/components/ui/Spinner.svelte'
   import Button from '$lib/components/ui/Button.svelte'
+  import IconButton from '$lib/components/ui/IconButton.svelte'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import TemplateDetailModal from '$lib/components/docx/TemplateDetailModal.svelte'
+  import TemplateEditor from '$lib/components/docx/TemplateEditor.svelte'
   import { templateStore } from '$lib/stores/templates.svelte'
   import { i18n } from '$lib/stores/i18n.svelte'
   import { DOMAINS, domainLabel } from '$lib/types/domain'
   import { templateDisplayName, type DocxTemplate } from '$lib/types/template'
-  import { Search } from 'lucide-svelte'
+  import { Search, Pencil } from 'lucide-svelte'
 
   let domainFilter = $state<string>('')
   let localeFilter = $state<string>('')
   let search = $state<string>('')
   let detailId = $state<string | null>(null)
+
+  // Full-page editor: open with a template to edit, or null to create.
+  let editorOpen = $state(false)
+  let editorInitial = $state<DocxTemplate | null>(null)
+
+  function openEditor(initial: DocxTemplate | null) {
+    editorInitial = initial
+    editorOpen = true
+  }
+  function closeEditor(refresh: boolean) {
+    editorOpen = false
+    editorInitial = null
+    if (refresh) void templateStore.refresh()
+  }
 
   $effect(() => {
     void templateStore.refresh()
@@ -56,12 +73,24 @@
   })
 </script>
 
+{#if editorOpen}
+  <TemplateEditor
+    initial={editorInitial}
+    onback={() => closeEditor(false)}
+    onsaved={() => closeEditor(true)}
+  />
+{:else}
 <div class="max-w-4xl mx-auto p-8 space-y-5">
-  <header class="space-y-1">
-    <h2 class="text-2xl font-semibold text-(--color-text-primary)">{i18n.t('DocxTemplates.title')}</h2>
-    <p class="text-sm text-(--color-text-secondary)">
-      {i18n.t('DocxTemplates.subtitle')}
-    </p>
+  <header class="flex items-end justify-between gap-4">
+    <div class="space-y-1">
+      <h2 class="text-2xl font-semibold text-(--color-text-primary)">{i18n.t('DocxTemplates.title')}</h2>
+      <p class="text-sm text-(--color-text-secondary)">
+        {i18n.t('DocxTemplates.subtitle')}
+      </p>
+    </div>
+    <Button variant="primary" onclick={() => openEditor(null)}>
+      {i18n.t('DocxTemplates.edNewTemplate')}
+    </Button>
   </header>
 
   <div class="flex items-end gap-3 flex-wrap">
@@ -104,18 +133,23 @@
   {:else}
     <ul class="flex flex-col gap-2">
       {#each rows as t (t.id)}
-        <li>
+        <li
+          class="flex items-stretch gap-1 bg-(--color-surface-0) border border-(--color-surface-200)
+                 rounded-(--radius-md) hover:border-(--color-surface-300)"
+        >
           <button
             type="button"
             onclick={() => (detailId = t.id)}
-            class="w-full text-left px-4 py-3 bg-(--color-surface-0) border border-(--color-surface-200)
-                   rounded-(--radius-md) space-y-1.5 hover:border-(--color-surface-300)"
+            class="flex-1 min-w-0 text-left px-4 py-3 space-y-1.5"
           >
           <div class="flex items-center gap-2">
             <Badge tone="level" size="xs">{t.automation_level}</Badge>
             <span class="text-sm font-medium text-(--color-text-primary) flex-1 min-w-0 truncate">
               {templateDisplayName(t, 'en')}
             </span>
+            {#if !t.is_system}
+              <Badge tone="brand" size="xs">{i18n.t('Workflows.originSelf')}</Badge>
+            {/if}
             <Badge tone="brand">{domainLabel(t.domain)}</Badge>
             <span class="text-xs text-(--color-text-secondary) font-mono">{t.locale}</span>
           </div>
@@ -136,10 +170,16 @@
             {/if}
           </div>
           </button>
+          <div class="flex items-center pr-2">
+            <IconButton label={i18n.t('Common.edit')} size="sm" onclick={() => openEditor(t)}>
+              <Pencil size={15} />
+            </IconButton>
+          </div>
         </li>
       {/each}
     </ul>
   {/if}
 </div>
+{/if}
 
 <TemplateDetailModal templateId={detailId} onclose={() => (detailId = null)} />

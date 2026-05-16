@@ -2,7 +2,7 @@
 //!
 //! OOXML expects the archive to carry, at minimum:
 //!
-//! ```
+//! ```text
 //! [Content_Types].xml         (root)
 //! _rels/.rels                 (root relationships → document.xml)
 //! word/document.xml           (the body, produced by document_xml.rs)

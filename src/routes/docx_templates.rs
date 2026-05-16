@@ -1,14 +1,21 @@
-//! `/docx-templates` — read-only view onto the DOCX template registry
-//! loaded from `config/docx-templates/<domain>/<slug>.json` at startup.
+//! `/docx-templates` — the DOCX template registry.
 //!
-//! Each entry is a "closing formatter" template — sidecar JSON metadata
-//! plus a companion `.dotx` Word file. The frontend consumes this
-//! endpoint to populate the Settings → Templates DOCX picker and the
-//! "Default output template" combo in the workflow editor.
+//! Each entry is a "closing formatter" template: structured JSON
+//! metadata the renderer turns into a print-ready `.docx`. Two sources
+//! are merged:
 //!
-//! No write endpoint today — to add or modify a template, drop the
-//! `.dotx` + sidecar pair into the right folder and restart. Follows
-//! the same JSON-driven pattern as workflows / column-presets / models.
+//!   * **System templates** — shipped under `config/docx-templates/`
+//!     and loaded once at startup into `state.docx_templates`. Read-only.
+//!   * **User templates** — JSON files under `config/docx-templates/user/`,
+//!     created and edited through the template editor. Writable.
+//!
+//! User-template ids carry a `user/` prefix; the file basename is the
+//! single path segment after that prefix. Read endpoints re-scan the
+//! `user/` folder per call so edits show up without an app restart.
+//!
+//! Template ids contain `/` (e.g. `it/diffida-messa-in-mora`,
+//! `user/contratto-mio`), so every id travels in a JSON body parameter
+//! rather than a URL path segment — sidesteps client URL-encoding pitfalls.
 
 use axum::{
     extract::{Query, State},
@@ -20,20 +27,82 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::presets::docx_template::{load_docx_templates, validate, DocxTemplate};
 use crate::{auth::middleware::AuthUser, AppState};
 
 type ApiResult = Result<Json<Value>, (StatusCode, Json<Value>)>;
 
 pub fn router() -> Router<Arc<AppState>> {
-    // Template ids contain `/` (e.g. "it/diffida-messa-in-mora") so
-    // we pass them in JSON body parameters rather than URL path
-    // segments — sidesteps URL-encoding pitfalls in clients.
     Router::new()
         .route("/", get(list_docx_templates))
         .route("/describe", post(describe_docx_template))
         .route("/render", post(render_docx_template))
+        .route("/save", post(save_docx_template))
+        .route("/delete", post(delete_docx_template))
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// User-template helpers
+// ─────────────────────────────────────────────────────────────────────
+
+/// `config/docx-templates/user/` — where writable user templates live.
+fn user_templates_dir() -> PathBuf {
+    crate::presets::config_subdir("docx-templates").join("user")
+}
+
+/// User templates are identified by a `user/` id prefix.
+fn is_user_id(id: &str) -> bool {
+    id.starts_with("user/")
+}
+
+/// Validate and extract the single safe path segment after `user/`.
+/// Rejects anything that could escape the folder (`..`, separators) or
+/// produce an awkward filename — the slug is lowercase alphanumerics
+/// plus `-`/`_`, must start alphanumeric, max 80 chars.
+fn user_slug(id: &str) -> Option<String> {
+    let slug = id.strip_prefix("user/")?;
+    if slug.is_empty() || slug.len() > 80 {
+        return None;
+    }
+    let mut chars = slug.chars();
+    let first_ok = chars
+        .next()
+        .map(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        .unwrap_or(false);
+    let rest_ok = slug
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_');
+    (first_ok && rest_ok).then(|| slug.to_string())
+}
+
+/// System templates (immutable, startup-loaded) merged with the current
+/// on-disk user templates. The `user/` folder is tiny and re-reading it
+/// per call keeps the API consistent with editor changes without an app
+/// restart. Sorted by id for a stable listing.
+fn merged_templates(state: &AppState) -> Vec<DocxTemplate> {
+    let mut out: Vec<DocxTemplate> = state
+        .docx_templates
+        .iter()
+        .filter(|t| !is_user_id(&t.id))
+        .cloned()
+        .collect();
+    if let Ok(user) = load_docx_templates(&user_templates_dir()) {
+        out.extend(user);
+    }
+    out.sort_by(|a, b| a.id.cmp(&b.id));
+    out
+}
+
+/// Render one template as API JSON, picking the system / user flags.
+fn template_to_api_json(t: &DocxTemplate) -> Value {
+    if is_user_id(&t.id) {
+        t.to_api_json_user()
+    } else {
+        t.to_api_json()
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -55,8 +124,7 @@ async fn list_docx_templates(
     // primary `domain` equals the query OR when the query is listed
     // in `also_applicable_to`. Lets a Parcella (primary finance)
     // surface for users with default_domain=legal.
-    let items: Vec<Value> = state
-        .docx_templates
+    let items: Vec<Value> = merged_templates(&state)
         .iter()
         .filter(|t| t.matches_domain(q.domain.as_deref()))
         .filter(|t| {
@@ -64,7 +132,7 @@ async fn list_docx_templates(
                 .as_deref()
                 .is_none_or(|l| t.locale.starts_with(l))
         })
-        .map(|t| t.to_api_json())
+        .map(template_to_api_json)
         .collect();
     Ok(Json(json!({ "docx_templates": items })))
 }
@@ -85,11 +153,8 @@ async fn describe_docx_template(
     _auth: AuthUser,
     Json(body): Json<DescribeBody>,
 ) -> ApiResult {
-    let Some(template) = state
-        .docx_templates
-        .iter()
-        .find(|t| t.id == body.template_id)
-    else {
+    let templates = merged_templates(&state);
+    let Some(template) = templates.iter().find(|t| t.id == body.template_id) else {
         return Err((
             StatusCode::NOT_FOUND,
             Json(json!({ "error": format!("template {} not found", body.template_id) })),
@@ -100,7 +165,7 @@ async fn describe_docx_template(
         "template_id": template.id,
         "display_name": template.display_name_for(locale),
         "prompt_md": template.auto_generated_prompt_md(locale),
-        "sidecar": template.to_api_json(),
+        "sidecar": template_to_api_json(template),
     })))
 }
 
@@ -130,11 +195,8 @@ async fn render_docx_template(
     _auth: AuthUser,
     Json(body): Json<RenderBody>,
 ) -> Result<axum::response::Response, (StatusCode, Json<Value>)> {
-    let Some(template) = state
-        .docx_templates
-        .iter()
-        .find(|t| t.id == body.template_id)
-    else {
+    let templates = merged_templates(&state);
+    let Some(template) = templates.iter().find(|t| t.id == body.template_id) else {
         return Err((
             StatusCode::NOT_FOUND,
             Json(json!({ "error": format!("template {} not found", body.template_id) })),
@@ -189,6 +251,104 @@ async fn render_docx_template(
     Ok(response)
 }
 
+/// `POST /docx-templates/save` — create or update a user template.
+///
+/// The request body is a full `DocxTemplate` definition. The `id` must
+/// carry the `user/` prefix (system templates are never writable here);
+/// the slug after the prefix becomes the JSON filename under
+/// `config/docx-templates/user/`. The definition is validated against
+/// the same invariants the startup loader enforces before it touches
+/// disk. Re-saving an existing id overwrites it (the editor's update
+/// path); a fresh id creates a new file.
+async fn save_docx_template(
+    _auth: AuthUser,
+    Json(template): Json<DocxTemplate>,
+) -> ApiResult {
+    let Some(slug) = user_slug(&template.id) else {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "template id must be 'user/<slug>' — slug is lowercase \
+                          alphanumerics with '-'/'_', starting alphanumeric. \
+                          System templates cannot be edited."
+            })),
+        ));
+    };
+
+    if let Err(reason) = validate(&template) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": reason })),
+        ));
+    }
+
+    let dir = user_templates_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("create user templates dir: {e}") })),
+        )
+    })?;
+
+    let pretty = serde_json::to_string_pretty(&template).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("serialize template: {e}") })),
+        )
+    })?;
+
+    let path = dir.join(format!("{slug}.json"));
+    std::fs::write(&path, pretty).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("write template: {e}") })),
+        )
+    })?;
+
+    tracing::info!("[docx-templates] saved user template {}", template.id);
+    Ok(Json(json!({
+        "saved": true,
+        "template": template.to_api_json_user(),
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+struct DeleteBody {
+    template_id: String,
+}
+
+/// `POST /docx-templates/delete` — delete a user template by id.
+/// System templates are rejected; the `user/` slug is resolved to a
+/// single file under `config/docx-templates/user/`.
+async fn delete_docx_template(
+    _auth: AuthUser,
+    Json(body): Json<DeleteBody>,
+) -> ApiResult {
+    let Some(slug) = user_slug(&body.template_id) else {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "only user templates ('user/<slug>') can be deleted" })),
+        ));
+    };
+
+    let path = user_templates_dir().join(format!("{slug}.json"));
+    if !path.exists() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("template {} not found", body.template_id) })),
+        ));
+    }
+    std::fs::remove_file(&path).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("delete template: {e}") })),
+        )
+    })?;
+
+    tracing::info!("[docx-templates] deleted user template {}", body.template_id);
+    Ok(Json(json!({ "deleted": true })))
+}
+
 /// Strip characters that are problematic in filenames on either
 /// Windows or POSIX, collapse whitespace, cap length.
 fn sanitize_filename(input: &str) -> String {
@@ -207,7 +367,48 @@ fn sanitize_filename(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_filename;
+    use super::{is_user_id, sanitize_filename, user_slug};
+
+    #[test]
+    fn is_user_id_only_matches_the_user_prefix() {
+        assert!(is_user_id("user/contratto-mio"));
+        assert!(!is_user_id("it/diffida-messa-in-mora"));
+        assert!(!is_user_id("compliance/procedura-iso-sgi"));
+        assert!(!is_user_id("userish/thing"));
+    }
+
+    #[test]
+    fn user_slug_accepts_a_clean_segment() {
+        assert_eq!(user_slug("user/contratto-mio").as_deref(), Some("contratto-mio"));
+        assert_eq!(user_slug("user/atto_2026").as_deref(), Some("atto_2026"));
+        assert_eq!(user_slug("user/t1").as_deref(), Some("t1"));
+    }
+
+    #[test]
+    fn user_slug_rejects_system_and_malformed_ids() {
+        // No user/ prefix → not a writable template.
+        assert_eq!(user_slug("it/diffida"), None);
+        // Path traversal attempts.
+        assert_eq!(user_slug("user/../secret"), None);
+        assert_eq!(user_slug("user/sub/nested"), None);
+        // Empty slug.
+        assert_eq!(user_slug("user/"), None);
+        // Must start alphanumeric.
+        assert_eq!(user_slug("user/-leading"), None);
+        assert_eq!(user_slug("user/_leading"), None);
+        // No uppercase / spaces / dots.
+        assert_eq!(user_slug("user/MyTemplate"), None);
+        assert_eq!(user_slug("user/my template"), None);
+        assert_eq!(user_slug("user/my.template"), None);
+    }
+
+    #[test]
+    fn user_slug_caps_length_at_80() {
+        let ok = format!("user/{}", "a".repeat(80));
+        assert!(user_slug(&ok).is_some());
+        let too_long = format!("user/{}", "a".repeat(81));
+        assert_eq!(user_slug(&too_long), None);
+    }
 
     #[test]
     fn sanitize_replaces_each_unsafe_char_with_dash() {

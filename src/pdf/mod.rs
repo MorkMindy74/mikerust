@@ -334,8 +334,10 @@ pub fn extract_xlsx_text(data: &[u8]) -> Result<String> {
 /// Both kinds are wrapped in `[removed by author: …]` markers so the
 /// LLM can reason about the redline structure, e.g.:
 ///
-///     The contract clauses are: clause 1, [removed by author: clause 2],
-///     clause 3.
+/// ```text
+/// The contract clauses are: clause 1, [removed by author: clause 2],
+/// clause 3.
+/// ```
 ///
 /// Paragraph boundaries (`<w:p>`) and line breaks (`<w:br/>`) are
 /// emitted as newlines so the output keeps some shape; tab elements

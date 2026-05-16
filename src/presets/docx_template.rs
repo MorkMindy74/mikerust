@@ -324,6 +324,19 @@ impl DocxTemplate {
         v
     }
 
+    /// Like [`to_api_json`](Self::to_api_json) but flags the template as
+    /// a writable user template (`is_system: false`, `is_owner: true`).
+    /// Used for entries loaded from `config/docx-templates/user/`, which
+    /// the template editor can modify and delete.
+    pub fn to_api_json_user(&self) -> Value {
+        let mut v = serde_json::to_value(self).unwrap_or(serde_json::json!({}));
+        if let Value::Object(ref mut map) = v {
+            map.insert("is_system".to_string(), Value::Bool(false));
+            map.insert("is_owner".to_string(), Value::Bool(true));
+        }
+        v
+    }
+
     /// Compose the system-prompt block that teaches an LLM how to
     /// write a document for this specific template. Derived
     /// **entirely** from the structured sidecar fields — margins,
@@ -526,8 +539,10 @@ pub fn load_docx_templates(dir: &Path) -> Result<Vec<DocxTemplate>> {
     Ok(out)
 }
 
-/// Minimum invariants every loaded template must satisfy.
-fn validate(t: &DocxTemplate) -> Result<(), String> {
+/// Minimum invariants every loaded template must satisfy. Public so the
+/// `/docx-templates/save` write route can reject a malformed user
+/// template before it ever touches disk.
+pub fn validate(t: &DocxTemplate) -> Result<(), String> {
     if t.id.is_empty() {
         return Err("empty id".into());
     }

@@ -65,4 +65,22 @@ export const templatesApi = {
       .filter(Boolean)
     return { blob: await res.blob(), unresolved }
   },
+
+  /**
+   * Create or update a user template. The `id` must carry the `user/`
+   * prefix; the backend writes a JSON file under
+   * `config/docx-templates/user/` and re-saving an existing id replaces it.
+   */
+  save: (template: DocxTemplate) =>
+    api<{ saved: boolean; template: DocxTemplate }>('/docx-templates/save', {
+      method: 'POST',
+      body: template,
+    }),
+
+  /** Delete a user template by id. System templates are rejected. */
+  remove: (template_id: string) =>
+    api<{ deleted: boolean }>('/docx-templates/delete', {
+      method: 'POST',
+      body: { template_id },
+    }),
 }
