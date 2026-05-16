@@ -282,19 +282,19 @@ body {
 
 /* ── Document viewer ─────────────────────────────────────────────── */
 
-/* Highlighted cited passage — shared by every renderer. */
+/* Highlighted cited passage — shared by every renderer. Kept light so
+   the text underneath stays readable even over a long passage. */
 mark.doc-hl {
-  background-color: color-mix(in srgb, var(--color-brand-400) 55%, transparent);
+  background-color: color-mix(in srgb, var(--color-brand-400) 22%, transparent);
   color: inherit;
   border-radius: 2px;
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-brand-500) 40%, transparent);
 }
 mark.doc-hl.doc-hl-flash {
-  animation: doc-hl-flash 1.2s ease-out;
+  animation: doc-hl-flash 1.3s ease-out;
 }
 @keyframes doc-hl-flash {
-  0%, 30% { background-color: color-mix(in srgb, var(--color-brand-500) 80%, transparent); }
-  100% { background-color: color-mix(in srgb, var(--color-brand-400) 55%, transparent); }
+  0%, 25% { background-color: color-mix(in srgb, var(--color-brand-400) 48%, transparent); }
+  100% { background-color: color-mix(in srgb, var(--color-brand-400) 22%, transparent); }
 }
 
 /* PDF.js text layer — transparent selectable text over the canvas. */
