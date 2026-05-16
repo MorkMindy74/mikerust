@@ -43,7 +43,7 @@ function createModelsStore() {
     /** Every model across all providers — for the role dropdowns. */
     get allModels() {
       return (catalogue?.providers ?? []).flatMap((p) =>
-        p.models.map((m) => ({ provider: p.display_name, ...m })),
+        p.models.map((m) => ({ provider: p.display_name, providerId: p.id, ...m })),
       )
     },
 

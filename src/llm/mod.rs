@@ -14,8 +14,13 @@ use std::pin::Pin;
 pub type BoxStream = Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>;
 
 pub fn provider_for_model(model: &str) -> Provider {
-    // Explicit prefixes set by the model picker for user-configured providers.
-    if model.starts_with("openai:") || model.starts_with("local:") {
+    // Explicit prefixes set by the model picker for user-configured
+    // providers. Mistral exposes an OpenAI-compatible API, so it rides
+    // the same `Provider::OpenAI` → local::stream path.
+    if model.starts_with("openai:")
+        || model.starts_with("local:")
+        || model.starts_with("mistral:")
+    {
         return Provider::OpenAI;
     }
     if model.starts_with("claude") {
@@ -36,11 +41,13 @@ pub fn provider_for_model(model: &str) -> Provider {
     Provider::Gemini
 }
 
-/// Strip the `openai:` / `local:` prefix from a model id when present.
+/// Strip the `openai:` / `local:` / `mistral:` prefix from a model id
+/// when present.
 pub fn strip_model_prefix(model: &str) -> &str {
     model
         .strip_prefix("openai:")
         .or_else(|| model.strip_prefix("local:"))
+        .or_else(|| model.strip_prefix("mistral:"))
         .unwrap_or(model)
 }
 
@@ -76,7 +83,9 @@ pub fn supports_mcp_tools(model: &str) -> bool {
     if raw.starts_with("local:") {
         return false;
     }
-    if raw.starts_with("openai:") {
+    if raw.starts_with("openai:") || raw.starts_with("mistral:") {
+        // Mistral's function-calling (mistral-large / -small) handles
+        // the MCP tool-schema set as reliably as the big-3 clouds.
         return true;
     }
     let m = strip_model_prefix(&raw);

@@ -24,6 +24,58 @@ use crate::{
 };
 use std::collections::HashMap;
 
+/// Build the OpenAI-compatible `LocalConfig` for a model id carrying a
+/// `local:`, `openai:` or `mistral:` prefix. Returns `None` for native
+/// cloud models (Claude / Gemini) or when the selected provider has no
+/// endpoint / key configured.
+///
+/// Mistral and OpenAI have fixed public endpoints; `local:` reads the
+/// user's BYO base URL. The model name is the per-provider stored model
+/// field, falling back to the id with its prefix stripped.
+fn build_local_config(
+    model: &str,
+    settings: Option<&crate::routes::user::LlmSettings>,
+) -> Option<LocalConfig> {
+    let s = settings?;
+    let (base, key, stored_model) = if model.starts_with("openai:") {
+        (
+            s.openai_api_key
+                .as_ref()
+                .map(|_| "https://api.openai.com/v1".to_string())
+                .unwrap_or_default(),
+            s.openai_api_key.clone(),
+            s.openai_model.clone(),
+        )
+    } else if model.starts_with("mistral:") {
+        (
+            s.mistral_api_key
+                .as_ref()
+                .map(|_| "https://api.mistral.ai/v1".to_string())
+                .unwrap_or_default(),
+            s.mistral_api_key.clone(),
+            s.mistral_model.clone(),
+        )
+    } else if model.starts_with("local:") {
+        (
+            s.local_base_url.clone().unwrap_or_default(),
+            s.local_api_key.clone(),
+            s.local_model.clone(),
+        )
+    } else {
+        return None;
+    };
+    if base.trim().is_empty() {
+        return None;
+    }
+    Some(LocalConfig {
+        base_url: base,
+        api_key: key.filter(|k| !k.trim().is_empty()),
+        model: stored_model
+            .filter(|m| !m.trim().is_empty())
+            .unwrap_or_else(|| llm::strip_model_prefix(model).to_string()),
+    })
+}
+
 // ---------------------------------------------------------------------------
 // MCP capability discovery — surfaces configured servers to the chat model
 // ---------------------------------------------------------------------------
@@ -1805,32 +1857,7 @@ async fn stream_chat_root(
         .or_else(|| user_settings.as_ref().and_then(|s| s.main_model.clone()))
         .unwrap_or_else(|| "gemini-3-flash-preview".to_string());
 
-    let local_config = if raw_model.starts_with("local:") || raw_model.starts_with("openai:") {
-        user_settings.as_ref().and_then(|s| {
-            let (base, key, mname) = if raw_model.starts_with("openai:") {
-                (
-                    s.openai_api_key.as_ref().map(|_| "https://api.openai.com/v1".to_string()).unwrap_or_default(),
-                    s.openai_api_key.clone(),
-                    s.openai_model.clone().unwrap_or_default(),
-                )
-            } else {
-                (
-                    s.local_base_url.clone().unwrap_or_default(),
-                    s.local_api_key.clone(),
-                    s.local_model.clone().unwrap_or_default(),
-                )
-            };
-            if base.is_empty() { None } else {
-                Some(LocalConfig {
-                    base_url: base,
-                    api_key: key.filter(|s| !s.trim().is_empty()),
-                    model: if mname.is_empty() {
-                        llm::strip_model_prefix(&raw_model).to_string()
-                    } else { mname },
-                })
-            }
-        })
-    } else { None };
+    let local_config = build_local_config(&raw_model, user_settings.as_ref());
 
     let vision_ok = llm::is_vision_capable(&raw_model);
 
@@ -3219,41 +3246,7 @@ async fn post_message(
     let model = raw_model.clone();
 
     // Build per-provider config from saved settings.
-    let local_config = if model.starts_with("local:") || model.starts_with("openai:") {
-        user_settings.as_ref().and_then(|s| {
-            let (base, key, model_name) = if model.starts_with("openai:") {
-                (
-                    s.openai_api_key
-                        .as_ref()
-                        .map(|_| "https://api.openai.com/v1".to_string())
-                        .unwrap_or_default(),
-                    s.openai_api_key.clone(),
-                    s.openai_model.clone().unwrap_or_else(|| {
-                        llm::strip_model_prefix(&model).to_string()
-                    }),
-                )
-            } else {
-                (
-                    s.local_base_url.clone().unwrap_or_default(),
-                    s.local_api_key.clone(),
-                    s.local_model.clone().unwrap_or_else(|| {
-                        llm::strip_model_prefix(&model).to_string()
-                    }),
-                )
-            };
-            if base.is_empty() {
-                None
-            } else {
-                Some(LocalConfig {
-                    base_url: base,
-                    api_key: key.filter(|s| !s.trim().is_empty()),
-                    model: model_name,
-                })
-            }
-        })
-    } else {
-        None
-    };
+    let local_config = build_local_config(&model, user_settings.as_ref());
 
     let system_prompt = body.system_prompt.unwrap_or_default();
 
@@ -3386,6 +3379,13 @@ async fn generate_title(
                     .map(|x| !x.trim().is_empty())
                     .unwrap_or(false);
         }
+        if let Some(rest) = m.strip_prefix("mistral:") {
+            return !rest.is_empty()
+                && s.mistral_api_key
+                    .as_deref()
+                    .map(|x| !x.trim().is_empty())
+                    .unwrap_or(false);
+        }
         if m.starts_with("claude") {
             return s
                 .claude_api_key
@@ -3424,6 +3424,10 @@ async fn generate_title(
                     (Some(m), Some(k)) if !k.trim().is_empty() => Some(format!("openai:{m}")),
                     _ => None,
                 },
+                Some("mistral") => match (&s.mistral_model, &s.mistral_api_key) {
+                    (Some(m), Some(k)) if !k.trim().is_empty() => Some(format!("mistral:{m}")),
+                    _ => None,
+                },
                 Some("claude") => s
                     .claude_api_key
                     .as_ref()
@@ -3450,6 +3454,11 @@ async fn generate_title(
                     return Some(format!("openai:{m}"));
                 }
             }
+            if let Some(m) = &s.mistral_model {
+                if s.mistral_api_key.is_some() {
+                    return Some(format!("mistral:{m}"));
+                }
+            }
             if s.claude_api_key.is_some() { return Some("claude-sonnet-4-6".to_string()); }
             if s.gemini_api_key.is_some() { return Some("gemini-3-flash-preview".to_string()); }
             None
@@ -3458,30 +3467,7 @@ async fn generate_title(
 
     tracing::info!("[chat] generate_title using model={title_model}");
 
-    let local_config = if title_model.starts_with("local:") || title_model.starts_with("openai:") {
-        user_settings.as_ref().and_then(|s| {
-            let (base, key, mname) = if title_model.starts_with("openai:") {
-                (
-                    s.openai_api_key.as_ref().map(|_| "https://api.openai.com/v1".to_string()).unwrap_or_default(),
-                    s.openai_api_key.clone(),
-                    s.openai_model.clone().unwrap_or_default(),
-                )
-            } else {
-                (
-                    s.local_base_url.clone().unwrap_or_default(),
-                    s.local_api_key.clone(),
-                    s.local_model.clone().unwrap_or_default(),
-                )
-            };
-            if base.is_empty() { None } else {
-                Some(LocalConfig {
-                    base_url: base,
-                    api_key: key.filter(|s| !s.trim().is_empty()),
-                    model: if mname.is_empty() { llm::strip_model_prefix(&title_model).to_string() } else { mname },
-                })
-            }
-        })
-    } else { None };
+    let local_config = build_local_config(&title_model, user_settings.as_ref());
 
     let prompt = format!(
         "Generate a concise 3-5 word title (no quotes, no punctuation) for a chat that begins with this user message:\n\n{}",

@@ -22,6 +22,8 @@
     gemini_model: string
     openai_api_key: string
     openai_model: string
+    mistral_api_key: string
+    mistral_model: string
     local_base_url: string
     local_api_key: string
     local_model: string
@@ -41,6 +43,8 @@
       gemini_model: s(x.gemini_model),
       openai_api_key: s(x.openai_api_key),
       openai_model: s(x.openai_model),
+      mistral_api_key: s(x.mistral_api_key),
+      mistral_model: s(x.mistral_model),
       local_base_url: s(x.local_base_url),
       local_api_key: s(x.local_api_key),
       local_model: s(x.local_model),
@@ -96,10 +100,17 @@
       label: r.display_name,
     }))
   )
+  // Role-model ids must carry the dispatch prefix the backend expects:
+  // openai:/mistral: for those providers, bare id for Claude/Gemini.
   const roleOptions = $derived([
     { value: '', label: '— not set —' },
     ...modelsStore.allModels.map((m) => ({
-      value: m.id,
+      value:
+        m.providerId === 'openai'
+          ? `openai:${m.id}`
+          : m.providerId === 'mistral'
+            ? `mistral:${m.id}`
+            : m.id,
       label: `${m.display_name} · ${m.provider}`,
     })),
   ])
@@ -108,6 +119,7 @@
     { value: 'anthropic', label: 'Anthropic' },
     { value: 'google', label: 'Google' },
     { value: 'openai', label: 'OpenAI' },
+    { value: 'mistral', label: 'Mistral' },
     { value: 'local', label: 'Local' },
   ]
 
@@ -198,6 +210,24 @@
           autocomplete="off"
         />
         <Select label="Model" options={modelOptions('openai')} bind:value={form.openai_model} />
+      </div>
+    </Card>
+
+    <Card>
+      {#snippet header()}
+        <div class="flex items-center gap-2">
+          <h3 class="text-sm font-semibold text-(--color-text-primary)">Mistral AI</h3>
+          {#if keySet(form.mistral_api_key)}<Badge tone="success" size="xs">key set</Badge>{/if}
+        </div>
+      {/snippet}
+      <div class="space-y-3">
+        <Input
+          label="API key"
+          type="password"
+          bind:value={form.mistral_api_key}
+          autocomplete="off"
+        />
+        <Select label="Model" options={modelOptions('mistral')} bind:value={form.mistral_model} />
       </div>
     </Card>
 

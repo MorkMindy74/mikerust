@@ -207,6 +207,8 @@ pub struct LlmSettings {
     pub local_api_key: Option<String>,
     pub local_model: Option<String>,
     pub active_provider: Option<String>,
+    pub mistral_api_key: Option<String>,
+    pub mistral_model: Option<String>,
 }
 
 type LlmRow = (
@@ -223,11 +225,14 @@ type LlmRow = (
     Option<String>, // local_api_key
     Option<String>, // local_model
     Option<String>, // active_provider
+    Option<String>, // mistral_api_key
+    Option<String>, // mistral_model
 );
 
 const SELECT_COLUMNS: &str =
     "main_model, title_model, tabular_model, claude_api_key, gemini_api_key, gemini_region, \
-     gemini_model, openai_api_key, openai_model, local_base_url, local_api_key, local_model, active_provider";
+     gemini_model, openai_api_key, openai_model, local_base_url, local_api_key, local_model, \
+     active_provider, mistral_api_key, mistral_model";
 
 pub async fn fetch_llm_settings(
     db: &sqlx::SqlitePool,
@@ -258,6 +263,8 @@ fn row_to_settings(r: LlmRow) -> LlmSettings {
         local_api_key: r.10,
         local_model: r.11,
         active_provider: r.12,
+        mistral_api_key: r.13,
+        mistral_model: r.14,
     }
 }
 
@@ -305,6 +312,8 @@ struct UpdateLlmSettingsBody {
     #[serde(default)] local_api_key: Option<String>,
     #[serde(default)] local_model: Option<String>,
     #[serde(default)] active_provider: Option<String>,
+    #[serde(default)] mistral_api_key: Option<String>,
+    #[serde(default)] mistral_model: Option<String>,
 }
 
 async fn update_llm_settings(
@@ -350,6 +359,8 @@ async fn update_llm_settings(
             local_api_key   = COALESCE(?, local_api_key), \
             local_model     = COALESCE(?, local_model), \
             active_provider = COALESCE(?, active_provider), \
+            mistral_api_key = COALESCE(?, mistral_api_key), \
+            mistral_model   = COALESCE(?, mistral_model), \
             updated_at      = datetime('now') \
          WHERE user_id = ?",
     )
@@ -366,6 +377,8 @@ async fn update_llm_settings(
     .bind(&body.local_api_key)
     .bind(&body.local_model)
     .bind(&body.active_provider)
+    .bind(&body.mistral_api_key)
+    .bind(&body.mistral_model)
     .bind(&auth.user_id)
     .execute(&state.db)
     .await

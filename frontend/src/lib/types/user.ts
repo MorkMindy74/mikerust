@@ -20,7 +20,7 @@ export function isLocale(value: unknown): value is Locale {
 }
 
 /** Active LLM provider. */
-export type LlmProvider = 'anthropic' | 'google' | 'openai' | 'local'
+export type LlmProvider = 'anthropic' | 'google' | 'openai' | 'mistral' | 'local'
 
 /**
  * `GET/PUT /user/llm-settings`. Every field is optional: PUT has patch
@@ -40,6 +40,8 @@ export interface LlmSettings {
   local_api_key?: string | null
   local_model?: string | null
   active_provider?: LlmProvider | null
+  mistral_api_key?: string | null
+  mistral_model?: string | null
 }
 
 /** MCP server config — mirror of `McpServerOut` in user.rs. */
