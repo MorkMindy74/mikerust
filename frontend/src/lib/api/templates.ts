@@ -25,14 +25,44 @@ export const templatesApi = {
     }),
 
   /**
-   * Render a template to a .docx blob. The `X-Unresolved-Placeholders`
-   * response header (CSV) is not surfaced here — a render dialog will
-   * handle that when it's built.
+   * Render a template to a .docx blob plus the placeholders the backend
+   * could not resolve (from the `X-Unresolved-Placeholders` header). A
+   * direct fetch is used so the response header stays readable.
    */
-  render: (payload: {
+  render: async (payload: {
     template_id: string
     body_md: string
     metadata?: Record<string, string>
     filename?: string
-  }) => api<Blob>('/docx-templates/render', { method: 'POST', body: payload, asBlob: true }),
+  }): Promise<{ blob: Blob; unresolved: string[] }> => {
+    const { apiBase } = await import('$lib/stores/api-base.svelte')
+    const { authStore } = await import('$lib/stores/auth.svelte')
+    const res = await fetch(
+      new URL('/docx-templates/render', apiBase.url || 'http://127.0.0.1:3001'),
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authStore.token ?? ''}`,
+        },
+        body: JSON.stringify(payload),
+      },
+    )
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`
+      try {
+        const j = (await res.json()) as { detail?: string }
+        if (j.detail) detail = j.detail
+      } catch {
+        /* keep status */
+      }
+      throw new Error(detail)
+    }
+    const header = res.headers.get('X-Unresolved-Placeholders') ?? ''
+    const unresolved = header
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+    return { blob: await res.blob(), unresolved }
+  },
 }

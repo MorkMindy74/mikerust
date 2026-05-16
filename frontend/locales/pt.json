@@ -847,7 +847,16 @@
     "automationL1": "L1 — Impressão em série simples",
     "automationL2": "L2 — Ramificações condicionais",
     "automationL3": "L3 — Blocos repetidos",
-    "automationL4": "L4 — Integração com backend"
+    "automationL4": "L4 — Integração com backend",
+    "detailTitle": "Modelo",
+    "generate": "Gerar documento",
+    "bodyMd": "Corpo do documento (Markdown)",
+    "bodyPlaceholder": "Cole ou escreva o conteúdo do documento…",
+    "renderNow": "Gerar .docx",
+    "metadataFields": "Metadados",
+    "unresolvedWarning": "Marcadores não resolvidos: {list}",
+    "rendered": "Documento gerado",
+    "renderError": "Não foi possível gerar o documento"
   },
   "Boot": {
     "cannotReach": "Não é possível contactar o backend",

@@ -603,7 +603,16 @@
     "automationL1": "L1 — Simple mail merge",
     "automationL2": "L2 — Conditional branches",
     "automationL3": "L3 — Repeating blocks",
-    "automationL4": "L4 — Backend integration"
+    "automationL4": "L4 — Backend integration",
+    "detailTitle": "Template",
+    "generate": "Generate document",
+    "bodyMd": "Document body (Markdown)",
+    "bodyPlaceholder": "Paste or write the document content…",
+    "renderNow": "Generate .docx",
+    "metadataFields": "Metadata",
+    "unresolvedWarning": "Unresolved placeholders: {list}",
+    "rendered": "Document generated",
+    "renderError": "Could not generate the document"
   },
   "Domains": {
     "label": "Domain",

@@ -847,7 +847,16 @@
     "automationL1": "L1 — Publipostage simple",
     "automationL2": "L2 — Branches conditionnelles",
     "automationL3": "L3 — Blocs répétés",
-    "automationL4": "L4 — Intégration backend"
+    "automationL4": "L4 — Intégration backend",
+    "detailTitle": "Modèle",
+    "generate": "Générer le document",
+    "bodyMd": "Corps du document (Markdown)",
+    "bodyPlaceholder": "Collez ou rédigez le contenu du document…",
+    "renderNow": "Générer le .docx",
+    "metadataFields": "Métadonnées",
+    "unresolvedWarning": "Espaces réservés non résolus : {list}",
+    "rendered": "Document généré",
+    "renderError": "Impossible de générer le document"
   },
   "Boot": {
     "cannotReach": "Impossible de joindre le backend",

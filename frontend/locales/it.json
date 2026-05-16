@@ -603,7 +603,16 @@
     "automationL1": "L1 — Mail merge semplice",
     "automationL2": "L2 — Rami condizionali",
     "automationL3": "L3 — Blocchi ripetibili",
-    "automationL4": "L4 — Integrazione gestionale"
+    "automationL4": "L4 — Integrazione gestionale",
+    "detailTitle": "Template",
+    "generate": "Genera documento",
+    "bodyMd": "Corpo del documento (Markdown)",
+    "bodyPlaceholder": "Incolla o scrivi il contenuto del documento…",
+    "renderNow": "Genera .docx",
+    "metadataFields": "Metadati",
+    "unresolvedWarning": "Segnaposto non risolti: {list}",
+    "rendered": "Documento generato",
+    "renderError": "Impossibile generare il documento"
   },
   "Domains": {
     "label": "Settore",

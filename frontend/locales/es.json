@@ -847,7 +847,16 @@
     "automationL1": "L1 — Combinación de correspondencia simple",
     "automationL2": "L2 — Ramas condicionales",
     "automationL3": "L3 — Bloques repetidos",
-    "automationL4": "L4 — Integración con backend"
+    "automationL4": "L4 — Integración con backend",
+    "detailTitle": "Plantilla",
+    "generate": "Generar documento",
+    "bodyMd": "Cuerpo del documento (Markdown)",
+    "bodyPlaceholder": "Pega o escribe el contenido del documento…",
+    "renderNow": "Generar .docx",
+    "metadataFields": "Metadatos",
+    "unresolvedWarning": "Marcadores sin resolver: {list}",
+    "rendered": "Documento generado",
+    "renderError": "No se pudo generar el documento"
   },
   "Boot": {
     "cannotReach": "No se puede conectar con el backend",

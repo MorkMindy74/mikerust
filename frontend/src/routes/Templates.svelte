@@ -12,6 +12,7 @@
   import Spinner from '$lib/components/ui/Spinner.svelte'
   import Button from '$lib/components/ui/Button.svelte'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
+  import TemplateDetailModal from '$lib/components/docx/TemplateDetailModal.svelte'
   import { templateStore } from '$lib/stores/templates.svelte'
   import { i18n } from '$lib/stores/i18n.svelte'
   import { DOMAINS, domainLabel } from '$lib/types/domain'
@@ -21,6 +22,7 @@
   let domainFilter = $state<string>('')
   let localeFilter = $state<string>('')
   let search = $state<string>('')
+  let detailId = $state<string | null>(null)
 
   $effect(() => {
     void templateStore.refresh()
@@ -102,10 +104,13 @@
   {:else}
     <ul class="flex flex-col gap-2">
       {#each rows as t (t.id)}
-        <li
-          class="px-4 py-3 bg-(--color-surface-0) border border-(--color-surface-200)
-                 rounded-(--radius-md) space-y-1.5"
-        >
+        <li>
+          <button
+            type="button"
+            onclick={() => (detailId = t.id)}
+            class="w-full text-left px-4 py-3 bg-(--color-surface-0) border border-(--color-surface-200)
+                   rounded-(--radius-md) space-y-1.5 hover:border-(--color-surface-300)"
+          >
           <div class="flex items-center gap-2">
             <Badge tone="level" size="xs">{t.automation_level}</Badge>
             <span class="text-sm font-medium text-(--color-text-primary) flex-1 min-w-0 truncate">
@@ -130,8 +135,11 @@
               </span>
             {/if}
           </div>
+          </button>
         </li>
       {/each}
     </ul>
   {/if}
 </div>
+
+<TemplateDetailModal templateId={detailId} onclose={() => (detailId = null)} />

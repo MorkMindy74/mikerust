@@ -11,6 +11,7 @@
   import type { PickerItem } from '$lib/components/ui/PickerModal.svelte'
   import { i18n } from '$lib/stores/i18n.svelte'
   import { modelsStore } from '$lib/stores/models.svelte'
+  import { composerPrefill } from '$lib/stores/composer.svelte'
   import { documentsApi } from '$lib/api/documents'
   import { workflowsApi } from '$lib/api/workflows'
   import { templatesApi } from '$lib/api/templates'
@@ -56,6 +57,12 @@
   let pickerOpen = $state(false)
   let pickerItems = $state<PickerItem[]>([])
   let pickerLoading = $state(false)
+
+  // Consume a template queued by the DOCX-templates "Apply to chat" flow.
+  $effect(() => {
+    const queued = composerPrefill.takeTemplate()
+    if (queued) template = queued
+  })
 
   // ── document upload ─────────────────────────────────────────────────
   let attachMenuOpen = $state(false)

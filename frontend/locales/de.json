@@ -847,7 +847,16 @@
     "automationL1": "L1 — Einfacher Seriendruck",
     "automationL2": "L2 — Bedingte Verzweigungen",
     "automationL3": "L3 — Wiederholte Blöcke",
-    "automationL4": "L4 — Backend-Integration"
+    "automationL4": "L4 — Backend-Integration",
+    "detailTitle": "Vorlage",
+    "generate": "Dokument erzeugen",
+    "bodyMd": "Dokumentinhalt (Markdown)",
+    "bodyPlaceholder": "Dokumentinhalt einfügen oder schreiben…",
+    "renderNow": ".docx erzeugen",
+    "metadataFields": "Metadaten",
+    "unresolvedWarning": "Nicht aufgelöste Platzhalter: {list}",
+    "rendered": "Dokument erzeugt",
+    "renderError": "Dokument konnte nicht erzeugt werden"
   },
   "Boot": {
     "cannotReach": "Backend nicht erreichbar",

@@ -229,6 +229,17 @@ const T = {
   'Settings.followSystemPrompt': { en: 'Follow the system prompt to continue.', it: 'Segui la richiesta di sistema per continuare.', fr: "Suivez l'invite du système pour continuer.", de: 'Folgen Sie der Systemaufforderung, um fortzufahren.', es: 'Sigue la indicación del sistema para continuar.', pt: 'Siga a solicitação do sistema para continuar.' },
   'Settings.biometricVerifyAria': { en: 'Biometric verification', it: 'Verifica biometrica', fr: 'Vérification biométrique', de: 'Biometrische Überprüfung', es: 'Verificación biométrica', pt: 'Verificação biométrica' },
 
+  // Keys added with the DOCX-template detail modal.
+  'DocxTemplates.detailTitle': { en: 'Template', it: 'Template', fr: 'Modèle', de: 'Vorlage', es: 'Plantilla', pt: 'Modelo' },
+  'DocxTemplates.generate': { en: 'Generate document', it: 'Genera documento', fr: 'Générer le document', de: 'Dokument erzeugen', es: 'Generar documento', pt: 'Gerar documento' },
+  'DocxTemplates.bodyMd': { en: 'Document body (Markdown)', it: 'Corpo del documento (Markdown)', fr: 'Corps du document (Markdown)', de: 'Dokumentinhalt (Markdown)', es: 'Cuerpo del documento (Markdown)', pt: 'Corpo do documento (Markdown)' },
+  'DocxTemplates.bodyPlaceholder': { en: 'Paste or write the document content…', it: 'Incolla o scrivi il contenuto del documento…', fr: 'Collez ou rédigez le contenu du document…', de: 'Dokumentinhalt einfügen oder schreiben…', es: 'Pega o escribe el contenido del documento…', pt: 'Cole ou escreva o conteúdo do documento…' },
+  'DocxTemplates.renderNow': { en: 'Generate .docx', it: 'Genera .docx', fr: 'Générer le .docx', de: '.docx erzeugen', es: 'Generar .docx', pt: 'Gerar .docx' },
+  'DocxTemplates.metadataFields': { en: 'Metadata', it: 'Metadati', fr: 'Métadonnées', de: 'Metadaten', es: 'Metadatos', pt: 'Metadados' },
+  'DocxTemplates.unresolvedWarning': { en: 'Unresolved placeholders: {list}', it: 'Segnaposto non risolti: {list}', fr: 'Espaces réservés non résolus : {list}', de: 'Nicht aufgelöste Platzhalter: {list}', es: 'Marcadores sin resolver: {list}', pt: 'Marcadores não resolvidos: {list}' },
+  'DocxTemplates.rendered': { en: 'Document generated', it: 'Documento generato', fr: 'Document généré', de: 'Dokument erzeugt', es: 'Documento generado', pt: 'Documento gerado' },
+  'DocxTemplates.renderError': { en: 'Could not generate the document', it: 'Impossibile generare il documento', fr: 'Impossible de générer le document', de: 'Dokument konnte nicht erzeugt werden', es: 'No se pudo generar el documento', pt: 'Não foi possível gerar o documento' },
+
   // Keys added with the workflow editor.
   'Workflows.savedStatus': { en: 'Saved', it: 'Salvato', fr: 'Enregistré', de: 'Gespeichert', es: 'Guardado', pt: 'Guardado' },
   'Workflows.readOnly': { en: 'Read-only', it: 'Sola lettura', fr: 'Lecture seule', de: 'Schreibgeschützt', es: 'Solo lectura', pt: 'Apenas leitura' },
