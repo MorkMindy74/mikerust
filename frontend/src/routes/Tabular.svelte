@@ -18,6 +18,7 @@
   import { tabularStore } from '$lib/stores/tabular.svelte'
   import { workflowsApi } from '$lib/api/workflows'
   import { toastStore } from '$lib/stores/toast.svelte'
+  import { userStore } from '$lib/stores/user.svelte'
   import { DOMAINS, domainLabel, DEFAULT_DOMAIN, type Domain } from '$lib/types/domain'
   import type { Workflow } from '$lib/types/workflow'
   import { ApiError } from '$lib/types/error'
@@ -57,22 +58,26 @@
   let creating = $state(false)
   let formError = $state<string | null>(null)
 
+  const domainFormOptions = DOMAINS.map((d) => ({ value: d, label: domainLabel(d) }))
+  // Domain is chosen first; it scopes the tabular-workflow list.
   const workflowOptions = $derived([
     { value: '', label: '— select a tabular workflow —' },
-    ...tabularWorkflows.map((w) => ({ value: w.id, label: w.title })),
+    ...tabularWorkflows
+      .filter((w) => w.domain === fDomain)
+      .map((w) => ({ value: w.id, label: w.title })),
   ])
-  const domainFormOptions = DOMAINS.map((d) => ({ value: d, label: domainLabel(d) }))
   const selectedWorkflow = $derived(tabularWorkflows.find((w) => w.id === fWorkflowId))
 
-  // Default the domain to the chosen workflow's domain.
+  // Changing the domain re-scopes the workflow list — drop a selection
+  // that no longer belongs to the chosen domain.
   $effect(() => {
-    if (selectedWorkflow) fDomain = selectedWorkflow.domain
+    if (selectedWorkflow && selectedWorkflow.domain !== fDomain) fWorkflowId = ''
   })
 
   function openCreate() {
     fTitle = ''
     fWorkflowId = ''
-    fDomain = DEFAULT_DOMAIN
+    fDomain = userStore.defaultDomain
     formError = null
     modalOpen = true
   }
@@ -187,14 +192,18 @@
 <Modal bind:open={modalOpen} title="New tabular review" size="md">
   <div class="space-y-3">
     <Input label="Title" bind:value={fTitle} placeholder="Untitled Review" />
+    <Select label="Domain" options={domainFormOptions} bind:value={fDomain} />
     <Select label="Tabular workflow" options={workflowOptions} bind:value={fWorkflowId} />
     {#if selectedWorkflow}
       <p class="text-xs text-(--color-text-secondary)">
         Inherits {selectedWorkflow.columns_config.length} column{selectedWorkflow.columns_config.length === 1 ? '' : 's'}
         from this workflow.
       </p>
+    {:else}
+      <p class="text-xs text-(--color-text-secondary)">
+        Showing tabular workflows in the {domainLabel(fDomain)} domain.
+      </p>
     {/if}
-    <Select label="Domain" options={domainFormOptions} bind:value={fDomain} />
     {#if formError}
       <p class="text-sm text-(--color-danger-500)">{formError}</p>
     {/if}
