@@ -471,7 +471,10 @@
     "citation": "Citazione",
     "trackedChange": "Modifica tracciata",
     "page": "Pagina",
-    "version": "Versione"
+    "version": "Versione",
+    "closeTab": "Chiudi scheda",
+    "closeAll": "Chiudi tutto",
+    "unsupported": "Questo formato di file non può essere visualizzato. Usa Scarica per aprirlo."
   },
   "DocumentSupport": {
     "noticeTitle": "Cosa viene indicizzato",

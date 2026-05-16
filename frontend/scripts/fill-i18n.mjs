@@ -228,6 +228,11 @@ const T = {
   'Settings.verifyingIdentity': { en: 'Verifying your identity…', it: "Verifica dell'identità…", fr: 'Vérification de votre identité…', de: 'Ihre Identität wird überprüft…', es: 'Verificando tu identidad…', pt: 'A verificar a sua identidade…' },
   'Settings.followSystemPrompt': { en: 'Follow the system prompt to continue.', it: 'Segui la richiesta di sistema per continuare.', fr: "Suivez l'invite du système pour continuer.", de: 'Folgen Sie der Systemaufforderung, um fortzufahren.', es: 'Sigue la indicación del sistema para continuar.', pt: 'Siga a solicitação do sistema para continuar.' },
   'Settings.biometricVerifyAria': { en: 'Biometric verification', it: 'Verifica biometrica', fr: 'Vérification biométrique', de: 'Biometrische Überprüfung', es: 'Verificación biométrica', pt: 'Verificação biométrica' },
+
+  // Keys added with the document-viewer side panel.
+  'DocViewer.closeTab': { en: 'Close tab', it: 'Chiudi scheda', fr: "Fermer l'onglet", de: 'Tab schließen', es: 'Cerrar pestaña', pt: 'Fechar separador' },
+  'DocViewer.closeAll': { en: 'Close all', it: 'Chiudi tutto', fr: 'Tout fermer', de: 'Alle schließen', es: 'Cerrar todo', pt: 'Fechar tudo' },
+  'DocViewer.unsupported': { en: 'This file format cannot be previewed. Use Download to open it.', it: 'Questo formato di file non può essere visualizzato. Usa Scarica per aprirlo.', fr: "Ce format de fichier ne peut pas être prévisualisé. Utilisez Télécharger pour l'ouvrir.", de: 'Dieses Dateiformat kann nicht in der Vorschau angezeigt werden. Verwenden Sie zum Öffnen „Herunterladen“.', es: 'Este formato de archivo no se puede previsualizar. Usa Descargar para abrirlo.', pt: 'Este formato de ficheiro não pode ser pré-visualizado. Use Transferir para o abrir.' },
 }
 
 function flat(o, p = '') {

@@ -471,7 +471,10 @@
     "citation": "Citation",
     "trackedChange": "Tracked Change",
     "page": "Page",
-    "version": "Version"
+    "version": "Version",
+    "closeTab": "Close tab",
+    "closeAll": "Close all",
+    "unsupported": "This file format cannot be previewed. Use Download to open it."
   },
   "DocumentSupport": {
     "noticeTitle": "What gets indexed",

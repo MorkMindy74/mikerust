@@ -1,6 +1,7 @@
 <!-- Copyright (c) 2026 MikeRust contributors. Licensed under AGPL-3.0-only. -->
 <script lang="ts">
   import type { Snippet } from 'svelte'
+  import DocViewerPanel from '$lib/components/documents/DocViewerPanel.svelte'
 
   interface Props {
     sidebar: Snippet
@@ -28,4 +29,7 @@
       {@render statusbar()}
     {/if}
   </div>
+
+  <!-- Global document-viewer panel (renders only when a doc is open). -->
+  <DocViewerPanel />
 </div>

@@ -15,6 +15,20 @@ export const documentsApi = {
   list: (filter?: DocumentFilter) =>
     api<{ documents: DocumentMeta[] }>('/document', { query: filter }),
 
+  get: (id: string) => api<DocumentMeta>(`/document/${encodeURIComponent(id)}`),
+
   remove: (id: string) =>
     api<{ ok: boolean }>(`/document/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  /**
+   * Fetch the displayable bytes of a document. The backend returns a
+   * PDF rendition when one exists, otherwise the original bytes — the
+   * caller inspects the resulting Blob's MIME type to pick a renderer.
+   */
+  displayBytes: (id: string) =>
+    api<Blob>(`/document/${encodeURIComponent(id)}/display`, { asBlob: true }),
+
+  /** Fetch the original document bytes for download. */
+  downloadBytes: (id: string) =>
+    api<Blob>(`/document/${encodeURIComponent(id)}/download`, { asBlob: true }),
 }

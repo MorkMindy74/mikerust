@@ -1,0 +1,57 @@
+// Copyright (c) 2026 MikeRust contributors. Licensed under AGPL-3.0-only.
+
+/**
+ * Citation model. The assistant emits inline markers `[1]`, `[g2]`,
+ * `[p3]` in its prose and a trailing machine-readable block; the
+ * backend parses that block into a `citations` SSE event whose entries
+ * map onto this type.
+ */
+
+/** Origin pool of a cited passage — drives the pill colour. */
+export type CitationScope = 'document' | 'global' | 'project'
+
+/** One resolved citation, keyed by its marker reference. */
+export interface Citation {
+  /** Marker text without brackets: `1`, `g2`, `p3`. */
+  ref: string
+  /** Pool the passage came from. */
+  scope: CitationScope
+  /** Document / knowledge-base chunk identifier. */
+  docId: string
+  /** Human-readable source label (filename or KB path). */
+  source: string
+  /** Page number, or a `"41-42"` range for a quote crossing a page break. */
+  page?: number | string
+  /** The exact quoted passage (used to highlight inside the viewer). */
+  quote: string
+}
+
+/** Marker prefix → scope. A bare numeric marker is a document citation. */
+export function scopeForRef(ref: string): CitationScope {
+  if (ref.startsWith('g')) return 'global'
+  if (ref.startsWith('p')) return 'project'
+  return 'document'
+}
+
+/**
+ * Normalise a raw `citations` SSE payload entry into a `Citation`.
+ * The backend uses snake_case (`doc_id`); tolerate both shapes.
+ */
+export function toCitation(raw: Record<string, unknown>): Citation {
+  const ref = String(raw.ref ?? '').trim()
+  const pageRaw = raw.page
+  return {
+    ref,
+    scope: scopeForRef(ref),
+    docId: String(raw.doc_id ?? raw.docId ?? ''),
+    source: String(raw.source ?? ''),
+    page:
+      typeof pageRaw === 'number' || typeof pageRaw === 'string'
+        ? (pageRaw as number | string)
+        : undefined,
+    quote: String(raw.quote ?? ''),
+  }
+}
+
+/** Sentinel the backend embeds for a quote that spans a page break. */
+export const PAGE_BREAK_SENTINEL = '[[PAGE_BREAK]]'

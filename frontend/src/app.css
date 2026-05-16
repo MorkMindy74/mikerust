@@ -190,3 +190,64 @@ body {
 @keyframes caret-blink {
   50% { opacity: 0; }
 }
+
+/* ── Document viewer ─────────────────────────────────────────────── */
+
+/* Highlighted cited passage — shared by every renderer. */
+mark.doc-hl {
+  background-color: color-mix(in srgb, var(--color-brand-400) 55%, transparent);
+  color: inherit;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-brand-500) 40%, transparent);
+}
+mark.doc-hl.doc-hl-flash {
+  animation: doc-hl-flash 1.2s ease-out;
+}
+@keyframes doc-hl-flash {
+  0%, 30% { background-color: color-mix(in srgb, var(--color-brand-500) 80%, transparent); }
+  100% { background-color: color-mix(in srgb, var(--color-brand-400) 55%, transparent); }
+}
+
+/* PDF.js text layer — transparent selectable text over the canvas. */
+.pdf-text-layer {
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  opacity: 1;
+  line-height: 1;
+  text-align: initial;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  caret-color: var(--color-text-primary);
+}
+.pdf-text-layer span,
+.pdf-text-layer br {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+.pdf-text-layer mark.doc-hl {
+  color: transparent;
+}
+.pdf-text-layer ::selection {
+  background: color-mix(in srgb, var(--color-brand-500) 35%, transparent);
+}
+
+/* DOCX rendered body (docx-preview output). */
+.docx-body { color: var(--color-text-primary); }
+.docx-body .docx-wrapper { background: transparent; padding: 0; }
+.docx-body .docx { box-shadow: var(--shadow-card); margin: 0 auto 1rem; background: white; }
+.docx-body ins { text-decoration: none; color: #15803d; background: #dcfce7; }
+.docx-body del { text-decoration: line-through; color: #b91c1c; background: #fee2e2; }
+
+/* Spreadsheet grid (xlsx → HTML table). */
+.sheet-body table { border-collapse: collapse; font-size: 0.8rem; }
+.sheet-body td, .sheet-body th {
+  border: 1px solid var(--color-surface-200);
+  padding: 2px 6px;
+  white-space: nowrap;
+}
+.sheet-body tr:first-child td { background: var(--color-surface-100); font-weight: 600; }

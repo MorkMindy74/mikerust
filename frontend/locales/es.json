@@ -471,7 +471,10 @@
     "citation": "Cita",
     "trackedChange": "Cambio registrado",
     "page": "Página",
-    "version": "Versión"
+    "version": "Versión",
+    "closeTab": "Cerrar pestaña",
+    "closeAll": "Cerrar todo",
+    "unsupported": "Este formato de archivo no se puede previsualizar. Usa Descargar para abrirlo."
   },
   "DocumentSupport": {
     "noticeTitle": "Qué se indexa",
