@@ -1,6 +1,7 @@
 // Copyright (c) 2026 MikeRust contributors. Licensed under AGPL-3.0-only.
 
 import { chatApi, streamChat } from '$lib/api/chat'
+import { modelsStore } from '$lib/stores/models.svelte'
 import { toCitation } from '$lib/types/citation'
 import type {
   Chat,
@@ -117,6 +118,7 @@ function createChatStore() {
     async send(text: string, attach: SendAttachments = {}) {
       if (streaming || !text.trim()) return
       error = null
+      const isFirstTurn = messages.length === 0
 
       // A project attachment on a new chat needs a real chat row first.
       if (!activeId && attach.projectId) {
@@ -149,8 +151,13 @@ function createChatStore() {
         return last && last.role === 'assistant' ? last : null
       }
 
+      const model = modelsStore.settings.main_model
       abortCtrl = streamChat(
-        { messages: outgoing, ...(activeId ? { chat_id: activeId } : {}) },
+        {
+          messages: outgoing,
+          ...(activeId ? { chat_id: activeId } : {}),
+          ...(model ? { model } : {}),
+        },
         {
           onChatId: (id) => {
             if (!activeId) activeId = id
@@ -206,7 +213,16 @@ function createChatStore() {
               m.streaming = false
               for (const s of m.steps ?? []) if (s.kind === 'tool') s.done = true
             }
-            void refreshChats()
+            // After the first exchange of a fresh chat, ask the backend
+            // to title it from the opening message, then refresh.
+            if (isFirstTurn && activeId) {
+              void chatApi
+                .generateTitle(activeId)
+                .catch(() => undefined)
+                .then(() => refreshChats())
+            } else {
+              void refreshChats()
+            }
           },
         },
       )

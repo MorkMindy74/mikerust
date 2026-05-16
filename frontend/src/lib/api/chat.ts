@@ -23,6 +23,12 @@ export const chatApi = {
 
   rename: (id: string, title: string) =>
     api<unknown>(`/chat/${encodeURIComponent(id)}`, { method: 'PATCH', body: { title } }),
+
+  /** Ask the backend to generate a title from the chat's first message. */
+  generateTitle: (id: string) =>
+    api<{ title: string | null }>(`/chat/${encodeURIComponent(id)}/generate-title`, {
+      method: 'POST',
+    }),
 }
 
 export interface DocCreatedEvent {

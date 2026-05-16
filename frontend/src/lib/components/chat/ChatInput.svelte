@@ -10,6 +10,7 @@
   import PickerModal from '$lib/components/ui/PickerModal.svelte'
   import type { PickerItem } from '$lib/components/ui/PickerModal.svelte'
   import { i18n } from '$lib/stores/i18n.svelte'
+  import { modelsStore } from '$lib/stores/models.svelte'
   import { documentsApi } from '$lib/api/documents'
   import { workflowsApi } from '$lib/api/workflows'
   import { templatesApi } from '$lib/api/templates'
@@ -132,6 +133,50 @@
   const hasAttachments = $derived(
     files.length > 0 || workflow !== null || template !== null || project !== null
   )
+
+  // ── model picker ────────────────────────────────────────────────────
+  $effect(() => {
+    if (!modelsStore.catalogue && !modelsStore.loading) void modelsStore.load()
+  })
+
+  function keyset(v: string | null | undefined): boolean {
+    return !!(v && v.trim())
+  }
+
+  // Only models from configured providers; ids carry the dispatch prefix
+  // the backend expects. Falls back to every model when no key is visible.
+  const modelOptions = $derived.by(() => {
+    const s = modelsStore.settings
+    const configured = new Set<string>()
+    if (keyset(s.claude_api_key)) configured.add('anthropic')
+    if (keyset(s.gemini_api_key)) configured.add('google')
+    if (keyset(s.openai_api_key)) configured.add('openai')
+    if (keyset(s.mistral_api_key)) configured.add('mistral')
+
+    const opts = modelsStore.allModels
+      .filter((m) => configured.size === 0 || configured.has(m.providerId))
+      .map((m) => ({
+        value:
+          m.providerId === 'openai'
+            ? `openai:${m.id}`
+            : m.providerId === 'mistral'
+              ? `mistral:${m.id}`
+              : m.id,
+        label: m.display_name,
+      }))
+    if (keyset(s.local_base_url) && keyset(s.local_model)) {
+      opts.push({ value: `local:${s.local_model}`, label: s.local_model as string })
+    }
+    return opts
+  })
+
+  const currentModel = $derived(modelsStore.settings.main_model ?? '')
+
+  function pickModel(value: string) {
+    if (value && value !== modelsStore.settings.main_model) {
+      void modelsStore.save({ main_model: value })
+    }
+  }
 </script>
 
 <div class="border border-(--color-surface-200) rounded-(--radius-lg) bg-(--color-surface-0) shadow-(--shadow-sm)">
@@ -199,6 +244,24 @@
     </button>
 
     <div class="flex-1"></div>
+
+    {#if modelOptions.length}
+      <select
+        value={currentModel}
+        onchange={(e) => pickModel((e.currentTarget as HTMLSelectElement).value)}
+        aria-label={t('Assistant.selectModel')}
+        class="h-8 max-w-44 rounded-(--radius-md) bg-transparent px-1.5 text-xs
+               text-(--color-text-secondary) hover:text-(--color-text-primary)
+               focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-brand-500)"
+      >
+        {#if !currentModel}
+          <option value="">{t('Assistant.selectModel')}</option>
+        {/if}
+        {#each modelOptions as opt (opt.value)}
+          <option value={opt.value}>{opt.label}</option>
+        {/each}
+      </select>
+    {/if}
 
     {#if streaming}
       <Button size="sm" variant="secondary" onclick={onstop}>{t('Common.stop')}</Button>
