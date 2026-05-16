@@ -14,6 +14,7 @@
   import ThemeToggle from '$lib/components/ui/ThemeToggle.svelte'
   import Workflows from './Workflows.svelte'
   import Templates from './Templates.svelte'
+  import Tabular from './Tabular.svelte'
   import Settings from './Settings.svelte'
   import { router, type FeatureRoute } from '$lib/stores/router.svelte'
   import { authStore } from '$lib/stores/auth.svelte'
@@ -98,6 +99,8 @@
     <Workflows />
   {:else if router.current === 'templates'}
     <Templates />
+  {:else if router.current === 'tabular'}
+    <Tabular />
   {:else if router.current === 'settings'}
     <Settings />
   {:else}
