@@ -2,7 +2,20 @@
 
 import { api } from './client'
 import type { Domain } from '$lib/types/domain'
-import type { LlmSettings, Locale, McpServer, UserProfile } from '$lib/types/user'
+import type { LlmSettings, Locale, McpServer, McpTransport, UserProfile } from '$lib/types/user'
+
+/** Input for upsertMcpServer — every field but `name` is optional. */
+export interface McpServerInput {
+  name: string
+  transport?: McpTransport
+  url?: string
+  command?: string
+  args?: string[]
+  env?: Record<string, unknown>
+  headers?: Record<string, unknown>
+  api_key?: string
+  enabled?: boolean
+}
 
 /** Wrappers for `src/routes/user.rs`. All endpoints require auth. */
 export const userApi = {
@@ -32,8 +45,12 @@ export const userApi = {
 
   listMcpServers: () => api<{ servers: McpServer[] }>('/user/mcp-servers'),
 
-  upsertMcpServer: (server: Omit<McpServer, 'args' | 'env' | 'headers'> &
-    Partial<Pick<McpServer, 'args' | 'env' | 'headers'>>) =>
+  /**
+   * Create or update a server. Only `name` is strictly required — the
+   * backend `UpsertMcpBody` applies serde defaults for transport (http)
+   * and enabled (true) and treats the rest as optional.
+   */
+  upsertMcpServer: (server: McpServerInput) =>
     api<{ ok: boolean; name: string }>('/user/mcp-servers', { method: 'POST', body: server }),
 
   deleteMcpServer: (name: string) =>

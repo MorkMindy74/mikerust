@@ -8,6 +8,7 @@
   import ProfileSection from '$lib/components/settings/ProfileSection.svelte'
   import SecuritySection from '$lib/components/settings/SecuritySection.svelte'
   import ModelsSection from '$lib/components/settings/ModelsSection.svelte'
+  import McpSection from '$lib/components/settings/McpSection.svelte'
   import DangerZoneSection from '$lib/components/settings/DangerZoneSection.svelte'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
 
@@ -23,7 +24,7 @@
     { id: 'profile', label: 'Profile', ready: true },
     { id: 'security', label: 'Security', ready: true },
     { id: 'models', label: 'LLM models', ready: true },
-    { id: 'mcp', label: 'MCP servers', ready: false },
+    { id: 'mcp', label: 'MCP servers', ready: true },
     { id: 'data', label: 'Data sources', ready: false },
     { id: 'danger', label: 'Danger zone', ready: true },
   ]
@@ -64,6 +65,8 @@
         <SecuritySection />
       {:else if active === 'models'}
         <ModelsSection />
+      {:else if active === 'mcp'}
+        <McpSection />
       {:else if active === 'danger'}
         <DangerZoneSection />
       {:else}
