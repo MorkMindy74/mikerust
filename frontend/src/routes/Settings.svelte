@@ -11,29 +11,30 @@
   import McpSection from '$lib/components/settings/McpSection.svelte'
   import DangerZoneSection from '$lib/components/settings/DangerZoneSection.svelte'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
+  import { i18n } from '$lib/stores/i18n.svelte'
 
   type SectionId = 'profile' | 'security' | 'models' | 'mcp' | 'data' | 'danger'
 
   interface SectionEntry {
     id: SectionId
-    label: string
+    labelKey: string
     ready: boolean
   }
 
   const sections: SectionEntry[] = [
-    { id: 'profile', label: 'Profile', ready: true },
-    { id: 'security', label: 'Security', ready: true },
-    { id: 'models', label: 'LLM models', ready: true },
-    { id: 'mcp', label: 'MCP servers', ready: true },
-    { id: 'data', label: 'Data sources', ready: false },
-    { id: 'danger', label: 'Danger zone', ready: true },
+    { id: 'profile', labelKey: 'Account.profile', ready: true },
+    { id: 'security', labelKey: 'Account.security', ready: true },
+    { id: 'models', labelKey: 'Settings.llmModels', ready: true },
+    { id: 'mcp', labelKey: 'Settings.mcpServers', ready: true },
+    { id: 'data', labelKey: 'Settings.dataSources', ready: false },
+    { id: 'danger', labelKey: 'Settings.dangerZone', ready: true },
   ]
 
   let active = $state<SectionId>('profile')
 </script>
 
 <div class="max-w-4xl mx-auto p-8">
-  <h2 class="text-2xl font-semibold text-(--color-text-primary) mb-5">Settings</h2>
+  <h2 class="text-2xl font-semibold text-(--color-text-primary) mb-5">{i18n.t('Common.settings')}</h2>
 
   <div class="flex gap-8 items-start">
     <nav class="w-44 shrink-0 flex flex-col gap-0.5">
@@ -50,9 +51,9 @@
                    ? 'bg-(--color-active-bg) text-(--color-brand-700) font-medium'
                    : 'text-(--color-text-secondary) hover:bg-(--color-hover-bg) hover:text-(--color-text-primary)'}"
         >
-          {s.label}
+          {i18n.t(s.labelKey)}
           {#if !s.ready}
-            <span class="text-[10px] uppercase tracking-wide ml-1">soon</span>
+            <span class="text-[10px] uppercase tracking-wide ml-1">{i18n.t('Ui.soon')}</span>
           {/if}
         </button>
       {/each}
@@ -71,8 +72,8 @@
         <DangerZoneSection />
       {:else}
         <EmptyState
-          title="Coming soon"
-          description="This settings section is built in a later phase of the UI rewrite."
+          title={i18n.t('Ui.comingSoonShort')}
+          description={i18n.t('Ui.comingSoonBody')}
         />
       {/if}
     </div>

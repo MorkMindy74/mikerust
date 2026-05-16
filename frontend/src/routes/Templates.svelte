@@ -13,6 +13,7 @@
   import Button from '$lib/components/ui/Button.svelte'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import { templateStore } from '$lib/stores/templates.svelte'
+  import { i18n } from '$lib/stores/i18n.svelte'
   import { DOMAINS, domainLabel } from '$lib/types/domain'
   import { templateDisplayName, type DocxTemplate } from '$lib/types/template'
   import { Search } from 'lucide-svelte'
@@ -25,12 +26,12 @@
     void templateStore.refresh()
   })
 
-  const domainOptions = [
-    { value: '', label: 'All domains' },
+  const domainOptions = $derived([
+    { value: '', label: i18n.t('Domains.filterPlaceholder') },
     ...DOMAINS.map((d) => ({ value: d, label: domainLabel(d) })),
-  ]
+  ])
   const localeOptions = $derived([
-    { value: '', label: 'All locales' },
+    { value: '', label: i18n.t('Ui.allLocales') },
     ...templateStore.locales.map((l) => ({ value: l, label: l })),
   ])
 
@@ -55,17 +56,16 @@
 
 <div class="max-w-4xl mx-auto p-8 space-y-5">
   <header class="space-y-1">
-    <h2 class="text-2xl font-semibold text-(--color-text-primary)">DOCX templates</h2>
+    <h2 class="text-2xl font-semibold text-(--color-text-primary)">{i18n.t('DocxTemplates.title')}</h2>
     <p class="text-sm text-(--color-text-secondary)">
-      Closing-formatter templates — applied to finished content to produce
-      print-ready Word documents.
+      {i18n.t('DocxTemplates.subtitle')}
     </p>
   </header>
 
   <div class="flex items-end gap-3 flex-wrap">
     <Input
       bind:value={search}
-      placeholder="Search templates…"
+      placeholder={i18n.t('DocxTemplates.searchPlaceholder')}
       size="sm"
       class="w-60"
     >
@@ -84,20 +84,20 @@
   {#if templateStore.loading}
     <div class="flex items-center gap-2 text-sm text-(--color-text-secondary) py-12 justify-center">
       <Spinner size="sm" />
-      Loading templates…
+      {i18n.t('Common.loading')}
     </div>
   {:else if templateStore.error}
-    <EmptyState title="Could not load templates" description={templateStore.error}>
+    <EmptyState title={i18n.t('Errors.somethingWrong')} description={templateStore.error}>
       {#snippet action()}
         <Button size="sm" variant="secondary" onclick={() => templateStore.refresh()}>
-          Retry
+          {i18n.t('Common.retry')}
         </Button>
       {/snippet}
     </EmptyState>
   {:else if rows.length === 0}
     <EmptyState
-      title="No templates match"
-      description="Try clearing the search or filters."
+      title={i18n.t('DocxTemplates.noTemplates')}
+      description={i18n.t('Ui.clearFiltersHint')}
     />
   {:else}
     <ul class="flex flex-col gap-2">
@@ -120,11 +120,13 @@
               <span class="text-xs text-(--color-text-secondary)">· {t.category}</span>
             {/if}
             {#each t.also_applicable_to as extra (extra)}
-              <Badge tone="neutral" size="xs">also: {domainLabel(extra)}</Badge>
+              <Badge tone="neutral" size="xs">
+                {i18n.t('Ui.alsoDomain', { domain: domainLabel(extra) })}
+              </Badge>
             {/each}
             {#if t.required_metadata.length > 0}
               <span class="text-xs text-(--color-text-disabled)">
-                · {t.required_metadata.length} required field{t.required_metadata.length === 1 ? '' : 's'}
+                · {i18n.t('Ui.requiredFieldCount', { n: t.required_metadata.length })}
               </span>
             {/if}
           </div>

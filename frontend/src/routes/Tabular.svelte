@@ -19,6 +19,7 @@
   import { workflowsApi } from '$lib/api/workflows'
   import { toastStore } from '$lib/stores/toast.svelte'
   import { userStore } from '$lib/stores/user.svelte'
+  import { i18n } from '$lib/stores/i18n.svelte'
   import { DOMAINS, domainLabel, DEFAULT_DOMAIN, type Domain } from '$lib/types/domain'
   import type { Workflow } from '$lib/types/workflow'
   import { ApiError } from '$lib/types/error'
@@ -39,10 +40,12 @@
       })
   })
 
-  const domainOptions = [
-    { value: '', label: 'All domains' },
+  const t = (k: string, p?: Record<string, string | number>) => i18n.t(k, p)
+
+  const domainOptions = $derived([
+    { value: '', label: t('Domains.filterPlaceholder') },
     ...DOMAINS.map((d) => ({ value: d, label: domainLabel(d) })),
-  ]
+  ])
 
   const rows = $derived(
     domainFilter
@@ -58,10 +61,10 @@
   let creating = $state(false)
   let formError = $state<string | null>(null)
 
-  const domainFormOptions = DOMAINS.map((d) => ({ value: d, label: domainLabel(d) }))
+  const domainFormOptions = $derived(DOMAINS.map((d) => ({ value: d, label: domainLabel(d) })))
   // Domain is chosen first; it scopes the tabular-workflow list.
   const workflowOptions = $derived([
-    { value: '', label: '— select a tabular workflow —' },
+    { value: '', label: t('TabularReviews.selectWorkflowOption') },
     ...tabularWorkflows
       .filter((w) => w.domain === fDomain)
       .map((w) => ({ value: w.id, label: w.title })),
@@ -84,7 +87,7 @@
 
   async function create() {
     if (!fWorkflowId) {
-      formError = 'Pick a tabular workflow.'
+      formError = t('TabularReviews.pickWorkflowError')
       return
     }
     creating = true
@@ -96,7 +99,7 @@
         columns_config: selectedWorkflow?.columns_config,
         domain: fDomain,
       })
-      toastStore.success('Review created')
+      toastStore.success(t('TabularReviews.createdToast'))
       modalOpen = false
     } catch (e) {
       formError = e instanceof ApiError ? e.detail : (e as Error).message
@@ -112,9 +115,9 @@
     if (!deleteTarget) return
     try {
       await tabularStore.remove(deleteTarget.id)
-      toastStore.info('Review deleted')
+      toastStore.info(t('TabularReviews.deletedToast'))
     } catch (e) {
-      toastStore.danger('Could not delete review', { detail: (e as Error).message })
+      toastStore.danger(t('TabularReviews.deleteError'), { detail: (e as Error).message })
     } finally {
       deleteTarget = null
     }
@@ -129,12 +132,12 @@
 <div class="max-w-4xl mx-auto p-8 space-y-5">
   <header class="flex items-end justify-between gap-4">
     <div class="space-y-1">
-      <h2 class="text-2xl font-semibold text-(--color-text-primary)">Tabular reviews</h2>
+      <h2 class="text-2xl font-semibold text-(--color-text-primary)">{t('TabularReviews.title')}</h2>
       <p class="text-sm text-(--color-text-secondary)">
-        Multi-document reviews driven by a tabular workflow's columns.
+        {t('TabularReviews.subtitle')}
       </p>
     </div>
-    <Button onclick={openCreate}>New review</Button>
+    <Button onclick={openCreate}>{t('TabularReviews.newReview')}</Button>
   </header>
 
   <div class="flex justify-end">
@@ -144,23 +147,21 @@
   {#if tabularStore.loading}
     <div class="flex items-center gap-2 text-sm text-(--color-text-secondary) py-12 justify-center">
       <Spinner size="sm" />
-      Loading reviews…
+      {t('Common.loading')}
     </div>
   {:else if tabularStore.error}
-    <EmptyState title="Could not load reviews" description={tabularStore.error}>
+    <EmptyState title={t('Errors.somethingWrong')} description={tabularStore.error}>
       {#snippet action()}
-        <Button size="sm" variant="secondary" onclick={() => tabularStore.refresh()}>Retry</Button>
+        <Button size="sm" variant="secondary" onclick={() => tabularStore.refresh()}>{t('Common.retry')}</Button>
       {/snippet}
     </EmptyState>
   {:else if rows.length === 0}
     <EmptyState
-      title="No tabular reviews"
-      description={domainFilter
-        ? `No reviews in the ${domainLabel(domainFilter)} domain.`
-        : 'Create a review from a tabular workflow to get started.'}
+      title={t('TabularReviews.noReviews')}
+      description={t('TabularReviews.emptyHint')}
     >
       {#snippet action()}
-        <Button size="sm" onclick={openCreate}>New review</Button>
+        <Button size="sm" onclick={openCreate}>{t('TabularReviews.newReview')}</Button>
       {/snippet}
     </EmptyState>
   {:else}
@@ -170,13 +171,13 @@
           <div class="flex-1 min-w-0">
             <span class="text-sm font-medium text-(--color-text-primary) truncate">{r.title}</span>
             <p class="text-xs text-(--color-text-secondary)">
-              {r.columns_config.length} column{r.columns_config.length === 1 ? '' : 's'}
-              · created {fmtDate(r.created_at)}
+              {t('Ui.columnCountFull', { n: r.columns_config.length })}
+              · {t('Ui.createdOn', { date: fmtDate(r.created_at) })}
             </p>
           </div>
           <Badge tone="brand">{domainLabel(r.domain)}</Badge>
           <IconButton
-            label="Delete review"
+            label={t('Ui.deleteReview')}
             size="sm"
             variant="danger"
             onclick={() => (deleteTarget = { id: r.id, title: r.title })}
@@ -189,19 +190,18 @@
   {/if}
 </div>
 
-<Modal bind:open={modalOpen} title="New tabular review" size="md">
+<Modal bind:open={modalOpen} title={t('TabularReviews.newReview')} size="md">
   <div class="space-y-3">
-    <Input label="Title" bind:value={fTitle} placeholder="Untitled Review" />
-    <Select label="Domain" options={domainFormOptions} bind:value={fDomain} />
-    <Select label="Tabular workflow" options={workflowOptions} bind:value={fWorkflowId} />
+    <Input label={t('Common.name')} bind:value={fTitle} placeholder={t('Common.untitled')} />
+    <Select label={t('Domains.label')} options={domainFormOptions} bind:value={fDomain} />
+    <Select label={t('TabularReviews.workflowTemplate')} options={workflowOptions} bind:value={fWorkflowId} />
     {#if selectedWorkflow}
       <p class="text-xs text-(--color-text-secondary)">
-        Inherits {selectedWorkflow.columns_config.length} column{selectedWorkflow.columns_config.length === 1 ? '' : 's'}
-        from this workflow.
+        {t('TabularReviews.inheritsColumns', { n: selectedWorkflow.columns_config.length })}
       </p>
     {:else}
       <p class="text-xs text-(--color-text-secondary)">
-        Showing tabular workflows in the {domainLabel(fDomain)} domain.
+        {t('TabularReviews.scopedToDomain', { domain: domainLabel(fDomain) })}
       </p>
     {/if}
     {#if formError}
@@ -209,16 +209,16 @@
     {/if}
   </div>
   {#snippet footer()}
-    <Button variant="ghost" onclick={() => (modalOpen = false)}>Cancel</Button>
-    <Button loading={creating} onclick={create}>Create review</Button>
+    <Button variant="ghost" onclick={() => (modalOpen = false)}>{t('Common.cancel')}</Button>
+    <Button loading={creating} onclick={create}>{t('TabularReviews.createReview')}</Button>
   {/snippet}
 </Modal>
 
 <ConfirmDialog
   open={deleteTarget !== null}
-  title="Delete review?"
-  message={`"${deleteTarget?.title ?? ''}" will be permanently deleted.`}
-  confirmLabel="Delete"
+  title={t('TabularReviews.deleteConfirmTitle')}
+  message={t('TabularReviews.deleteConfirmBody', { title: deleteTarget?.title ?? '' })}
+  confirmLabel={t('Common.delete')}
   danger
   onconfirm={confirmDelete}
   oncancel={() => (deleteTarget = null)}

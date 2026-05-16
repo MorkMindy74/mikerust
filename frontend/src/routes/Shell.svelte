@@ -20,6 +20,7 @@
   import { authStore } from '$lib/stores/auth.svelte'
   import { userStore } from '$lib/stores/user.svelte'
   import { toastStore } from '$lib/stores/toast.svelte'
+  import { i18n } from '$lib/stores/i18n.svelte'
   import {
     MessageSquare,
     FolderKanban,
@@ -31,22 +32,23 @@
 
   interface NavEntry {
     route: FeatureRoute
-    label: string
+    labelKey: string
     icon: typeof MessageSquare
   }
 
   const nav: NavEntry[] = [
-    { route: 'assistant', label: 'Assistant', icon: MessageSquare },
-    { route: 'projects', label: 'Projects', icon: FolderKanban },
-    { route: 'tabular', label: 'Tabular reviews', icon: Table2 },
-    { route: 'workflows', label: 'Workflows', icon: Workflow },
-    { route: 'templates', label: 'Templates', icon: FileText },
-    { route: 'settings', label: 'Settings', icon: SettingsIcon },
+    { route: 'assistant', labelKey: 'Sidebar.assistant', icon: MessageSquare },
+    { route: 'projects', labelKey: 'Sidebar.projects', icon: FolderKanban },
+    { route: 'tabular', labelKey: 'Sidebar.tabularReviews', icon: Table2 },
+    { route: 'workflows', labelKey: 'Sidebar.workflows', icon: Workflow },
+    { route: 'templates', labelKey: 'Sidebar.docxTemplates', icon: FileText },
+    { route: 'settings', labelKey: 'Common.settings', icon: SettingsIcon },
   ]
 
-  const activeLabel = $derived(
-    nav.find((n) => n.route === router.current)?.label ?? 'MikeRust'
-  )
+  const activeLabel = $derived.by(() => {
+    const entry = nav.find((n) => n.route === router.current)
+    return entry ? i18n.t(entry.labelKey) : 'MikeRust'
+  })
 
   const greetingName = $derived(
     userStore.profile?.display_name ??
@@ -58,7 +60,7 @@
   async function logout() {
     await authStore.logout()
     userStore.reset()
-    toastStore.info('Signed out')
+    toastStore.info(i18n.t('Common.logout'))
     router.go('unlock')
   }
 </script>
@@ -71,7 +73,7 @@
       {/snippet}
       {#each nav as entry (entry.route)}
         <SidebarItem
-          label={entry.label}
+          label={i18n.t(entry.labelKey)}
           active={router.current === entry.route}
           onclick={() => router.go(entry.route)}
         >
@@ -90,7 +92,7 @@
         {#if greetingName}
           <span class="text-xs text-(--color-text-secondary)">{greetingName}</span>
         {/if}
-        <Button size="sm" variant="ghost" onclick={logout}>Sign out</Button>
+        <Button size="sm" variant="ghost" onclick={logout}>{i18n.t('Common.logout')}</Button>
       {/snippet}
     </TopBar>
   {/snippet}
@@ -106,8 +108,8 @@
   {:else}
     <div class="p-8">
       <EmptyState
-        title="{activeLabel} — coming soon"
-        description="This screen is built in a later phase of the UI rewrite."
+        title={i18n.t('Ui.comingSoonTitle', { screen: activeLabel })}
+        description={i18n.t('Ui.comingSoonBody')}
       />
     </div>
   {/if}

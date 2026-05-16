@@ -8,6 +8,7 @@
   import Card from '$lib/components/ui/Card.svelte'
   import Spinner from '$lib/components/ui/Spinner.svelte'
   import Button from '$lib/components/ui/Button.svelte'
+  import { i18n } from '$lib/stores/i18n.svelte'
 
   interface Props {
     error?: string | null
@@ -20,17 +21,16 @@
 <div class="min-h-full flex items-center justify-center p-8 bg-(--color-surface-50)">
   <div class="w-full max-w-sm">
     {#if error}
-      <Card title="Cannot reach the backend">
+      <Card title={i18n.t('Boot.cannotReach')}>
         <div class="space-y-3">
           <p class="text-sm text-(--color-danger-500) font-mono whitespace-pre-wrap">
             {error}
           </p>
           <p class="text-xs text-(--color-text-secondary)">
-            Make sure the MikeRust backend is running. In dev, launch it from
-            the repo root with
+            {i18n.t('Boot.cannotReachHint')}
             <code class="font-mono">cargo tauri dev --config src-tauri/tauri.svelte.conf.json</code>.
           </p>
-          <Button size="sm" variant="secondary" onclick={onretry}>Retry</Button>
+          <Button size="sm" variant="secondary" onclick={onretry}>{i18n.t('Common.retry')}</Button>
         </div>
       </Card>
     {:else}
@@ -38,7 +38,7 @@
         <div class="text-(--color-brand-500)">
           <Spinner size="lg" />
         </div>
-        <p class="text-sm">Connecting to MikeRust…</p>
+        <p class="text-sm">{i18n.t('Boot.connecting')}</p>
       </div>
     {/if}
   </div>

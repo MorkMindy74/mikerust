@@ -1,5 +1,7 @@
 // Copyright (c) 2026 MikeRust contributors. Licensed under AGPL-3.0-only.
 
+import { i18n } from '$lib/stores/i18n.svelte'
+
 /**
  * Professional verticals. Canonical English snake_case IDs — these are
  * the values that travel over the wire and live in the DB. Mirror of
@@ -28,22 +30,9 @@ export function isDomain(value: unknown): value is Domain {
 }
 
 /**
- * English display labels. Temporary until the i18n store lands — the
- * `Domains.*` namespace (plan §14) will localise these. Canonical IDs
- * never change; only these labels do.
+ * Localised display label for a domain id, via the i18n `Domains.values.*`
+ * namespace. Canonical IDs never change; only the rendered label does.
  */
-export const DOMAIN_LABELS: Record<Domain, string> = {
-  legal: 'Legal',
-  medical: 'Medical',
-  finance: 'Finance',
-  real_estate: 'Real estate',
-  hr: 'HR',
-  insurance: 'Insurance',
-  ip: 'Intellectual property',
-  compliance: 'Compliance',
-  others: 'Other',
-}
-
 export function domainLabel(domain: string): string {
-  return isDomain(domain) ? DOMAIN_LABELS[domain] : domain
+  return i18n.t(`Domains.values.${domain}`)
 }

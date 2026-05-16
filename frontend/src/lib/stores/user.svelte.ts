@@ -1,6 +1,7 @@
 // Copyright (c) 2026 MikeRust contributors. Licensed under AGPL-3.0-only.
 
 import { userApi } from '$lib/api/user'
+import { i18n } from '$lib/stores/i18n.svelte'
 import { DEFAULT_DOMAIN, type Domain } from '$lib/types/domain'
 import { DEFAULT_LOCALE, type Locale, type UserProfile } from '$lib/types/user'
 
@@ -41,6 +42,7 @@ function createUserStore() {
         profile = prof
         locale = loc.locale ?? DEFAULT_LOCALE
         defaultDomain = dom.default_domain ?? DEFAULT_DOMAIN
+        i18n.setLocale(locale)
       } finally {
         loading = false
       }
@@ -49,6 +51,7 @@ function createUserStore() {
     async setLocale(next: Locale) {
       const res = await userApi.updateLocale(next)
       locale = res.locale
+      i18n.setLocale(res.locale)
     },
 
     async setDefaultDomain(next: Domain) {

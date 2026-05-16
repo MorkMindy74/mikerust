@@ -5,6 +5,7 @@
   import BiometricPrompt from './BiometricPrompt.svelte'
   import { authStore } from '$lib/stores/auth.svelte'
   import { authApi } from '$lib/api/auth'
+  import { i18n } from '$lib/stores/i18n.svelte'
   import { isValidPinFormat, PIN_MAX_LENGTH } from '$lib/types/auth'
   import { ApiError } from '$lib/types/error'
   import type { SessionUser } from '$lib/types/auth'
@@ -98,10 +99,10 @@
 
 <form class="space-y-4" onsubmit={submitPin}>
   <Input
-    label="PIN"
+    label={i18n.t('Auth.pin')}
     type="password"
     bind:value={pin}
-    placeholder="Enter your PIN"
+    placeholder={i18n.t('Auth.pinEnter')}
     inputmode="numeric"
     maxlength={PIN_MAX_LENGTH}
     autocomplete="current-password"
@@ -114,18 +115,18 @@
 
   {#if lockedOut}
     <p class="text-sm text-(--color-warning-500)">
-      Too many attempts — retry in {lockoutSecondsLeft}s
+      {i18n.t('Auth.lockout', { secs: lockoutSecondsLeft })}
     </p>
   {/if}
 
   <Button type="submit" full loading={submitting} disabled={!canSubmit}>
-    Unlock
+    {i18n.t('Auth.unlock')}
   </Button>
 
   {#if biometricAvailable}
     <div class="flex items-center gap-3">
       <span class="flex-1 h-px bg-(--color-surface-200)"></span>
-      <span class="text-xs text-(--color-text-secondary)">or</span>
+      <span class="text-xs text-(--color-text-secondary)">{i18n.t('Common.or')}</span>
       <span class="flex-1 h-px bg-(--color-surface-200)"></span>
     </div>
     <Button
@@ -135,9 +136,9 @@
       disabled={biometricBusy || lockedOut}
       onclick={unlockBiometric}
     >
-      Use biometric unlock
+      {i18n.t('Auth.useBiometric')}
     </Button>
   {/if}
 </form>
 
-<BiometricPrompt open={biometricBusy} reason="Unlock MikeRust with your biometric" />
+<BiometricPrompt open={biometricBusy} reason={i18n.t('Auth.biometricReason')} />

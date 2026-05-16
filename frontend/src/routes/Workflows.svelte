@@ -15,6 +15,7 @@
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import { workflowStore } from '$lib/stores/workflows.svelte'
   import { toastStore } from '$lib/stores/toast.svelte'
+  import { i18n } from '$lib/stores/i18n.svelte'
   import { DOMAINS, domainLabel } from '$lib/types/domain'
   import type { Workflow } from '$lib/types/workflow'
   import { Eye, EyeOff } from 'lucide-svelte'
@@ -27,6 +28,8 @@
     void workflowStore.refresh()
   })
 
+  const t = (k: string, p?: Record<string, string | number>) => i18n.t(k, p)
+
   // Tab partitioning is purely client-side over the fetched set.
   const builtin = $derived(workflowStore.items.filter((w) => w.is_system))
   const custom = $derived(workflowStore.items.filter((w) => !w.is_system))
@@ -35,16 +38,16 @@
   )
 
   const tabs = $derived([
-    { id: 'all', label: 'All', count: workflowStore.visible.length },
-    { id: 'builtin', label: 'Built-in', count: builtin.filter((w) => !workflowStore.isHidden(w.id)).length },
-    { id: 'custom', label: 'Custom', count: custom.length },
-    { id: 'hidden', label: 'Hidden', count: hiddenItems.length },
+    { id: 'all', label: t('Common.all'), count: workflowStore.visible.length },
+    { id: 'builtin', label: t('Workflows.tabBuiltin'), count: builtin.filter((w) => !workflowStore.isHidden(w.id)).length },
+    { id: 'custom', label: t('Workflows.tabCustom'), count: custom.length },
+    { id: 'hidden', label: t('Workflows.tabHidden'), count: hiddenItems.length },
   ])
 
-  const domainOptions = [
-    { value: '', label: 'All domains' },
+  const domainOptions = $derived([
+    { value: '', label: t('Domains.filterPlaceholder') },
     ...DOMAINS.map((d) => ({ value: d, label: domainLabel(d) })),
-  ]
+  ])
 
   const rows = $derived.by<Workflow[]>(() => {
     let list: Workflow[]
@@ -69,13 +72,13 @@
     try {
       if (workflowStore.isHidden(w.id)) {
         await workflowStore.unhide(w.id)
-        toastStore.info(`"${w.title}" restored`)
+        toastStore.info(t('Workflows.restoredToast', { title: w.title }))
       } else {
         await workflowStore.hide(w.id)
-        toastStore.info(`"${w.title}" hidden`)
+        toastStore.info(t('Workflows.hiddenToast', { title: w.title }))
       }
     } catch (e) {
-      toastStore.danger('Could not update workflow', { detail: (e as Error).message })
+      toastStore.danger(t('Workflows.updateError'), { detail: (e as Error).message })
     }
   }
 </script>
@@ -83,12 +86,12 @@
 <div class="max-w-4xl mx-auto p-8 space-y-5">
   <header class="flex items-end justify-between gap-4">
     <div class="space-y-1">
-      <h2 class="text-2xl font-semibold text-(--color-text-primary)">Workflows</h2>
+      <h2 class="text-2xl font-semibold text-(--color-text-primary)">{t('Workflows.title')}</h2>
       <p class="text-sm text-(--color-text-secondary)">
-        Reusable assistant and tabular-review templates.
+        {t('Workflows.allHint')}
       </p>
     </div>
-    <Button variant="primary" disabled>New workflow</Button>
+    <Button variant="primary" disabled>{t('Workflows.newWorkflow')}</Button>
   </header>
 
   <div class="flex items-end justify-between gap-4">
@@ -104,26 +107,21 @@
   {#if workflowStore.loading}
     <div class="flex items-center gap-2 text-sm text-(--color-text-secondary) py-12 justify-center">
       <Spinner size="sm" />
-      Loading workflows…
+      {t('Common.loading')}
     </div>
   {:else if workflowStore.error}
     <EmptyState
-      title="Could not load workflows"
+      title={t('Errors.somethingWrong')}
       description={workflowStore.error}
     >
       {#snippet action()}
         <Button size="sm" variant="secondary" onclick={() => workflowStore.refresh()}>
-          Retry
+          {t('Common.retry')}
         </Button>
       {/snippet}
     </EmptyState>
   {:else if rows.length === 0}
-    <EmptyState
-      title="No workflows here"
-      description={domainFilter
-        ? `No ${activeTab} workflows in the ${domainLabel(domainFilter)} domain.`
-        : `No ${activeTab} workflows yet.`}
-    />
+    <EmptyState title={t('Workflows.noWorkflows')} />
   {:else}
     <ul class="flex flex-col gap-2">
       {#each rows as w (w.id)}
@@ -138,7 +136,7 @@
                 {w.title}
               </span>
               {#if w.is_system}
-                <Badge tone="neutral" size="xs">preset</Badge>
+                <Badge tone="neutral" size="xs">{t('Ui.preset')}</Badge>
               {/if}
             </div>
             {#if w.practice}
@@ -147,13 +145,13 @@
           </div>
 
           <Badge tone={w.type === 'assistant' ? 'assistant' : 'tabular'}>
-            {w.type === 'assistant' ? 'Assistant' : 'Tabular'}
+            {w.type === 'assistant' ? t('Workflows.typeAssistant') : t('Workflows.typeTabular')}
           </Badge>
           <Badge tone="brand">{domainLabel(w.domain)}</Badge>
 
           {#if w.type === 'tabular'}
             <span class="text-xs text-(--color-text-secondary) tabular-nums w-16 text-right">
-              {w.columns_config.length} col{w.columns_config.length === 1 ? '' : 's'}
+              {t('Ui.columnCount', { n: w.columns_config.length })}
             </span>
           {:else}
             <span class="w-16"></span>
@@ -161,7 +159,7 @@
 
           {#if w.is_system}
             <IconButton
-              label={workflowStore.isHidden(w.id) ? 'Restore workflow' : 'Hide workflow'}
+              label={workflowStore.isHidden(w.id) ? t('Workflows.unhide') : t('Ui.hide')}
               size="sm"
               onclick={() => toggleHidden(w)}
             >
