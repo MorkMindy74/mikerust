@@ -17,9 +17,22 @@
   import { projectsApi } from '$lib/api/projects'
   import { templateDisplayName } from '$lib/types/template'
   import { domainLabel } from '$lib/types/domain'
+  import { toastStore } from '$lib/stores/toast.svelte'
   import type { SendAttachments } from '$lib/stores/chat.svelte'
   import type { FileRef, TemplateRef, WorkflowRef } from '$lib/types/chat'
-  import { Paperclip, FolderKanban, Workflow as WorkflowIcon, FileType2, X } from 'lucide-svelte'
+  import {
+    Paperclip,
+    FolderKanban,
+    Workflow as WorkflowIcon,
+    FileType2,
+    X,
+    Upload,
+    FolderSearch,
+  } from 'lucide-svelte'
+
+  /** Formats the backend can ingest (plus images for multimodal models). */
+  const UPLOAD_ACCEPT =
+    '.pdf,.docx,.doc,.rtf,.xlsx,.xls,.xlsb,.ods,.csv,.txt,.md,.png,.jpg,.jpeg,.tiff'
 
   interface Props {
     streaming: boolean
@@ -43,6 +56,37 @@
   let pickerOpen = $state(false)
   let pickerItems = $state<PickerItem[]>([])
   let pickerLoading = $state(false)
+
+  // ── document upload ─────────────────────────────────────────────────
+  let attachMenuOpen = $state(false)
+  let uploading = $state(false)
+  let fileInput = $state<HTMLInputElement>()
+
+  function triggerUpload() {
+    attachMenuOpen = false
+    fileInput?.click()
+  }
+
+  async function onFilesChosen(e: Event) {
+    const input = e.currentTarget as HTMLInputElement
+    const chosen = Array.from(input.files ?? [])
+    input.value = ''
+    if (chosen.length === 0) return
+    uploading = true
+    try {
+      for (const f of chosen) {
+        // `cache` — composer uploads live in the cache pool.
+        const doc = await documentsApi.upload(f, { cache: true })
+        files = [...files, { document_id: doc.id, filename: doc.filename }]
+      }
+    } catch (err) {
+      toastStore.danger(t('Documents.viewer.errorLoading'), {
+        detail: (err as Error).message,
+      })
+    } finally {
+      uploading = false
+    }
+  }
 
   async function openPicker(kind: Kind) {
     pickerKind = kind
@@ -221,12 +265,62 @@
            focus:outline-none"
   ></textarea>
 
+  <input
+    bind:this={fileInput}
+    type="file"
+    multiple
+    accept={UPLOAD_ACCEPT}
+    class="hidden"
+    onchange={onFilesChosen}
+  />
+
   <div class="flex items-center gap-1 px-2.5 py-2 border-t border-(--color-surface-100)">
-    <button type="button" title={t('Assistant.attachDocuments')} aria-label={t('Assistant.attachDocuments')}
-      onclick={() => openPicker('doc')}
-      class="inline-flex h-8 w-8 items-center justify-center rounded-(--radius-md) text-(--color-text-secondary) hover:bg-(--color-hover-bg) hover:text-(--color-text-primary)">
-      <Paperclip size={16} />
-    </button>
+    <div class="relative">
+      <button
+        type="button"
+        title={t('Assistant.attachDocuments')}
+        aria-label={t('Assistant.attachDocuments')}
+        onclick={() => (attachMenuOpen = !attachMenuOpen)}
+        class="inline-flex h-8 w-8 items-center justify-center rounded-(--radius-md)
+               text-(--color-text-secondary) hover:bg-(--color-hover-bg) hover:text-(--color-text-primary)
+               {uploading ? 'animate-pulse' : ''}"
+      >
+        <Paperclip size={16} />
+      </button>
+      {#if attachMenuOpen}
+        <button
+          type="button"
+          class="fixed inset-0 z-10 cursor-default"
+          aria-label={t('Common.close')}
+          onclick={() => (attachMenuOpen = false)}
+        ></button>
+        <div
+          class="absolute bottom-full mb-1.5 left-0 z-20 w-48 py-1
+                 rounded-(--radius-md) border border-(--color-surface-200)
+                 bg-(--color-surface-0) shadow-(--shadow-modal)"
+        >
+          <button
+            type="button"
+            onclick={triggerUpload}
+            class="flex w-full items-center gap-2 px-3 h-8 text-sm text-left
+                   text-(--color-text-primary) hover:bg-(--color-hover-bg)"
+          >
+            <Upload size={14} />{t('Assistant.uploadFiles')}
+          </button>
+          <button
+            type="button"
+            onclick={() => {
+              attachMenuOpen = false
+              openPicker('doc')
+            }}
+            class="flex w-full items-center gap-2 px-3 h-8 text-sm text-left
+                   text-(--color-text-primary) hover:bg-(--color-hover-bg)"
+          >
+            <FolderSearch size={14} />{t('Assistant.browseAll')}
+          </button>
+        </div>
+      {/if}
+    </div>
     <button type="button" title={t('Assistant.attachProject')} aria-label={t('Assistant.attachProject')}
       onclick={() => openPicker('project')}
       class="inline-flex h-8 w-8 items-center justify-center rounded-(--radius-md) text-(--color-text-secondary) hover:bg-(--color-hover-bg) hover:text-(--color-text-primary)">
