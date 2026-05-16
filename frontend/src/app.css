@@ -191,6 +191,29 @@ body {
   50% { opacity: 0; }
 }
 
+/* ── MikeRust logo ───────────────────────────────────────────────── */
+
+.mike-logo {
+  transform-origin: 50% 50%;
+}
+.mike-logo-idle {
+  animation: mike-logo-spin 22s linear infinite;
+}
+.mike-logo-active {
+  animation: mike-logo-spin 2.4s linear infinite;
+}
+@keyframes mike-logo-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mike-logo-idle,
+  .mike-logo-active {
+    animation: none;
+  }
+}
+
 /* ── Citation pills ──────────────────────────────────────────────── */
 
 .cite-pill {

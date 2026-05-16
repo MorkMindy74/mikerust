@@ -7,6 +7,7 @@
   import ChatMessage from '$lib/components/chat/ChatMessage.svelte'
   import ChatInput from '$lib/components/chat/ChatInput.svelte'
   import EmbeddingBanner from '$lib/components/chat/EmbeddingBanner.svelte'
+  import Logo from '$lib/components/ui/Logo.svelte'
   import { chatStore, type SendAttachments } from '$lib/stores/chat.svelte'
   import { userStore } from '$lib/stores/user.svelte'
   import { i18n } from '$lib/stores/i18n.svelte'
@@ -39,9 +40,12 @@
   <div bind:this={scroller} class="flex-1 overflow-y-auto">
     {#if chatStore.messages.length === 0}
       <div class="h-full flex flex-col items-center justify-center text-center px-6 gap-2">
-        <h2 class="text-2xl font-semibold text-(--color-text-primary)">
-          {t('Assistant.greeting', { name: greetingName })}
-        </h2>
+        <div class="flex items-center gap-3">
+          <Logo size={42} spin={chatStore.streaming ? 'active' : 'idle'} class="text-(--color-brand-500)" />
+          <h2 class="text-2xl font-semibold text-(--color-text-primary)">
+            {t('Assistant.greeting', { name: greetingName })}
+          </h2>
+        </div>
         <p class="text-sm text-(--color-text-secondary) max-w-md">
           {t('Assistant.emptyHint')}
         </p>
@@ -61,5 +65,8 @@
     {/if}
     <EmbeddingBanner active={chatStore.streaming} />
     <ChatInput streaming={chatStore.streaming} {onsend} onstop={() => chatStore.abort()} />
+    <p class="text-xs text-center text-(--color-text-secondary) mt-2">
+      {t('Chat.disclaimer')}
+    </p>
   </div>
 </div>

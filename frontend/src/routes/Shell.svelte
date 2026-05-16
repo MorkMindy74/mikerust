@@ -10,6 +10,7 @@
   import TopBar from '$lib/components/layout/TopBar.svelte'
   import Button from '$lib/components/ui/Button.svelte'
   import IconButton from '$lib/components/ui/IconButton.svelte'
+  import Logo from '$lib/components/ui/Logo.svelte'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import ThemeToggle from '$lib/components/ui/ThemeToggle.svelte'
   import Workflows from './Workflows.svelte'
@@ -98,7 +99,10 @@
   {#snippet sidebar()}
     <Sidebar>
       {#snippet brand()}
-        <span class="text-base font-semibold text-(--color-brand-600)">MikeRust</span>
+        <span class="flex items-center gap-2">
+          <Logo size={20} spin="none" class="text-(--color-brand-500)" />
+          <span class="text-base font-semibold text-(--color-brand-600)">MikeRust</span>
+        </span>
       {/snippet}
 
       <!-- nav -->
