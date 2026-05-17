@@ -38,9 +38,8 @@ tabular reviews, corpora) but rebuilds both halves:
     LibreOffice process spawn — and ships as a Tauri desktop app with no
     server-side dependency;
   * the **frontend** is a clean-room rewrite in **Svelte 5 + Vite +
-    Tailwind CSS v4** (the original was Next.js / React). The rewrite is
-    roughly **2.6× smaller** in source lines and ships a far lighter
-    dependency tree — see *Frontend rewrite* below.
+    Tailwind CSS v4**, replacing the original Next.js / React frontend —
+    see *Frontend* below.
 
 The legacy React frontend is still in the tree under `frontendMike/` as
 a reference while the Svelte rewrite (`frontend/`) reaches full parity.
@@ -102,34 +101,43 @@ translations land.
 > hardcode user-facing strings**, always resolve them through an
 > `i18n.t('Namespace.key')` call.
 
-## Frontend rewrite
+## Frontend
 
-The frontend was rebuilt clean-room in Svelte 5 to shed the Next.js /
-React runtime weight while keeping the product surface. Measured against
-the legacy React tree still kept at `frontendMike/`:
+The frontend was rewritten from scratch in **Svelte 5 + Vite + Tailwind
+CSS v4**, replacing the original Next.js / React frontend.
 
-| | React (`frontendMike/`) | Svelte (`frontend/`) |
-|---|---|---|
-| Framework | Next.js / React | Svelte 5 + Vite + Tailwind v4 |
-| Source files (`src/`) | 141 | 123 |
-| Source lines (`.ts/.tsx/.svelte/.css`) | 36,687 | 14,179 — **−61%** |
-| Runtime dependencies (`package.json`) | 38 | 13 |
-| Dev dependencies | 15 | 18 |
-| `node_modules` on disk | 695 MB | 293 MB — **−58%** |
-| Production bundle | — | `dist/` 7.3 MB total · 1.5 MB app JS |
+The rewrite was done **blind**: from a written specification of UI
+*behaviour* — what each screen does, which backend endpoints it calls,
+what the user sees and on which interaction — never by porting,
+translating or reading the React source across line by line. The point
+was to carry **no code dependency** from the original Mike project into
+this frontend. `frontend/` is therefore original, independent work, not
+a derivative of the upstream React code.
 
-The runtime-dependency count is the sharpest drop — 38 → 13 — because
-Svelte is a compiler: there is no framework runtime, no `react` /
-`react-dom` / `next` and no Radix UI primitive packages on the wire. UI
-components (modals, selects, toggles, tabs) are hand-rolled in
-`frontend/src/lib/components/ui/`. The dev-dependency count is slightly
-higher only because test/lint tooling (`vitest`, `svelte-check`,
-`eslint-plugin-svelte`) is now explicit.
+Svelte was chosen because it is a **compiler, not a runtime framework**:
+it emits markedly more **compact** code and the running UI is **leaner
+and more reactive**. MikeRust's interface is form- and panel-heavy —
+editors, modals, side panels, settings, tables — the kind of UI that
+gains little from React's virtual-DOM diffing; Svelte's compiled,
+fine-grained reactivity updates exactly the nodes that changed, with no
+vDOM layer and far less shipped JavaScript.
 
-> The React `.next/` dev cache (~200 MB) is a build artefact, not a
-> shipped output — it is not comparable to the Svelte `dist/`. The React
-> app's static export isn't built in this tree, so its shipped bundle
-> size is not listed.
+### Code independence
+
+`frontend/` (Svelte) and the legacy `frontendMike/` (React, kept in-tree
+only as a behavioural reference) share **no source code**:
+
+- **Disjoint file formats** — `frontendMike/src` is 106 `.tsx` React
+  components; `frontend/src` is 68 `.svelte` components. A `.tsx` file
+  cannot *be* a `.svelte` file — nothing was copied across.
+- **No identical files** — a SHA-256 comparison of every source file in
+  both trees finds **zero** byte-identical files.
+- **Authorship** — every commit that touches `frontend/` is authored by
+  **Dario Finardi**; the Svelte frontend is entirely his added/modified
+  code.
+- **Dependencies** — the two `package.json` trees overlap only on
+  standard third-party libraries (Tauri API, `pdfjs-dist`, `marked`,
+  Tailwind, TypeScript); no Mike-derived package is reused.
 
 ## Quick start
 
