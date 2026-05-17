@@ -2302,6 +2302,21 @@ async fn stream_chat_root(
                             .await
                         };
                         progress_task.abort();
+                        // Tell the UI this tool finished, so its
+                        // "running…" line resolves to a check right away.
+                        // Without it the step stays spinning until the
+                        // *next* tool starts — and on a docx generation
+                        // that gap is the whole body-writing phase, so it
+                        // looked stuck on `describe_docx_template`.
+                        let _ = tx
+                            .send(Ok(Event::default().data(
+                                json!({
+                                    "type": "tool_call_done",
+                                    "name": call.name,
+                                })
+                                .to_string(),
+                            )))
+                            .await;
                         // For diagnostics: when a tool result is short
                         // it's almost always an error envelope or a
                         // pointer to async work. Log the body verbatim

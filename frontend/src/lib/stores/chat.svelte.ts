@@ -199,6 +199,20 @@ function createChatStore() {
               }
             }
           },
+          onToolCallDone: (name) => {
+            // The tool finished — resolve its spinner to a check now,
+            // instead of waiting for the next tool to start (which on a
+            // docx generation is the whole body-writing phase).
+            const m = assistant()
+            if (!m?.steps) return
+            for (let i = m.steps.length - 1; i >= 0; i--) {
+              const s = m.steps[i]
+              if (s.kind === 'tool' && s.name === name && !s.done) {
+                s.done = true
+                break
+              }
+            }
+          },
           onDocCreated: (doc) => {
             const m = assistant()
             if (!m) return

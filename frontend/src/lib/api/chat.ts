@@ -49,6 +49,7 @@ export interface ChatStreamCallbacks {
   onDelta: (text: string) => void
   onToolCallStart?: (name: string) => void
   onToolCallProgress?: (name: string, elapsedSecs: number) => void
+  onToolCallDone?: (name: string) => void
   onDocCreated?: (doc: DocCreatedEvent) => void
   onCitations?: (data: unknown) => void
   onError: (message: string) => void
@@ -80,6 +81,9 @@ function dispatchSseChunk(chunk: string, cb: ChatStreamCallbacks): void {
         break
       case 'tool_call_progress':
         cb.onToolCallProgress?.(String(ev.name ?? ''), Number(ev.elapsed_secs ?? 0))
+        break
+      case 'tool_call_done':
+        cb.onToolCallDone?.(String(ev.name ?? ''))
         break
       case 'doc_created':
         cb.onDocCreated?.({
