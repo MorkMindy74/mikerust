@@ -59,28 +59,52 @@ specialised on Danish law, see
 ## Interface
 
 A desktop window (Tauri) wrapping the Svelte frontend; the embedded axum
-backend runs in the same process. Two views to set expectations:
+backend runs in the same process. A few views to set expectations
+(screenshots are of the current Svelte UI):
+
+### The workspace
+
+![MikeRust Assistant home — left sidebar with Assistant, Projects, Tabular reviews, Workflows, DOCX templates and a recent-chats list; a 'Hello, Dario' greeting; a composer with attachment buttons, a per-conversation model picker and the AI disclaimer](docs/images/ui_main.png)
+
+The sidebar holds the Assistant, Projects, Tabular reviews, Workflows and
+DOCX templates, plus the recent-chats list and Settings. Light / system /
+dark theme toggle sits in the top bar; the AI-disclaimer is always shown
+under the composer.
 
 ### Chat with citations and inline document viewer
 
-![Chat answer with [g7] citation pill open in the PDF viewer, the cited passage highlighted on the page](docs/images/chat-with-citations.png)
+![Chat answer with numbered citation pills next to the document viewer, which is open on the right showing the cited PDF page](docs/images/ui_pdf.png)
 
-Numeric citation pills (`[1]`, `[2]`, …) and `[gN]`/`[pN]` KB tags both open
-the source document in the side panel. PDF.js text-search highlights the
-exact quote the model cited. Re-opening a chat re-renders all pills from
-persisted annotations — no stale `[Page N]` contamination thanks to a
-sanitisation pass on both the write and read path.
+Numeric citation pills (`[1]`, `[2]`, …) and `[gN]`/`[pN]` KB tags open the
+source document in a resizable side panel. The viewer renders PDF / DOCX /
+spreadsheets / plain text in-browser; PDF.js text-search highlights the exact
+quote the model cited. Re-opening a chat re-renders all pills from persisted
+annotations.
 
-### Authoritative-corpus sync (EUR-Lex shown)
+### DOCX generation from templates
 
-![EUR-Lex search panel: GDPR result with 'Sync...' button, indexed list with live 48/288 chunk-embed progress bar](docs/images/eurlex-sync.png)
+![A generated 'Relazione di stima d'azienda' Word document rendered in the document viewer beside the chat](docs/images/ui_docx.png)
 
-Search by CELEX, ELI, year/number, or free-text keywords; the panel
-auto-detects intent, probes EUR-Lex across all act types, and confirms
-which actually exist in the requested language. Indexed rows show their
-chunk count, status badge, and a live embedding progress bar driven by
-`/eurlex/embed-progress` polling. Same shape for the Italian Legal
-Corpus panel.
+Attach a DOCX template, ask for the document, and the assistant drafts the
+body and renders a print-ready `.docx` through the pure-Rust docx engine —
+returned as a download card and previewable in the viewer.
+
+### DOCX template editor
+
+![The full-page DOCX template editor showing the IMS-procedure template — identity fields, per-locale display names, primary-domain and automation-level selectors, also-applicable-to checkboxes, and the start of the layout/margins section](docs/images/ui_docx_templates.png)
+
+Every field of a template is editable on a single page — identity, layout,
+typography, styles and the authoring contract. System templates open
+read-only and can be **duplicated** into editable user templates, saved as
+JSON under `config/docx-templates/user/`.
+
+### Model providers
+
+![Settings → LLM models — active-provider toggle across Anthropic, Google, OpenAI, Mistral and Local; per-provider API-key fields; a 'key set' badge on Gemini; Gemini model and serving-region selectors](docs/images/ui_models.png)
+
+Settings → LLM models picks the active provider — Anthropic, Google, OpenAI,
+Mistral, or a local OpenAI-compatible endpoint — and, for Gemini, the serving
+region. Only providers with a saved API key are selectable.
 
 ### Internationalisation
 
@@ -385,7 +409,7 @@ See `.env.example` for the full reference.
 | LLM: Anthropic / Gemini / OpenAI / vLLM / Ollama | ✅ |
 | MCP client (HTTP/SSE) — synchronous tools | ✅ |
 | MCP client — multi-step async flows (request → poll → fetch) | ⚠️ partial — see note below |
-| Routes: auth, user, chat, documents, projects, workflows, sync, tabular-review | ✅ |
+| Routes: auth, user, chat, documents, projects, workflows, docx-templates, sync, tabular-review, corpora | ✅ |
 | Project: documents (PDF/DOCX/RTF/XLSX) + folders + versions + rename | ✅ |
 | Project: chats list, tabular-reviews list, owner/shared visibility | ✅ |
 | Project: URL `?tab=` deep-linking (documents / assistant / reviews) | ✅ |
@@ -413,12 +437,18 @@ See `.env.example` for the full reference.
 | **Built-in workflows shipped (medical-legal vertical)** | ✅ 11 — 7 tabular (inventario documenti, timeline cronologica, diagnosi strumentali con flag DIRETTA/INDIRETTA/ESCLUSIVA, ITT, IP-RC SIMLA, MIP INAIL, invalidità civile DM 1992) + 4 assistant (diagnosi ingresso, diagnosi dimissione, nesso causale 6.1→6.6, quality check 10 punti). Map dei 7 moduli di `docs/piano_toolkit_medico_legale.md` + DOCX template `it/relazione-medico-legale` per la stesura finale. |
 | **Built-in workflows shipped (finance / commercialista vertical)** | ✅ 22 — 17 tabular (inventario, scadenzario fiscale annuale, portafoglio clienti, quality-check pre-invio, riclassificazione bilanci pluriennale, indicatori economico-finanziari, metodi valutativi, contestazioni accertamento, analisi bancaria Art. 32, rideterminazione reddito, indicatori di crisi CCII, stato passivo per rango, confronto piano vs liquidatoria, cash-flow previsionale, checklist DD documenti, rischi DD con semaforo, esposizione fiscale anno×tributo, rilievi-controdeduzioni, scadenze processuali, checklist redditi PF) + 5 assistant (relazione stima d'azienda, relazione CTU tributaria, attestazione Art. 33 CCII, report due diligence, ricorso tributario D.Lgs. 546/92). Map delle 6 aree di `docs/piano_toolkit_commercialista.md` + 3 DOCX template (`it/relazione-stima-valore`, `it/attestazione-art-33-ccii`, `it/ricorso-tributario`). |
 | Column-preset shortcuts (auto-suggest column prompt+format from name match) | ✅ 13 legal + 17 insurance, domain-scoped auto-match |
-| Picker modals with on-the-fly domain switch | ✅ workflow / tabular-template / column-preset pickers all expose a `DomainSelect` combo, pre-seeded with the user's default at every open |
+| Picker modals with on-the-fly domain switch | ✅ workflow / template / tabular-template / column-preset pickers all expose a `DomainSelect` combo, pre-seeded with the user's default at every open |
 | **LLM model catalogue** (`config/model.json` + `GET /models`) | ✅ 4 providers (Anthropic, Google Gemini, OpenAI, Mistral), Gemini 30-region matrix, `preview`/`legacy` flags drive auto-snap to global + UI dimming |
 | Settings → Modelli LLM: catalogue-driven combos | ✅ model and region dropdowns populated from `/models`; "Provider attivo" buttons gated to providers with a saved API key (lock icon + tooltip for the rest) |
 | Chat model picker filters out unconfigured providers | ✅ ModelToggle hides Anthropic / OpenAI / Gemini until their API key is saved, matching the Settings page gating |
 | **Six UI locales** (`it` / `en` / `fr` / `de` / `es` / `pt`) | ✅ full catalogues, identical key tree, English fallback for any missing key via the i18n store |
 | Language picker | ✅ in Settings → Profile |
+| **DOCX templates screen** — list, detail, generate, apply-to-chat | ✅ filter by domain / locale / free-text; detail modal renders the auto-generated authoring contract; "Apply to chat" opens a fresh conversation with the template attached |
+| **DOCX template editor** (full-page) | ✅ edits every `DocxTemplate` field — identity, layout, typography, styles, authoring contract; system templates open read-only and **duplicate** into editable user templates; user templates persist as JSON under `config/docx-templates/user/` via `POST /docx-templates/save` |
+| Hide / unhide DOCX templates | ✅ per-user, with Tutti / Predefiniti / Personalizzati / Nascosti tabs (migration 0024) |
+| **Prompt translation** | ✅ the workflow and DOCX-template editors translate their free-text fields into a language chosen in a modal; runs through a bounded-concurrency pool with a per-request timeout and live progress |
+| **Prompt caching + window-aware summarization** | ✅ the stable system prefix is sent with Anthropic `cache_control` (Gemini gets implicit caching); conversation history is compressed once the whole prompt — system prefix + attached docs + history — passes 80% of the model's context window |
+| Frontend unit tests (vitest) | ✅ citation / highlight / markdown utilities + a DOCX-template-editor mount test |
 
 ### Note: MCP client — async multi-step flows
 
