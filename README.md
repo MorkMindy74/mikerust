@@ -194,11 +194,13 @@ cp .env.example .env
 cd frontend && pnpm install && cd ..
 
 # 5. Run dev (Tauri shell + axum backend + Svelte/Vite frontend)
-# Use the Tauri CLI binary pnpm placed under frontend/node_modules/ —
-# no global `cargo install` required, and the version stays pinned to
-# what package.json declares. The Svelte frontend has its own Tauri
-# config.
-./frontend/node_modules/.bin/tauri dev --config src-tauri/tauri.svelte.conf.json
+# Preferred on Windows: use the repo-local Tauri CLI binary installed
+# by pnpm under frontend/node_modules/ (version pinned by package.json,
+# no global cargo-tauri required).
+.\frontend\node_modules\.bin\tauri.cmd dev --config src-tauri/tauri.svelte.conf.json
+
+# Optional alternative (only if cargo-tauri is installed globally):
+# cargo tauri dev --config src-tauri/tauri.svelte.conf.json
 
 # Or backend only (axum on 127.0.0.1:$PORT, no Tauri shell):
 cargo run --features rag

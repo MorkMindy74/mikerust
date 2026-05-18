@@ -63,6 +63,17 @@ describe('toCitation', () => {
     const c = toCitation({ ref: 'p1', source: 'eurlex/32016R0679' })
     expect(c.source).toBe('eurlex/32016R0679')
   })
+
+  it('keeps kb path from backend payload for KB citations', () => {
+    const c = toCitation({
+      ref: 'g1',
+      path: 'corpora/eurlex/32016R0679.txt',
+      filename: '32016R0679.txt',
+      quote: 'x',
+    })
+    expect(c.kbPath).toBe('corpora/eurlex/32016R0679.txt')
+    expect(c.scope).toBe('global')
+  })
 })
 
 describe('PAGE_BREAK_SENTINEL', () => {

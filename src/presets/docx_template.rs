@@ -8,10 +8,10 @@
 //!
 //! Philosophy (from Panucci, restated in the Prontuario):
 //!
-//!   > Il Prontuario non serve per generare il contenuto. Quello si
-//!   > ottiene dialogando con Claude, iterando, affinando. Il
-//!   > Prontuario entra in gioco alla fine, quando il contenuto è
-//!   > pronto e devi trasformarlo in un documento stampabile.
+//!   > The Prontuario is not for generating the content. That you get
+//!   > by dialoguing with Claude, iterating, refining. The Prontuario
+//!   > comes into play at the end, when the content is ready and you
+//!   > need to turn it into a printable document.
 //!
 //! The template is the **closing formatter**, never the content
 //! generator. The LLM produces structured Markdown after iterating

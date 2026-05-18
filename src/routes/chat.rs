@@ -37,6 +37,7 @@ pub fn build_local_config(
     settings: Option<&crate::routes::user::LlmSettings>,
 ) -> Option<LocalConfig> {
     let s = settings?;
+    let requested_model = llm::strip_model_prefix(model).trim().to_string();
     let (base, key, stored_model) = if model.starts_with("openai:") {
         (
             s.openai_api_key
@@ -70,9 +71,13 @@ pub fn build_local_config(
     Some(LocalConfig {
         base_url: base,
         api_key: key.filter(|k| !k.trim().is_empty()),
-        model: stored_model
-            .filter(|m| !m.trim().is_empty())
-            .unwrap_or_else(|| llm::strip_model_prefix(model).to_string()),
+        model: if requested_model.is_empty() {
+            stored_model
+                .filter(|m| !m.trim().is_empty())
+                .unwrap_or_default()
+        } else {
+            requested_model
+        },
     })
 }
 
@@ -936,6 +941,13 @@ async fn load_attached_docs(
 /// Mike's original legal-assistant system prompt, adapted from upstream
 /// (willchen96/mike, `backend/src/lib/chatTools.ts` SYSTEM_PROMPT).
 const MRUST_SYSTEM_PROMPT: &str = r#"You are Mike, an AI legal assistant that helps lawyers and legal professionals analyze documents, answer legal questions, and draft legal documents.
+
+RESPONSE STYLE:
+- Always respond in the same language as the user's last message.
+- Keep answers concise and well-structured (short paragraphs and/or bullets).
+- Do not repeat the same filename multiple times in a row.
+- When referring to provided documents, list each filename at most once.
+- Avoid verbose meta-reasoning or restating the whole workflow unless explicitly requested.
 
 DOCUMENT CITATION INSTRUCTIONS:
 When you reference specific content from a document, place a numbered marker [1], [2], etc. inline in your prose at the point of reference.
@@ -3615,7 +3627,7 @@ async fn generate_title(
     }
     .map_err(|e| err(StatusCode::BAD_GATEWAY, &e.to_string()))?;
 
-    let title: String = title_text
+    let mut title: String = title_text
         .lines()
         .next()
         .unwrap_or("")
@@ -3623,6 +3635,22 @@ async fn generate_title(
         .chars()
         .take(80)
         .collect();
+
+    if title.trim().is_empty() {
+        let fallback_words: Vec<&str> = first_msg
+            .split_whitespace()
+            .take(5)
+            .collect();
+        let fallback = fallback_words.join(" ");
+        title = fallback
+            .trim_matches(|c: char| c == '"' || c == '\'' || c.is_whitespace())
+            .chars()
+            .take(80)
+            .collect();
+        if title.trim().is_empty() {
+            title = "New chat".to_string();
+        }
+    }
 
     sqlx::query("UPDATE chats SET title = ?, updated_at = datetime('now') WHERE id = ?")
         .bind(&title)

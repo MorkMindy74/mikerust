@@ -4,6 +4,7 @@
   pinned Settings) + topbar + the active feature route.
 -->
 <script lang="ts">
+  import { tick } from 'svelte'
   import AppShell from '$lib/components/layout/AppShell.svelte'
   import Sidebar from '$lib/components/layout/Sidebar.svelte'
   import SidebarItem from '$lib/components/layout/SidebarItem.svelte'
@@ -36,6 +37,7 @@
     Plus,
     ChevronDown,
     ChevronRight,
+    Pencil,
     Trash2,
   } from 'lucide-svelte'
 
@@ -75,12 +77,54 @@
 
   let chatsCollapsed = $state(false)
   let deleteChatTarget = $state<{ id: string; title: string | null } | null>(null)
+  let renamingChatId = $state<string | null>(null)
+  let renameValue = $state('')
 
   async function confirmDeleteChat() {
     if (!deleteChatTarget) return
     const id = deleteChatTarget.id
     deleteChatTarget = null
     await chatStore.remove(id)
+  }
+
+  function startRenameChat(id: string, title: string | null) {
+    renamingChatId = id
+    renameValue = (title ?? '').trim()
+  }
+
+  function focusAtEnd(node: HTMLInputElement) {
+    const placeCaret = async () => {
+      await tick()
+      node.focus()
+      const end = node.value.length
+      node.setSelectionRange(end, end)
+    }
+    void placeCaret()
+    return {
+      update() {
+        void placeCaret()
+      },
+    }
+  }
+
+  function cancelRenameChat() {
+    renamingChatId = null
+    renameValue = ''
+  }
+
+  async function commitRenameChat(id: string) {
+    const next = renameValue.trim()
+    if (!next) {
+      cancelRenameChat()
+      return
+    }
+    try {
+      await chatStore.rename(id, next)
+    } catch (e) {
+      toastStore.danger(i18n.t('Common.error'), { detail: (e as Error).message })
+    } finally {
+      cancelRenameChat()
+    }
   }
 
   $effect(() => {
@@ -186,18 +230,42 @@
                          ? 'bg-(--color-active-bg)'
                          : 'hover:bg-(--color-hover-bg)'}"
               >
-                <button
-                  type="button"
-                  onclick={() => openChat(c.id)}
-                  class="flex-1 min-w-0 flex items-center gap-2 px-2.5 h-8 text-left text-sm
-                         focus:outline-none
-                         {chatStore.activeId === c.id && router.current === 'assistant'
-                           ? 'text-(--color-brand-700)'
-                           : 'text-(--color-text-secondary)'}"
+                {#if renamingChatId === c.id}
+                  <div class="flex-1 min-w-0 flex items-center gap-2 px-2.5 h-8 text-sm text-(--color-text-secondary)">
+                    <MessageSquare size={13} class="shrink-0" />
+                    <input
+                      bind:value={renameValue}
+                      use:focusAtEnd
+                      class="flex-1 min-w-0 bg-transparent border-b border-(--color-brand-500) focus:outline-none"
+                      onkeydown={(e) => {
+                        if (e.key === 'Enter') void commitRenameChat(c.id)
+                        if (e.key === 'Escape') cancelRenameChat()
+                      }}
+                      onblur={() => void commitRenameChat(c.id)}
+                    />
+                  </div>
+                {:else}
+                  <button
+                    type="button"
+                    onclick={() => openChat(c.id)}
+                    class="flex-1 min-w-0 flex items-center gap-2 px-2.5 h-8 text-left text-sm
+                           focus:outline-none
+                           {chatStore.activeId === c.id && router.current === 'assistant'
+                             ? 'text-(--color-brand-700)'
+                             : 'text-(--color-text-secondary)'}"
+                  >
+                    <MessageSquare size={13} class="shrink-0" />
+                    <span class="truncate">{c.title || i18n.t('Assistant.untitledChat')}</span>
+                  </button>
+                {/if}
+                <IconButton
+                  label={i18n.t('Common.rename')}
+                  size="sm"
+                  class="opacity-0 group-hover:opacity-100"
+                  onclick={() => startRenameChat(c.id, c.title)}
                 >
-                  <MessageSquare size={13} class="shrink-0" />
-                  <span class="truncate">{c.title || i18n.t('Assistant.untitledChat')}</span>
-                </button>
+                  <Pencil size={13} />
+                </IconButton>
                 <IconButton
                   label={i18n.t('Common.delete')}
                   size="sm"

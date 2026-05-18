@@ -55,4 +55,12 @@ export const documentsApi = {
   /** Fetch the original document bytes for download. */
   downloadBytes: (id: string) =>
     api<Blob>(`/document/${encodeURIComponent(id)}/download`, { asBlob: true }),
+
+  /**
+   * Fetch bytes for a synced knowledge-base source path cited in chat
+   * (`[gN]` / `[pN]`). The backend validates the allowlist of indexed
+   * files before serving the payload.
+   */
+  kbBytes: (path: string) =>
+    api<Blob>('/sync/kb-doc', { asBlob: true, query: { path } }),
 }

@@ -14,10 +14,11 @@
   interface Props {
     blob: Blob
     quote?: string
+    trackedPolicy?: 'show' | 'accept' | 'reject'
     revision?: number
   }
 
-  let { blob, quote, revision = 0 }: Props = $props()
+  let { blob, quote, trackedPolicy = 'show', revision = 0 }: Props = $props()
 
   let loading = $state(true)
   let err = $state<string | null>(null)
@@ -43,7 +44,7 @@
         ignoreWidth: false,
         ignoreHeight: false,
         breakPages: true,
-        renderChanges: true,
+        renderChanges: trackedPolicy !== 'reject',
         experimental: true,
         useBase64URL: true,
       })
@@ -57,6 +58,7 @@
 
   $effect(() => {
     void blob
+    void trackedPolicy
     void render()
   })
 
@@ -78,5 +80,27 @@
       {i18n.t('Documents.viewer.errorLoading')} — {err}
     </p>
   {/if}
-  <div bind:this={host} class="docx-body"></div>
+  <div bind:this={host} class={`docx-body tracked-${trackedPolicy}`}></div>
 </div>
+
+<style>
+  :global(.docx-body.tracked-accept del),
+  :global(.docx-body.tracked-accept .docx-delete),
+  :global(.docx-body.tracked-accept .docx-deletion) {
+    display: none !important;
+  }
+
+  :global(.docx-body.tracked-reject ins),
+  :global(.docx-body.tracked-reject .docx-insert),
+  :global(.docx-body.tracked-reject .docx-insertion) {
+    display: none !important;
+  }
+
+  :global(.docx-body.tracked-reject del),
+  :global(.docx-body.tracked-reject .docx-delete),
+  :global(.docx-body.tracked-reject .docx-deletion) {
+    text-decoration: none !important;
+    color: inherit !important;
+    background: transparent !important;
+  }
+</style>

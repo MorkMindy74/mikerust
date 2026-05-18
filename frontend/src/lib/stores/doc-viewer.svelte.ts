@@ -10,19 +10,28 @@
 
 import type { Citation } from '$lib/types/citation'
 
-/** How a tab was opened — drives the per-tab header card. */
-export type ViewerMode = 'citation' | 'plain'
+/** How a tab is shown — plain, citation-focused, or tracked-changes mode. */
+export type ViewerMode = 'citation' | 'plain' | 'tracked'
+
+/** Visual policy for DOCX tracked changes while in `mode: tracked`. */
+export type TrackedPolicy = 'show' | 'accept' | 'reject'
 
 export interface ViewerTab {
   /** Unique per tab (a document may be reopened from several places). */
   id: string
-  /** Backing document identifier. */
+  /** Backing identifier (`document` UUID or synthetic `kb:<path>`). */
   docId: string
+  /** Fetch source for this tab. */
+  source: 'document' | 'kb'
+  /** Synced KB source path (only for `source: "kb"`). */
+  kbPath?: string
   /** Filename / label shown on the tab. */
   title: string
   mode: ViewerMode
   /** Passage to highlight inside the rendered document, if any. */
   quote?: string
+  /** Tracked-changes visual policy (DOCX only). */
+  trackedPolicy: TrackedPolicy
   /** Page hint (number) or `"41-42"` range string. */
   page?: number | string
   /** Source label for the citation header card. */
@@ -31,6 +40,8 @@ export interface ViewerTab {
 
 interface OpenOptions {
   docId: string
+  source?: 'document' | 'kb'
+  kbPath?: string
   title: string
   mode?: ViewerMode
   quote?: string
@@ -55,8 +66,11 @@ function createDocViewer() {
   function open_(opts: OpenOptions) {
     const existing = tabs.find((t) => t.docId === opts.docId)
     if (existing) {
+      existing.source = opts.source ?? existing.source
+      existing.kbPath = opts.kbPath
       existing.mode = opts.mode ?? existing.mode
       existing.quote = opts.quote
+      if (opts.mode !== 'tracked') existing.trackedPolicy = 'show'
       existing.page = opts.page
       existing.citationSource = opts.citationSource
       activeId = existing.id
@@ -68,9 +82,12 @@ function createDocViewer() {
             ? crypto.randomUUID()
             : `tab-${Date.now()}-${tabs.length}`,
         docId: opts.docId,
+        source: opts.source ?? 'document',
+        kbPath: opts.kbPath,
         title: opts.title,
         mode: opts.mode ?? 'plain',
         quote: opts.quote,
+        trackedPolicy: 'show',
         page: opts.page,
         citationSource: opts.citationSource,
       }
@@ -111,13 +128,17 @@ function createDocViewer() {
 
     /** Open (or re-target) a plain document view. */
     openDocument(docId: string, title: string) {
-      open_({ docId, title, mode: 'plain' })
+      open_({ docId, title, mode: 'plain', source: 'document' })
     },
 
     /** Open a citation: highlights the quoted passage on the cited page. */
     openCitation(c: Citation) {
+      const isKb = !!c.kbPath
+      const docId = isKb ? `kb:${c.kbPath}` : c.docId
       open_({
-        docId: c.docId,
+        docId,
+        source: isKb ? 'kb' : 'document',
+        ...(isKb ? { kbPath: c.kbPath } : {}),
         title: c.source || c.docId,
         mode: 'citation',
         quote: c.quote,
@@ -129,8 +150,23 @@ function createDocViewer() {
     select(id: string) {
       if (tabs.some((t) => t.id === id)) {
         activeId = id
-        open = true
       }
+    },
+
+    setMode(mode: ViewerMode) {
+      const tab = tabs.find((t) => t.id === activeId)
+      if (!tab) return
+      tab.mode = mode
+      if (mode !== 'tracked') tab.trackedPolicy = 'show'
+      revision++
+    },
+
+    setTrackedPolicy(policy: TrackedPolicy) {
+      const tab = tabs.find((t) => t.id === activeId)
+      if (!tab) return
+      tab.mode = 'tracked'
+      tab.trackedPolicy = policy
+      revision++
     },
 
     closeTab(id: string) {

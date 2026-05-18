@@ -1,927 +1,904 @@
-# MikeRust — Piano di sviluppo
+# MikeRust — Development Plan
 
-> **Ultimo aggiornamento:** maggio 2026 — documento consolidato (l'ex `PLAN.md`
-> e `PLAN_MISSING.md` sono stati fusi qui).
+> **Last updated:** May 2026 — consolidated document (the former `PLAN.md`
+> and `PLAN_MISSING.md` were merged here).
 >
-> **Scopo.** MikeRust è una riscrittura clean-room del progetto
-> [willchen96/mike](https://github.com/willchen96/mike) orientata all'uso
-> **locale e sovrano**: nessun cloud, nessun servizio esterno obbligatorio, un
-> singolo eseguibile desktop. Questo documento descrive cosa è MikeRust, come è
-> costruito, come si avvia, e tiene la **specifica funzionale** area per area con
-> il relativo stato di avanzamento.
+> **Purpose.** MikeRust is a clean-room rewrite of the
+> [willchen96/mike](https://github.com/willchen96/mike) project, geared toward
+> **local and sovereign** use: no cloud, no mandatory external service, a
+> single desktop executable. This document describes what MikeRust is, how it
+> is built, how it starts, and maintains the **functional specification** area
+> by area together with its progress status.
 >
-> **Come leggere le sezioni funzionali (9 in poi).** Ogni sezione descrive il
-> *comportamento* atteso — cosa vede l'utente, cosa succede a ogni interazione,
-> quali endpoint del backend vengono chiamati e con quale semantica. È una
-> specifica: chi implementa riproduce il comportamento scrivendo codice nuovo.
-> Il blocco **Stato attuale** di ciascuna sezione è la fotografia di *analisi
-> iniziale dei gap*; lo **stato reale e aggiornato** è nella tabella di sintesi
-> della sezione 9. I percorsi degli endpoint HTTP e i nomi degli eventi SSE sono
-> contratto di rete del backend Rust e vanno citati testualmente.
+> **How to read the functional sections (9 onward).** Each section describes
+> the expected *behaviour* — what the user sees, what happens on each
+> interaction, which backend endpoints get called and with what semantics. It
+> is a specification: whoever implements it reproduces the behaviour by writing
+> new code. The **Current state** block of each section is a snapshot of the
+> *initial gap analysis*; the **real, up-to-date status** is in the summary
+> table of section 9. The HTTP endpoint paths and SSE event names are the
+> network contract of the Rust backend and must be quoted verbatim.
 
 ---
 
-## 1. Cosa è MikeRust
+## 1. What MikeRust is
 
-Assistente AI per documenti, desktop-first, completamente locale. Un singolo
-eseguibile Tauri racchiude: backend axum, database SQLite, frontend Svelte. Le
-chiamate LLM vanno a provider configurati dall'utente (Claude, Gemini, OpenAI,
-Mistral, o un endpoint OpenAI-compatibile locale tipo Ollama/vLLM); tutto il
-resto — auth, storage, RAG, indici, corpora — vive sulla macchina dell'utente.
+A desktop-first, fully local AI assistant for documents. A single Tauri
+executable bundles: the axum backend, the SQLite database, the Svelte
+frontend. LLM calls go to providers configured by the user (Claude, Gemini,
+OpenAI, Mistral, or a local OpenAI-compatible endpoint such as Ollama/vLLM);
+everything else — auth, storage, RAG, indexes, corpora — lives on the user's
+machine.
 
-Casi d'uso principali: assistente con citazioni verificabili, revisione tabellare
-di documenti (estrazione strutturata), generazione di documenti `.docx` da
-template, gestione di progetti con basi di conoscenza isolate.
+Main use cases: assistant with verifiable citations, tabular document review
+(structured extraction), generation of `.docx` documents from templates,
+management of projects with isolated knowledge bases.
 
 ---
 
-## 2. Architettura
+## 2. Architecture
 
 ```text
-mike-tauri.exe  (unico eseguibile)
-├── Tauri webview       ← mostra il frontend Svelte (build statica in frontend/dist/)
-└── tokio thread        ← axum su 127.0.0.1:<porta dinamica> (solo loopback)
-        ├── SQLite   (mike.db — zero setup, migrazioni automatiche all'avvio)
-        ├── Auth     (PIN Argon2id + Windows Hello / Touch ID, sessioni opaque-token)
-        ├── Storage  (filesystem locale, percorso canonicalizzato)
-        ├── RAG      (embeddings ONNX via ort, indici locali)
-        ├── PDF/DOCX (pdfium-render per estrazione; docx writer per generazione)
-        ├── LLM      (Claude / Gemini / OpenAI / Mistral / OpenAI-compat locale)
-        └── MCP      (client JSON-RPC verso qualsiasi server HTTP/SSE MCP)
+mike-tauri.exe  (single executable)
+├── Tauri webview       ← shows the Svelte frontend (static build in frontend/dist/)
+└── tokio thread        ← axum on 127.0.0.1:<dynamic port> (loopback only)
+        ├── SQLite   (mike.db — zero setup, migrations applied automatically at startup)
+        ├── Auth     (Argon2id PIN + Windows Hello / Touch ID, opaque-token sessions)
+        ├── Storage  (local filesystem, canonicalized path)
+        ├── RAG      (ONNX embeddings via ort, local indexes)
+        ├── PDF/DOCX (pdfium-render for extraction; docx writer for generation)
+        ├── LLM      (Claude / Gemini / OpenAI / Mistral / local OpenAI-compat)
+        └── MCP      (JSON-RPC client to any HTTP/SSE MCP server)
 ```
 
-La porta del backend è **dinamica**: il backend fa il bind su `127.0.0.1:0`,
-il sistema sceglie una porta libera, il guscio Tauri la riceve e la inietta nel
-webview come `api_base_url`. In sviluppo standalone si può fissare via `PORT`.
+The backend port is **dynamic**: the backend binds to `127.0.0.1:0`, the
+system picks a free port, the Tauri shell receives it and injects it into the
+webview as `api_base_url`. In standalone development it can be fixed via
+`PORT`.
 
 ---
 
-## 3. Struttura del workspace
+## 3. Workspace structure
 
 ```text
 MikeRust/
-├── Cargo.toml          ← workspace (members: "." e "src-tauri"), edition 2024
-├── src/                ← crate `mike` (libreria + bin standalone)
-│   ├── lib.rs          ← run_server(port); espone l'app axum
-│   ├── main.rs         ← bin standalone (cargo run)
-│   ├── auth/           ← PIN Argon2id, biometrica, middleware, sessioni, rate-limit
-│   ├── db/             ← AppState, pool SQLite, runner migrazioni
+├── Cargo.toml          ← workspace (members: "." and "src-tauri"), edition 2024
+├── src/                ← crate `mike` (library + standalone bin)
+│   ├── lib.rs          ← run_server(port); exposes the axum app
+│   ├── main.rs         ← standalone bin (cargo run)
+│   ├── auth/           ← Argon2id PIN, biometrics, middleware, sessions, rate-limit
+│   ├── db/             ← AppState, SQLite pool, migration runner
 │   ├── routes/         ← auth, user, chat, projects, documents, workflows,
 │   │                     tabular_reviews, docx_templates, presets, models,
 │   │                     corpora, eurlex, italian_legal, sync, health
 │   ├── llm/            ← claude, gemini, local (OpenAI-compat), summarize, builtin_tools
-│   ├── mcp/            ← client MCP JSON-RPC (HTTP/SSE)
-│   ├── pdf/            ← estrazione PDF (pdfium-render) e DOCX (ZIP+XML)
-│   ├── docx/           ← generazione .docx (package/document_xml/styles_xml)
-│   ├── presets/        ← workflow, column, docx_template (caricati da config/)
-│   ├── corpora/        ← EUR-Lex, Legale Italiano, adapter manifest plugin
-│   ├── sync/           ← scanner cartelle locali → indice RAG
-│   ├── embeddings/     ← modello ONNX, sessioni
-│   ├── mikeprj/        ← export/import progetto cifrato (.mikeprj)
-│   └── storage/        ← filesystem locale
-├── src-tauri/          ← crate `mike-tauri` (guscio desktop; dipende da `mike`)
-│   ├── tauri.conf.json ← finestra, bundle, risorse
-│   └── src/lib.rs      ← avvia il thread axum + Tauri::Builder
-├── frontend/           ← frontend Svelte 5 + Vite 6 + Tailwind v4 (TS strict)
+│   ├── mcp/            ← MCP JSON-RPC client (HTTP/SSE)
+│   ├── pdf/            ← PDF extraction (pdfium-render) and DOCX (ZIP+XML)
+│   ├── docx/           ← .docx generation (package/document_xml/styles_xml)
+│   ├── presets/        ← workflow, column, docx_template (loaded from config/)
+│   ├── corpora/        ← EUR-Lex, Italian Legal, manifest plugin adapter
+│   ├── sync/           ← local folder scanner → RAG index
+│   ├── embeddings/     ← ONNX model, sessions
+│   ├── mikeprj/        ← encrypted project export/import (.mikeprj)
+│   └── storage/        ← local filesystem
+├── src-tauri/          ← crate `mike-tauri` (desktop shell; depends on `mike`)
+│   ├── tauri.conf.json ← window, bundle, resources
+│   └── src/lib.rs      ← starts the axum thread + Tauri::Builder
+├── frontend/           ← Svelte 5 + Vite 6 + Tailwind v4 frontend (TS strict)
 │   └── src/
 │       ├── routes/     ← Boot, Unlock, Setup, Shell, Assistant, Workflows,
 │       │                 Tabular, Projects, Templates, Settings, Playground
 │       ├── lib/components/ ← auth, chat, documents, docx, projects, settings,
 │       │                     tabular, workflow, layout, ui, domain
-│       ├── lib/stores/  ← runes-based ($state): chat, projects, tabular, ecc.
-│       ├── lib/api/     ← wrapper fetch tipati per gli endpoint del backend
-│       └── lib/i18n/    ← bundle 6 lingue (it/en/fr/de/es/pt)
-├── migrations/         ← 0001 … 0023 (SQL, applicate in ordine all'avvio)
-├── config/             ← preset versionati: workflow-presets/, column-presets/,
+│       ├── lib/stores/  ← runes-based ($state): chat, projects, tabular, etc.
+│       ├── lib/api/     ← typed fetch wrappers for the backend endpoints
+│       └── lib/i18n/    ← 6-language bundle (it/en/fr/de/es/pt)
+├── migrations/         ← 0001 … 0023 (SQL, applied in order at startup)
+├── config/             ← versioned presets: workflow-presets/, column-presets/,
 │                          docx-templates/, corpora-plugins/, model.json
 └── libs/pdfium/        ← pdfium.dll / .so / .dylib
 ```
 
 ---
 
-## 4. Avvio e build
+## 4. Startup and build
 
-### Sviluppo — Tauri (consigliato)
-
-```bash
-cargo tauri dev          # compila backend + guscio, avvia Vite, apre la finestra
-```
-
-### Sviluppo — backend e frontend separati
+### Development — Tauri (recommended)
 
 ```bash
-cargo run                # backend axum standalone (usa PORT se impostata)
-cd frontend && pnpm dev   # Vite su :5173 — il package manager è pnpm, non npm
+cargo tauri dev          # builds backend + shell, starts Vite, opens the window
 ```
 
-### Build desktop
+### Development — backend and frontend separately
+
+```bash
+cargo run                # standalone axum backend (uses PORT if set)
+cd frontend && pnpm dev   # Vite on :5173 — the package manager is pnpm, not npm
+```
+
+### Desktop build
 
 ```bash
 cd frontend && pnpm build   # svelte-check + vite build → frontend/dist/
-cargo tauri build           # compila mike-tauri.exe + installer
+cargo tauri build           # builds mike-tauri.exe + installer
 ```
 
-### Verifiche
+### Checks
 
 ```bash
-cd frontend && pnpm typecheck   # svelte-check (deve dare 0 errori)
-cd frontend && pnpm test        # vitest (unit test del frontend)
-cargo test --workspace          # test Rust (unit + doc + integration)
+cd frontend && pnpm typecheck   # svelte-check (must report 0 errors)
+cd frontend && pnpm test        # vitest (frontend unit tests)
+cargo test --workspace          # Rust tests (unit + doc + integration)
 ```
 
 ---
 
-## 5. Variabili d'ambiente
+## 5. Environment variables
 
 ### Backend
 
-| Variabile | Richiesta | Default | Note |
+| Variable | Required | Default | Notes |
 |---|---|---|---|
 | `DATABASE_URL` | No | `sqlite://mike.db` | |
-| `STORAGE_PATH` | No | `./data/storage` | canonicalizzato all'avvio |
-| `PORT` | No | `0` (dinamica) | fissare solo per dev standalone |
-| `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` / ecc. | Per LLM | — | normalmente le chiavi si salvano via `/user/llm-settings` |
-| `VLLM_BASE_URL` | Per LLM locale | — | endpoint OpenAI-compatibile |
-| `MRUST_FORCE_MCP_TOOLS` | No | — | forza l'abilitazione dei tool MCP anche su modelli locali |
+| `STORAGE_PATH` | No | `./data/storage` | canonicalized at startup |
+| `PORT` | No | `0` (dynamic) | fix only for standalone dev |
+| `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` / etc. | For LLM | — | normally keys are saved via `/user/llm-settings` |
+| `VLLM_BASE_URL` | For local LLM | — | OpenAI-compatible endpoint |
+| `MRUST_FORCE_MCP_TOOLS` | No | — | forces MCP tools to be enabled even on local models |
 
 ### Frontend
 
-In modalità Tauri l'URL del backend è iniettato dal guscio (`api_base_url`). In
-dev standalone il frontend punta al backend via la porta nota.
+In Tauri mode the backend URL is injected by the shell (`api_base_url`). In
+standalone dev the frontend points to the backend via the known port.
 
 ---
 
-## 6. Convenzioni di progetto (da rispettare sempre)
+## 6. Project conventions (always to be respected)
 
-- Ogni stringa visibile all'utente passa dal sistema i18n (6 lingue: it/en/fr/de/es/pt). Mai testo hard-coded.
-- Gli identificatori di schema (valori enum, chiavi JSON, parametri di rotta) restano in inglese snake_case; si localizzano solo le etichette visibili.
-- Le preferenze utente si salvano lato server tramite gli endpoint `/user/*`, non in `localStorage`.
-- Il disclaimer "l'AI può sbagliare / non è consulenza legale" è obbligatorio sotto il compositore della chat.
-- I commit vanno su `main` direttamente e non includono trailer `Co-Authored-By`.
+- Every user-visible string goes through the i18n system (6 languages: it/en/fr/de/es/pt). Never hard-coded text.
+- Schema identifiers (enum values, JSON keys, route parameters) stay in English snake_case; only visible labels are localized.
+- User preferences are saved server-side via the `/user/*` endpoints, not in `localStorage`.
+- The "AI can make mistakes / not legal advice" disclaimer is mandatory beneath the chat composer.
+- Commits go directly on `main` and do not include a `Co-Authored-By` trailer.
 
 ---
 
-## 7. Stato dei test
+## 7. Test status
 
-| Suite | Stato |
+| Suite | Status |
 |---|---|
-| `cargo test --workspace` | 358 passed, 0 failed, 14 ignored (3 perf + 11 ONNX che richiedono modelli) |
-| Doctests Rust | verdi |
-| `svelte-check` | 0 errori, 0 warning (~3500 file) |
-| `vite build` | verde |
-| `vitest` (frontend) | unit test presenti per le utility pure (`highlight`, `citations`, ecc.) |
+| `cargo test --workspace` | 358 passed, 0 failed, 14 ignored (3 perf + 11 ONNX that require models) |
+| Rust doctests | green |
+| `svelte-check` | 0 errors, 0 warnings (~3500 files) |
+| `vite build` | green |
+| `vitest` (frontend) | unit tests present for pure utilities (`highlight`, `citations`, etc.) |
 
 ---
 
-## 8. Differenze rispetto a Mike originale
+## 8. Differences from the original Mike
 
-| Aspetto | Mike (originale) | MikeRust |
+| Aspect | Mike (original) | MikeRust |
 |---|---|---|
 | Backend | Express + TypeScript | **Rust axum** |
-| Auth | Supabase Auth | **PIN Argon2id + Windows Hello / Touch ID** |
+| Auth | Supabase Auth | **Argon2id PIN + Windows Hello / Touch ID** |
 | Database | Supabase Postgres | **SQLite (zero setup)** |
-| Storage | Cloudflare R2 | **Filesystem locale** |
+| Storage | Cloudflare R2 | **Local filesystem** |
 | Frontend | Next.js | **Svelte 5 + Vite** |
-| Deploy | Web (OpenNext) | **Desktop Tauri (exe singolo)** |
-| LLM | Claude + Gemini | Claude + Gemini + **OpenAI + Mistral + locale** |
-| MCP | No | **Sì** |
-| Dipendenze cloud | Supabase, R2, OpenNext | **Nessuna** |
+| Deploy | Web (OpenNext) | **Tauri desktop (single exe)** |
+| LLM | Claude + Gemini | Claude + Gemini + **OpenAI + Mistral + local** |
+| MCP | No | **Yes** |
+| Cloud dependencies | Supabase, R2, OpenNext | **None** |
 
 ---
 
-## 9. Stato funzionalità (sintesi aggiornata)
+## 9. Feature status (updated summary)
 
-Stato reale a maggio 2026. Build, typecheck e suite di test sono verdi; dove
-indicato "Implementato" i componenti esistono e compilano, ma una QA funzionale
-completa non è stata rieseguita in questa revisione.
+Real status as of May 2026. Build, typecheck and the test suite are green;
+where marked "Implemented" the components exist and compile, but a complete
+functional QA pass has not been re-run in this revision.
 
-| Area | Stato | Note |
+| Area | Status | Notes |
 |---|---|---|
-| 1. Assistente — citazioni interattive | ✅ Implementato | pillole, tooltip, click → visualizzatore |
-| 2. Assistente — eventi tool/documento | ✅ Implementato | coperti tutti gli eventi SSE emessi dal backend (`citations`, `content_delta`, `tool_call_*`, `doc_created`, `error`); gli eventi `reasoning_*`/`doc_read`/`doc_find`/`doc_edited`/`doc_replicate`/`workflow_applied` restano specifica futura, non ancora emessi dal backend |
-| 3. Assistente — modello, titolo auto, modifiche tracciate | 🟡 Parziale | selettore modello e generazione titolo presenti; card di modifica tracciata (accetta/rifiuta) ancora da completare |
-| 4. Visualizzatore documenti multi-formato | ✅ Implementato | PDF / DOCX / XLSX / testo, pannello a schede |
-| 5. Workflow — editor, modifica, eliminazione | ✅ Implementato | editor a pagina intera |
-| 6. Tabular review — griglia, esecuzione, celle, chat | ✅ Implementato | `TabularDetail` |
-| 7. Progetti — dettaglio, documenti, cartelle, versioni | ✅ Implementato | `ProjectDetail` |
-| 8. Template DOCX — dettaglio, generazione, **editor** | ✅ Implementato | dettaglio/describe/render/applica-a-chat + editor a pagina intera (tutti i campi) con persistenza su `config/docx-templates/user/` |
-| 9. Documenti — caricamento, stato indicizzazione | ✅ Implementato | |
-| 10. Impostazioni — Fonti dati (sync, EUR-Lex, corpora) | ✅ Implementato | `SyncSection`/`EurlexSection`/`CorpusSection` |
-| 11. Banner stato embedding | ✅ Implementato | `EmbeddingBanner` |
-| 12. Approvazione tool MCP in chat | 🟠 Area aperta | dialogo asincrono ancora non del tutto risolto |
-| 13. Regressione i18n nelle Impostazioni | ✅ Risolto | stringhe estratte in chiavi i18n |
+| 1. Assistant — interactive citations | ✅ Implemented | pills, tooltip, click → viewer |
+| 2. Assistant — tool/document events | ✅ Implemented | all SSE events emitted by the backend are covered (`citations`, `content_delta`, `tool_call_*`, `doc_created`, `error`); the `reasoning_*`/`doc_read`/`doc_find`/`doc_edited`/`doc_replicate`/`workflow_applied` events remain a future spec, not yet emitted by the backend |
+| 3. Assistant — model, auto title, tracked changes | 🟡 Partial | model selector and title generation present; tracked-change card (accept/reject) still to be completed |
+| 4. Multi-format document viewer | ✅ Implemented | PDF / DOCX / XLSX / text, tabbed panel |
+| 5. Workflows — editor, edit, delete | ✅ Implemented | full-page editor |
+| 6. Tabular review — grid, run, cells, chat | ✅ Implemented | `TabularDetail` |
+| 7. Projects — detail, documents, folders, versions | ✅ Implemented | `ProjectDetail` |
+| 8. DOCX templates — detail, generation, **editor** | ✅ Implemented | detail/describe/render/apply-to-chat + full-page editor (all fields) with persistence to `config/docx-templates/user/` |
+| 9. Documents — upload, indexing status | ✅ Implemented | |
+| 10. Settings — Data sources (sync, EUR-Lex, corpora) | ✅ Implemented | `SyncSection`/`EurlexSection`/`CorpusSection` |
+| 11. Embedding status banner | ✅ Implemented | `EmbeddingBanner` |
+| 12. MCP tool approval in chat | 🟠 Open area | asynchronous dialog still not fully resolved |
+| 13. i18n regression in Settings | ✅ Resolved | strings extracted into i18n keys |
 
-> Le sezioni che seguono mantengono la specifica funzionale dettagliata. Il
-> blocco **Stato attuale** di ciascuna riflette l'analisi iniziale dei gap;
-> la tabella qui sopra è la fonte di verità sullo stato corrente.
-
----
-
-## 1. Assistente — Citazioni interattive
-
-### Stato attuale
-Il flusso SSE della chat riceve già un evento di tipo `citations`, ma il client
-non registra alcun gestore per esso: l'evento viene scartato silenziosamente.
-I messaggi dell'assistente vengono resi come Markdown senza alcun trattamento
-dei marcatori di citazione. Risultato: il blocco grezzo delle citazioni può
-comparire come testo nella risposta.
-
-### Comportamento atteso
-
-**Marcatori nel testo.** Il modello inserisce nel testo della risposta dei
-marcatori di citazione tra parentesi quadre:
-- `[1]`, `[2]`, … → citazione di un documento allegato alla conversazione;
-- `[g1]`, `[g2]`, … → frammento proveniente dalla base di conoscenza globale;
-- `[p1]`, `[p2]`, … → frammento proveniente dalla base di conoscenza di progetto;
-- gruppi separati da virgola sono ammessi: `[1, 2]`, `[g1, p3]`.
-
-Vanno **ignorati** i numeri che non sono citazioni (es. importi, anni a 4 cifre):
-riconoscere come citazione solo i token che corrispondono esattamente al pattern
-sopra e che hanno una citazione risolvibile nell'elenco ricevuto.
-
-**Blocco macchina.** Alla fine della risposta il modello accoda un blocco
-delimitato `<CITATIONS> … </CITATIONS>` (contenuto strutturato leggibile dalla
-macchina). Questo blocco **non deve mai essere mostrato**: va rimosso dal testo
-prima di renderizzarlo come Markdown. La rimozione deve funzionare anche se la
-risposta arriva troncata durante lo streaming (il blocco può essere parziale).
-
-**Evento `citations`.** L'elenco delle citazioni arriva come evento SSE finale.
-Ogni voce contiene almeno: un riferimento (l'indice del marcatore, es. `1`,
-`g2`), l'identificatore del documento o del frammento, l'etichetta della fonte,
-un'eventuale pagina (numero singolo oppure intervallo testuale come `"41-42"`
-per citazioni a cavallo di un'interruzione di pagina), e il testo citato.
-Il gestore deve memorizzare questo elenco sull'ultimo messaggio dell'assistente.
-
-**Resa visiva.** Ogni marcatore risolvibile diventa un piccolo "pillola"
-numerata in apice, cliccabile, con colore diverso secondo l'origine:
-- grigio → citazione di documento allegato;
-- verde → base di conoscenza globale;
-- blu → base di conoscenza di progetto.
-
-Al passaggio del mouse mostra un tooltip con pagina/fonte e il testo citato.
-
-**Click.** Cliccando una pillola si apre il visualizzatore di documenti
-(sezione 4) sul documento citato, con il passaggio citato evidenziato e portato
-in vista. Se la citazione indica un intervallo di pagine, il testo citato può
-contenere un separatore di interruzione di pagina: va diviso in due porzioni
-evidenziate, una per pagina.
-
-### Da fare
-1. Aggiungere un tipo `Citazione` ai tipi della chat e un campo elenco-citazioni opzionale sul tipo del messaggio.
-2. Registrare il gestore dell'evento SSE `citations` nel flusso di invio della chat e salvarlo sull'ultimo messaggio assistente.
-3. Funzione di pulizia che rimuove `<CITATIONS>…` (anche parziale) prima del rendering Markdown.
-4. Componente "pillola di citazione" con i tre colori, tooltip, e callback di click.
-5. Sostituzione dei marcatori nel testo renderizzato con le pillole interattive.
+> The sections that follow keep the detailed functional specification. The
+> **Current state** block of each reflects the initial gap analysis; the table
+> above is the source of truth for the current status.
 
 ---
 
-## 2. Assistente — Eventi di tool, lettura e creazione documenti
+## 1. Assistant — Interactive citations
 
-### Stato attuale
-Il flusso SSE definisce i callback per `tool_call_start` e `doc_created` ma il
-client non li collega: vengono scartati. Nessun indicatore di avanzamento, né
-card per i documenti generati.
+### Current state
+The chat SSE stream already receives a `citations` event, but the client
+registers no handler for it: the event is silently discarded. Assistant
+messages are rendered as Markdown with no handling of citation markers.
+Result: the raw citation block can appear as text in the response.
 
-### Comportamento atteso
+### Expected behaviour
 
-Il messaggio dell'assistente non è solo testo: è una **sequenza ordinata di
-eventi tipati** che arriva dallo stream SSE. Oltre al testo (`content_delta` /
-`content_done`) vanno gestiti:
+**Markers in the text.** The model inserts citation markers in square brackets
+in the response text:
+- `[1]`, `[2]`, … → citation of a document attached to the conversation;
+- `[g1]`, `[g2]`, … → fragment from the global knowledge base;
+- `[p1]`, `[p2]`, … → fragment from the project knowledge base;
+- comma-separated groups are allowed: `[1, 2]`, `[g1, p3]`.
 
-- **`reasoning_delta` / `reasoning_block_end`** — il "ragionamento" del modello.
-  Va reso come blocco comprimibile "processo di pensiero": durante lo streaming
-  mostra un indicatore animato con etichetta che ruota ("Sto pensando…",
-  "Sto ragionando…", …); a fine blocco resta compresso, espandibile su richiesta.
-- **`tool_call_start`** — è iniziata l'invocazione di uno strumento. Mostra una
-  riga "Eseguo {strumento}…" con spinner.
-- **`tool_call_progress`** — tick periodico (~ogni 5 s) che aggiorna il contatore
-  dei secondi trascorsi sulla riga dello strumento in corso. Dopo ~10 s mostra
-  un suggerimento "sta impiegando più del previsto" (utile quando uno strumento
-  esterno è in attesa di un'approvazione manuale).
-- **`doc_read_start` / `doc_read`** — l'assistente sta leggendo un documento:
-  "Leggo {file}…" poi "Letto {file}" (con pallino verde). Il nome file di
-  "Letto" è cliccabile e apre il documento nel pannello laterale se per esso
-  esiste una citazione.
-- **`doc_find_start` / `doc_find`** — ricerca testuale dentro un documento:
-  "Cerco '{query}'…" poi "Trovato '{query}' (N occorrenze) in {file}".
-- **`doc_created_start` / `doc_created` / `doc_download`** — l'assistente ha
-  generato un documento; termina con una card scaricabile/apribile.
-- **`doc_edited_start` / `doc_edited`** — l'assistente ha modificato un DOCX
-  producendo modifiche tracciate; termina con card di modifica + card di download.
-- **`doc_replicate_start` / `doc_replicated`** — un documento è stato clonato N volte.
-- **`workflow_applied`** — è stato applicato un workflow; "Applicato workflow
-  {titolo}", cliccabile per aprire il workflow.
-- **`error`** — mostra un blocco di errore rosso nel messaggio.
+Numbers that are **not** citations (e.g. amounts, 4-digit years) must be
+ignored: recognize as a citation only tokens that exactly match the pattern
+above and that have a resolvable citation in the received list.
 
-**Raggruppamento.** Gli eventi non-testuali consecutivi vanno raggruppati in un
-unico contenitore "passaggi" comprimibile, che si minimizza quando segue del
-testo. Tra un evento reale e l'altro va mostrato un segnaposto transitorio
-("Sto pensando…") affinché l'indicatore di attività non sembri mai bloccato.
-Sopra ogni messaggio dell'assistente sta un'icona di stato (in corso / inattivo
-/ completato / errore).
+**Machine block.** At the end of the response the model appends a delimited
+`<CITATIONS> … </CITATIONS>` block (structured machine-readable content). This
+block **must never be shown**: it must be removed from the text before
+rendering it as Markdown. The removal must also work if the response arrives
+truncated during streaming (the block may be partial).
 
-**Card documento.** I documenti generati o modificati si rendono come card di
-download: nome file, etichetta tipo file, eventuale badge di versione, pulsante
-di download. Se il documento è persistito come documento di prima classe,
-cliccando la card si apre nel pannello laterale. Il download deve avvenire con
-il token di autorizzazione e accettare **solo** URL relativi al backend (gli URL
-esterni vanno rifiutati per non esporre il token).
+**`citations` event.** The list of citations arrives as a final SSE event.
+Each entry contains at least: a reference (the marker index, e.g. `1`, `g2`),
+the document or fragment identifier, the source label, an optional page
+(single number or a textual range such as `"41-42"` for citations straddling a
+page break), and the cited text. The handler must store this list on the last
+assistant message.
 
-**Annullamento.** Interrompere lo stream a metà aggiunge una nota "annullato
-dall'utente". Ogni messaggio assistente ha un pulsante "copia" che copia sia
-HTML ricco sia testo semplice negli appunti.
+**Visual rendering.** Each resolvable marker becomes a small numbered
+superscript "pill", clickable, colored differently by origin:
+- gray → citation of an attached document;
+- green → global knowledge base;
+- blue → project knowledge base.
 
-### Da fare
-1. Estendere il tipo del messaggio assistente a una lista ordinata di "blocchi" tipati.
-2. Collegare tutti i callback SSE elencati nello stato del flusso chat.
-3. Componenti: blocco-ragionamento comprimibile, riga-evento (tool / lettura / ricerca), card-documento, contenitore "passaggi" comprimibile, icona di stato.
-4. Logica di raggruppamento e di segnaposto transitorio.
+On hover it shows a tooltip with page/source and the cited text.
+
+**Click.** Clicking a pill opens the document viewer (section 4) on the cited
+document, with the cited passage highlighted and scrolled into view. If the
+citation indicates a page range, the cited text may contain a page-break
+separator: it must be split into two highlighted portions, one per page.
+
+### To do
+1. Add a `Citation` type to the chat types and an optional citation-list field on the message type.
+2. Register the `citations` SSE event handler in the chat send flow and save it on the last assistant message.
+3. Cleanup function that removes `<CITATIONS>…` (even partial) before Markdown rendering.
+4. "Citation pill" component with the three colors, tooltip, and click callback.
+5. Replace the markers in the rendered text with the interactive pills.
 
 ---
 
-## 3. Assistente — Selettore modello, titolo automatico, modifiche tracciate
+## 2. Assistant — Tool, document-read and document-creation events
 
-### Stato attuale
-- Il payload di invio chat accetta un campo `model` opzionale, ma il client non
-  lo valorizza mai: nessun selettore di modello per-conversazione.
-- Esiste la chiamata di rinomina chat ma non viene mai invocata: nessuna
-  generazione automatica del titolo.
-- Nessuna gestione delle modifiche tracciate (accetta/rifiuta).
+### Current state
+The SSE stream defines callbacks for `tool_call_start` and `doc_created` but
+the client does not wire them up: they are discarded. No progress indicator,
+nor card for generated documents.
 
-### Comportamento atteso
+### Expected behaviour
 
-**Selettore di modello nel compositore.** Un menu a tendina che raggruppa i
-modelli per provider. Devono comparire **solo** i modelli dei provider che
-l'utente ha configurato (chiave API salvata, oppure URL base impostato per il
-provider locale). I modelli senza chiave utilizzabile mostrano un'icona di
-allerta rossa e non sono selezionabili per l'invio. Se l'utente prova a inviare
-con un modello non disponibile, si apre una finestra "chiave API mancante".
-Il modello scelto si **persiste come preferenza utente** lato server. Il modello
-scelto viene incluso nel payload di invio della chat.
+The assistant message is not just text: it is an **ordered sequence of typed
+events** arriving from the SSE stream. Beyond the text (`content_delta` /
+`content_done`), the following must be handled:
 
-**Titolo automatico.** Dopo che il **primo** messaggio di una chat nuova è
-completato, il client chiama `POST /chat/{id}/generate-title` passando una
-sintesi del messaggio (incluso il nome di eventuali workflow/template/file
-allegati) e rinomina la chat con il titolo restituito. Le chat restano
-rinominabili manualmente (`PATCH /chat/{id}`) ed eliminabili (`DELETE /chat/{id}`).
+- **`reasoning_delta` / `reasoning_block_end`** — the model's "reasoning". It
+  must be rendered as a collapsible "thought process" block; during streaming
+  it shows an animated indicator with a rotating label ("Thinking…",
+  "Reasoning…", …); at the end of the block it stays collapsed, expandable on
+  demand.
+- **`tool_call_start`** — a tool invocation has begun. Shows a row "Running
+  {tool}…" with a spinner.
+- **`tool_call_progress`** — periodic tick (~every 5 s) that updates the
+  elapsed-seconds counter on the in-progress tool row. After ~10 s it shows a
+  hint "this is taking longer than expected" (useful when an external tool is
+  waiting for a manual approval).
+- **`doc_read_start` / `doc_read`** — the assistant is reading a document:
+  "Reading {file}…" then "Read {file}" (with a green dot). The "Read" file name
+  is clickable and opens the document in the side panel if a citation exists
+  for it.
+- **`doc_find_start` / `doc_find`** — text search inside a document:
+  "Searching '{query}'…" then "Found '{query}' (N occurrences) in {file}".
+- **`doc_created_start` / `doc_created` / `doc_download`** — the assistant
+  generated a document; ends with a downloadable/openable card.
+- **`doc_edited_start` / `doc_edited`** — the assistant edited a DOCX producing
+  tracked changes; ends with an edit card + download card.
+- **`doc_replicate_start` / `doc_replicated`** — a document was cloned N times.
+- **`workflow_applied`** — a workflow was applied; "Applied workflow {title}",
+  clickable to open the workflow.
+- **`error`** — shows a red error block in the message.
 
-**Modifiche tracciate (accetta/rifiuta).** Quando l'assistente modifica un DOCX,
-ogni modifica diventa una **card di modifica** sotto la risposta. Una sola
-modifica → una card singola; più modifiche → una sezione che le raggruppa con
-una sintesi ("N modifiche tracciate su M documenti"), pulsanti **Accetta tutte**
-/ **Rifiuta tutte** (sequenziali, con contatore di avanzamento) e un elenco
-comprimibile di card per-modifica. Ogni card ha un pulsante **Vedi** (apre la
-modifica nel pannello laterale) e i pulsanti Accetta/Rifiuta.
+**Grouping.** Consecutive non-text events must be grouped in a single
+collapsible "steps" container, which minimizes when text follows. Between one
+real event and the next, a transient placeholder ("Thinking…") must be shown so
+the activity indicator never seems stuck. Above each assistant message there is
+a status icon (in progress / idle / completed / error).
 
-Accetta/Rifiuta chiama `POST /single-documents/{docId}/edits/{editId}/accept`
-oppure `.../reject`. La UI applica subito la modifica al documento renderizzato
-(mostra/nasconde la modifica) per feedback immediato, e fa rollback se la
-chiamata fallisce. La risoluzione produce una nuova versione del documento:
-l'URL della card di download e il badge di versione si aggiornano. Risolvere una
-modifica da una qualsiasi superficie (card, barra di bulk, pulsanti nel pannello
-laterale) deve sincronizzare lo stato su tutte le superfici.
+**Document card.** Generated or edited documents are rendered as download
+cards: file name, file-type label, optional version badge, download button. If
+the document is persisted as a first-class document, clicking the card opens it
+in the side panel. The download must happen with the authorization token and
+accept **only** URLs relative to the backend (external URLs must be rejected so
+the token is not exposed).
 
-### Da fare
-1. Selettore modello nel compositore, alimentato dal catalogo modelli e dai provider configurati; persistenza preferenza.
-2. Logica di generazione titolo dopo il primo messaggio.
-3. Componenti card-modifica singola e sezione modifiche multiple con bulk accetta/rifiuta.
-4. Aggiornamento ottimistico del documento renderizzato e sincronizzazione cross-superficie.
+**Cancellation.** Interrupting the stream mid-way adds a "cancelled by user"
+note. Every assistant message has a "copy" button that copies both rich HTML
+and plain text to the clipboard.
 
----
-
-## 4. Visualizzatore documenti multi-formato (pannello laterale)
-
-### Stato attuale
-Assente del tutto. La cartella dei componenti documento è vuota. È una delle
-funzionalità più grandi mancanti.
-
-### Comportamento atteso
-
-> **Nota di licenza.** Questa funzionalità è una personalizzazione propria di
-> MikeRust. Va realizzata con sole librerie JS di rendering (es. `pdf.js`),
-> **senza plugin** di sistema.
-
-**Struttura.** Un pannello ridimensionabile che scorre dal lato destro
-(maniglia di trascinamento per il ridimensionamento; "x" per chiudere la singola
-scheda e un comando "chiudi tutto"). Ospita **schede in stile browser**, una per
-documento aperto; ogni scheda conserva la propria posizione di scorrimento e lo
-stato del visualizzatore. Le schede si aprono cliccando: una pillola di
-citazione, il "Vedi" di una card di modifica, una card di download, o un evento
-"Letto {file}".
-
-**Intestazione della scheda** (varia secondo l'origine dell'apertura):
-- *Modalità citazione*: una card "Citazione" col testo citato e l'etichetta di
-  pagina, più un pulsante Scarica.
-- *Modalità modifica tracciata*: una card "Modifica tracciata" col diff (testo
-  inserito in verde, testo eliminato barrato in rosso), eventuale riga di
-  motivazione, pulsanti Accetta/Rifiuta, e Scarica.
-- *Modalità documento semplice*: solo nome file, badge di versione, Scarica.
-
-**Corpo — selezione del renderer per tipo file:**
-
-- **PDF.** Reso pagina per pagina su canvas, con un **layer di testo
-  selezionabile** sovrapposto. In basso a sinistra un contatore pagina
-  (`corrente/totale`); in basso a destra controlli di zoom (pulsanti + valore
-  percentuale). Devono funzionare lo zoom con pinch del trackpad e con
-  ctrl+rotella. La frase citata va cercata nel layer di testo ed evidenziata;
-  se non si trova nella pagina suggerita, vanno scandite tutte le pagine. La
-  prima evidenziazione va portata al centro verticale della vista.
-
-- **DOCX / DOC.** Reso in-browser. Le modifiche tracciate (inserimenti /
-  eliminazioni) si mostrano con stile colorato (barrato / sottolineato). Le
-  pagine si scalano automaticamente alla larghezza del pannello. La frase citata
-  va cercata nel testo ed evidenziata; un'eventuale modifica tracciata target va
-  portata in vista e fatta lampeggiare brevemente. Per errori non bloccanti va
-  mostrato un banner di avviso chiudibile in alto a sinistra.
-
-- **Markdown / TXT / RTF.** Resi come testo formattato leggibile, con testo
-  selezionabile; la frase citata evidenziata e portata in vista.
-
-- **XLSX / fogli di calcolo.** Resi come tabella/griglia navigabile, testo
-  selezionabile.
-
-**Recupero dei byte.** Per i documenti di prima classe si richiede una
-rappresentazione visualizzabile tramite `GET /single-documents/{id}/display`
-(restituisce byte PDF se esiste una resa PDF, altrimenti byte DOCX → renderer
-DOCX). Per le citazioni della base di conoscenza il recupero avviene tramite
-`GET /sync/kb-doc?path=…`.
-
-**Selezione e copia.** In tutti i formati il testo reso deve essere
-selezionabile e copiabile, così l'utente può incollarlo nella chat
-dell'assistente.
-
-**Comportamento di apertura sincrociata.** Aprire lo stesso documento da una
-sorgente diversa (citazione, card, evento "Letto") deve riusare la scheda
-esistente se già aperta, aggiornandone soltanto l'evidenziazione/posizione.
-
-### Da fare
-1. Pannello laterale ridimensionabile con gestore di schede multiple e stato per-scheda.
-2. Renderer PDF basato su `pdf.js` con layer di testo, zoom, contatore pagina, evidenziazione e ricerca testo.
-3. Renderer DOCX in-browser con resa modifiche tracciate ed evidenziazione.
-4. Renderer per Markdown/TXT/RTF e per fogli di calcolo (XLSX).
-5. Card di intestazione per le tre modalità (citazione / modifica / documento semplice).
-6. Logica di evidenziazione del passaggio citato, incluso il caso intervallo-pagine.
-7. Download autenticato con accettazione dei soli URL relativi al backend.
+### To do
+1. Extend the assistant message type to an ordered list of typed "blocks".
+2. Wire up all the SSE callbacks listed in the chat stream state.
+3. Components: collapsible reasoning block, event row (tool / read / search), document card, collapsible "steps" container, status icon.
+4. Grouping logic and transient placeholder.
 
 ---
 
-## 5. Workflow — Modifica, eliminazione, editor a pagina intera
+## 3. Assistant — Model selector, automatic title, tracked changes
 
-### Stato attuale
-Funzionano: lista (DB + preset), filtri a schede (Tutti / Integrati / Personali
-/ Nascosti), filtro per dominio, nascondi/mostra preset, modale di **creazione**
-(tipo assistente con editor di prompt Markdown, tipo tabellare con editor di
-colonne). Mancano: **modifica**, **eliminazione** dall'interfaccia, l'editor a
-pagina intera, la vista di dettaglio, la condivisione.
+### Current state
+- The chat send payload accepts an optional `model` field, but the client
+  never sets it: no per-conversation model selector.
+- The chat-rename call exists but is never invoked: no automatic title
+  generation.
+- No handling of tracked changes (accept/reject).
 
-### Comportamento atteso
+### Expected behaviour
 
-**Editor a pagina intera** (`/workflows/{id}` concettualmente). Intestazione con
-percorso a briciole e titolo rinominabile in linea. Un indicatore di stato di
-salvataggio ("Salvataggio…" / "Salvato"). I workflow integrati / non
-modificabili mostrano un badge "Sola lettura".
+**Model selector in the composer.** A dropdown that groups models by provider.
+**Only** the models of providers the user has configured (API key saved, or
+base URL set for the local provider) must appear. Models without a usable key
+show a red alert icon and are not selectable for sending. If the user tries to
+send with an unavailable model, a "missing API key" window opens. The chosen
+model is **persisted as a user preference** server-side. The chosen model is
+included in the chat send payload.
 
-- **Workflow di tipo assistente.** Un editor di testo ricco WYSIWYG che produce
-  Markdown — barra con H1/H2/H3, grassetto, corsivo, elenchi puntati e numerati.
-  Le modifiche si **salvano automaticamente** con debounce ~800 ms
-  (`PATCH /workflow/{id}` aggiornando il prompt).
-- **Workflow di tipo tabellare.** Una tabella di colonne. Ogni riga è una colonna
-  con Titolo, Formato (testo libero, elenco puntato, numero, percentuale,
-  importo monetario, valuta, sì/no, data, tag — ognuno con un'icona), e Prompt
-  di estrazione. Un pulsante "Aggiungi colonna" apre la modale di colonna;
-  cliccando una riga si modifica la colonna; checkbox + menu azioni per
-  l'eliminazione multipla; "x" per eliminare una singola colonna. Le modifiche
-  alle colonne si salvano subito. I workflow tabellari integrati sono in sola
-  lettura (cliccando una riga si apre la modale di colonna in sola lettura).
+**Automatic title.** After the **first** message of a new chat completes, the
+client calls `POST /chat/{id}/generate-title` passing a summary of the message
+(including the name of any attached workflows/templates/files) and renames the
+chat with the returned title. Chats remain manually renamable
+(`PATCH /chat/{id}`) and deletable (`DELETE /chat/{id}`).
 
-**Eliminazione.** I workflow personali si possono eliminare
-(`DELETE /workflow/{id}`); l'eliminazione multipla elimina i personali e
-nasconde gli integrati. Va esposto un comando di eliminazione sulle righe della
-lista (oggi manca, esiste solo nascondi/mostra).
+**Tracked changes (accept/reject).** When the assistant edits a DOCX, each
+change becomes an **edit card** below the response. A single change → a single
+card; multiple changes → a section grouping them with a summary ("N tracked
+changes across M documents"), **Accept all** / **Reject all** buttons
+(sequential, with a progress counter) and a collapsible list of per-change
+cards. Each card has a **View** button (opens the change in the side panel) and
+Accept/Reject buttons.
 
-**Vista di dettaglio.** Cliccando una riga della lista si apre una modale di
-visualizzazione del workflow (solo lettura per gli integrati).
+Accept/Reject calls `POST /single-documents/{docId}/edits/{editId}/accept` or
+`.../reject`. The UI applies the change to the rendered document immediately
+(shows/hides the change) for instant feedback, and rolls back if the call
+fails. Resolution produces a new document version: the download-card URL and
+the version badge update. Resolving a change from any surface (card, bulk bar,
+buttons in the side panel) must sync the state across all surfaces.
 
-**Condivisione** (solo workflow personali). Una modale che consente al
-proprietario di aggiungere email destinatarie (con flag "consenti modifica") e
-di elencare/revocare le condivisioni esistenti
+### To do
+1. Model selector in the composer, fed by the model catalog and configured providers; preference persistence.
+2. Title generation logic after the first message.
+3. Single edit-card and multi-change section components with bulk accept/reject.
+4. Optimistic update of the rendered document and cross-surface sync.
+
+---
+
+## 4. Multi-format document viewer (side panel)
+
+### Current state
+Entirely absent. The document components folder is empty. It is one of the
+largest missing features.
+
+### Expected behaviour
+
+> **License note.** This feature is a customization specific to MikeRust. It
+> must be built with JS rendering libraries only (e.g. `pdf.js`), **without**
+> system plugins.
+
+**Structure.** A resizable panel that slides in from the right side
+(drag handle for resizing; "x" to close a single tab and a "close all"
+command). It hosts **browser-style tabs**, one per open document; each tab
+keeps its own scroll position and viewer state. Tabs open by clicking: a
+citation pill, the "View" of an edit card, a download card, or a "Read {file}"
+event.
+
+**Tab header** (varies by what triggered the open):
+- *Citation mode*: a "Citation" card with the cited text and the page label,
+  plus a Download button.
+- *Tracked-change mode*: a "Tracked change" card with the diff (inserted text
+  in green, deleted text struck through in red), an optional rationale line,
+  Accept/Reject buttons, and Download.
+- *Plain document mode*: only file name, version badge, Download.
+
+**Body — renderer selection by file type:**
+
+- **PDF.** Rendered page by page on a canvas, with an overlaid **selectable
+  text layer**. Bottom-left a page counter (`current/total`); bottom-right zoom
+  controls (+ buttons and a percentage value). Trackpad pinch zoom and
+  ctrl+wheel zoom must work. The cited sentence must be searched in the text
+  layer and highlighted; if not found on the suggested page, all pages must be
+  scanned. The first highlight must be brought to the vertical center of the
+  view.
+
+- **DOCX / DOC.** Rendered in-browser. Tracked changes (insertions /
+  deletions) are shown with colored style (struck through / underlined). Pages
+  auto-scale to the panel width. The cited sentence must be searched in the
+  text and highlighted; a target tracked change must be brought into view and
+  briefly flashed. For non-blocking errors a dismissible warning banner must be
+  shown at top-left.
+
+- **Markdown / TXT / RTF.** Rendered as readable formatted text, with
+  selectable text; the cited sentence highlighted and scrolled into view.
+
+- **XLSX / spreadsheets.** Rendered as a navigable table/grid, selectable text.
+
+**Byte retrieval.** For first-class documents a viewable representation is
+requested via `GET /single-documents/{id}/display` (returns PDF bytes if a PDF
+rendering exists, otherwise DOCX bytes → DOCX renderer). For knowledge-base
+citations retrieval is via `GET /sync/kb-doc?path=…`.
+
+**Selection and copy.** In all formats the rendered text must be selectable and
+copyable, so the user can paste it into the assistant chat.
+
+**Cross-source open behaviour.** Opening the same document from a different
+source (citation, card, "Read" event) must reuse the existing tab if already
+open, only updating its highlight/position.
+
+### To do
+1. Resizable side panel with a multi-tab manager and per-tab state.
+2. `pdf.js`-based PDF renderer with text layer, zoom, page counter, highlight and text search.
+3. In-browser DOCX renderer with tracked-change rendering and highlighting.
+4. Renderer for Markdown/TXT/RTF and for spreadsheets (XLSX).
+5. Header cards for the three modes (citation / change / plain document).
+6. Cited-passage highlight logic, including the page-range case.
+7. Authenticated download accepting only backend-relative URLs.
+
+---
+
+## 5. Workflows — Edit, delete, full-page editor
+
+### Current state
+Working: list (DB + presets), tabbed filters (All / Built-in / Personal /
+Hidden), domain filter, hide/show presets, **creation** modal (assistant type
+with a Markdown prompt editor, tabular type with a column editor). Missing:
+**edit**, **delete** from the interface, the full-page editor, the detail view,
+sharing.
+
+### Expected behaviour
+
+**Full-page editor** (`/workflows/{id}` conceptually). Header with a breadcrumb
+path and an inline-renamable title. A save-state indicator ("Saving…" /
+"Saved"). Built-in / non-editable workflows show a "Read-only" badge.
+
+- **Assistant-type workflow.** A WYSIWYG rich-text editor that produces
+  Markdown — toolbar with H1/H2/H3, bold, italic, bullet and numbered lists.
+  Changes **autosave** with a ~800 ms debounce (`PATCH /workflow/{id}`
+  updating the prompt).
+- **Tabular-type workflow.** A table of columns. Each row is a column with
+  Title, Format (free text, bullet list, number, percentage, monetary amount,
+  currency, yes/no, date, tag — each with an icon), and an extraction Prompt.
+  An "Add column" button opens the column modal; clicking a row edits the
+  column; checkbox + actions menu for multi-delete; "x" to delete a single
+  column. Column changes save immediately. Built-in tabular workflows are
+  read-only (clicking a row opens the column modal read-only).
+
+**Deletion.** Personal workflows can be deleted (`DELETE /workflow/{id}`);
+multi-delete deletes the personal ones and hides the built-in ones. A delete
+command must be exposed on the list rows (missing today, only hide/show
+exists).
+
+**Detail view.** Clicking a list row opens a workflow view modal (read-only for
+built-in ones).
+
+**Sharing** (personal workflows only). A modal that lets the owner add
+recipient emails (with an "allow edit" flag) and list/revoke existing shares
 (`POST /workflows/{id}/share`, `GET /workflows/{id}/shares`,
-`DELETE /workflows/{id}/shares/{shareId}`). I workflow condivisi compaiono nelle
-liste dei destinatari; quelli con "consenti modifica" sono modificabili, gli
-altri in sola lettura. La colonna "Origine" della lista mostra il nome di chi
-ha condiviso.
+`DELETE /workflows/{id}/shares/{shareId}`). Shared workflows appear in the
+recipients' lists; those with "allow edit" are editable, the others read-only.
+The list "Source" column shows the name of whoever shared it.
 
-### Da fare
-1. Rotta/editor a pagina intera con titolo rinominabile e indicatore di salvataggio.
-2. Editor WYSIWYG → Markdown con autosalvataggio debounced per i workflow assistente.
-3. Editor colonne con salvataggio immediato per i workflow tabellari.
-4. Comando di eliminazione (singola e multipla) sulla lista.
-5. Modale di dettaglio in sola lettura.
-6. Modale di condivisione e gestione delle condivisioni.
+### To do
+1. Full-page route/editor with renamable title and save indicator.
+2. WYSIWYG → Markdown editor with debounced autosave for assistant workflows.
+3. Column editor with immediate save for tabular workflows.
+4. Delete command (single and multi) on the list.
+5. Read-only detail modal.
+6. Sharing modal and share management.
 
 ---
 
-## 6. Tabular review — Griglia, esecuzione, celle, chat di review
+## 6. Tabular review — Grid, run, cells, review chat
 
-### Stato attuale
-Funzionano solo: lista, modale di creazione (titolo, dominio scelto per primo,
-selezione di un workflow tabellare di quel dominio da cui eredita le colonne),
-eliminazione con conferma. **Manca tutto il cuore della funzionalità**: nessuna
-griglia, nessuna esecuzione, nessuna gestione celle, nessuna vista di dettaglio.
+### Current state
+Only working: list, creation modal (title, domain chosen first, selection of a
+tabular workflow of that domain from which it inherits the columns), delete with
+confirmation. **The whole core of the feature is missing**: no grid, no run, no
+cell handling, no detail view.
 
-### Comportamento atteso
+### Expected behaviour
 
-**Vista di dettaglio della review.** Intestazione con briciole + titolo
-rinominabile, una casella di ricerca (filtra le righe-documento), un pulsante di
-condivisione (review standalone), un pulsante **Esporta** (scarica la griglia
-come file Excel) e un pulsante **Esegui**. Una barra strumenti con: un
-interruttore "Assistente nella review" (apre il pannello di chat della review),
-un menu Azioni (quando ci sono righe selezionate: Cancella risultati, Elimina
-documenti), Aggiungi documenti, Aggiungi colonne.
+**Review detail view.** Header with breadcrumb + renamable title, a search box
+(filters the document rows), a share button (standalone review), an **Export**
+button (downloads the grid as an Excel file) and a **Run** button. A toolbar
+with: an "Assistant in the review" toggle (opens the review chat panel), an
+Actions menu (when rows are selected: Clear results, Delete documents), Add
+documents, Add columns.
 
-**La griglia.** Le righe sono documenti, le colonne sono le domande di
-estrazione; la prima colonna è il nome file del documento. Sia la colonna
-checkbox sia la colonna documento restano "appiccicate" durante lo scorrimento
-orizzontale. Le intestazioni di colonna hanno un menu di modifica in linea.
-Una cella di intestazione "+" e un pulsante "+" nella barra aggiungono colonne.
+**The grid.** Rows are documents, columns are the extraction questions; the
+first column is the document file name. Both the checkbox column and the
+document column stay "sticky" during horizontal scroll. Column headers have an
+inline edit menu. A "+" header cell and a "+" button in the toolbar add
+columns.
 
-**Le celle.** Ogni cella mostra la risposta dell'IA per quella coppia
-(documento, colonna):
-- `pending` → vuota; `generating` → uno scheletro animato (shimmer);
-  `error` → un'icona di allerta rossa.
-- `done` → la prima riga della risposta, troncata. Un piccolo pallino-bandiera
-  colorato nell'angolo (verde / grigio / giallo / rosso) segnala una valutazione
-  della cella. Cliccando la cella si apre una sovrapposizione in linea con la
-  risposta completa; la sovrapposizione ha un'azione "Vedi dettagli".
-- Le risposte sono Markdown con due elementi inline speciali: **pillole di
-  citazione** (apici numerati; cliccandole la griglia scorre alla cella citata e
-  la evidenzia) e **pillole-tag** (chip colorati).
+**The cells.** Each cell shows the AI answer for that (document, column) pair:
+- `pending` → empty; `generating` → an animated skeleton (shimmer);
+  `error` → a red alert icon.
+- `done` → the first line of the answer, truncated. A small colored
+  flag-dot in the corner (green / gray / yellow / red) signals a cell rating.
+  Clicking the cell opens an inline overlay with the full answer; the overlay
+  has a "View details" action.
+- Answers are Markdown with two special inline elements: **citation pills**
+  (numbered superscripts; clicking them scrolls the grid to the cited cell and
+  highlights it) and **tag pills** (colored chips).
 
-**Esecuzione della review.** "Esegui" apre uno stream `POST /tabular-review/{id}/generate`.
-Le celle vengono poste in modo ottimistico a `generating` (saltando quelle già
-`done`), poi un evento SSE `cell_update` per cella ne aggiorna contenuto e stato
-in tempo reale. Richiede ≥ 1 colonna e ≥ 1 documento, e un modello disponibile
-(il "modello per review" salvato dall'utente); altrimenti si apre la finestra
-"chiave API mancante".
+**Running the review.** "Run" opens a `POST /tabular-review/{id}/generate`
+stream. Cells are optimistically set to `generating` (skipping those already
+`done`), then one `cell_update` SSE event per cell updates its content and
+status in real time. It requires ≥ 1 column and ≥ 1 document, and an available
+model (the "review model" saved by the user); otherwise the "missing API key"
+window opens.
 
-**Pannello di dettaglio cella.** Aprendo una cella (o cliccando una citazione in
-una cella) scorre in vista un pannello. Ha una colonna informativa col nome
-colonna, nome documento, il badge-bandiera, i **Risultati** formattati e il
-**Ragionamento**, con navigazione precedente/successivo tra colonne e un
-pulsante **Rigenera** (`POST /tabular-review/{id}/regenerate-cell`). Quando si
-clicca una citazione, sul lato sinistro appare anche il visualizzatore di
-documenti (sezione 4) con la frase evidenziata.
+**Cell detail panel.** Opening a cell (or clicking a citation in a cell)
+scrolls a panel into view. It has an info column with the column name, document
+name, the flag badge, the formatted **Results** and the **Reasoning**, with
+previous/next navigation between columns and a **Regenerate** button
+(`POST /tabular-review/{id}/regenerate-cell`). When a citation is clicked, the
+document viewer (section 4) also appears on the left side with the sentence
+highlighted.
 
-**Gestione documenti e colonne.** Aggiungi documenti (`PATCH` con i nuovi
-identificatori documento); colonne aggiunte/modificate/eliminate dalla modale di
-colonna con salvataggio immediato (`PATCH` con la configurazione colonne);
-"Cancella risultati" (`POST .../clear-cells`) riporta le celle delle righe
-selezionate a `pending`.
+**Document and column management.** Add documents (`PATCH` with the new
+document identifiers); columns added/edited/deleted from the column modal with
+immediate save (`PATCH` with the column configuration); "Clear results"
+(`POST .../clear-cells`) sets the cells of the selected rows back to `pending`.
 
-**Modale "Aggiungi colonna".** Permette di aggiungere una o più colonne insieme.
-Ogni bozza ha: un campo nome (digitando un nome viene auto-suggerita una
-configurazione preset quando combacia per espressione regolare con un **preset
-di colonna** noto), un menu a tendina di preset (filtrabile per dominio,
-recuperato da `/column-presets`), un selettore di Formato, un editor di tag
-(quando il formato è "tag" — chip aggiunti con Invio / virgola), e un prompt
-multi-riga con un pulsante **Genera prompt automaticamente**
-(`POST /tabular-review/prompt`, che restituisce un prompt da preset / LLM /
-fallback). In modalità modifica agisce su una sola colonna e può eliminarla.
+**"Add column" modal.** Allows adding one or more columns together. Each draft
+has: a name field (typing a name auto-suggests a preset configuration when it
+matches a known **column preset** by regular expression), a preset dropdown
+(filterable by domain, retrieved from `/column-presets`), a Format selector, a
+tag editor (when the format is "tag" — chips added with Enter / comma), and a
+multi-line prompt with an **Auto-generate prompt** button
+(`POST /tabular-review/prompt`, which returns a prompt from preset / LLM /
+fallback). In edit mode it acts on a single column and can delete it.
 
-**Modale di creazione review.** Da estendere rispetto all'attuale: oltre a
-titolo e workflow-template, deve avere un interruttore "crea sotto un progetto"
-(poi un menu progetto) e un **selettore documenti** (un elenco a directory di
-documenti standalone e progetti con le loro cartelle; in modalità progetto solo
-i documenti pronti di quel progetto). Un pulsante di caricamento aggiunge nuovi
-documenti in linea.
+**Review creation modal.** To be extended from the current one: beyond title
+and workflow-template, it must have a "create under a project" toggle (then a
+project menu) and a **document selector** (a directory-style list of standalone
+documents and projects with their folders; in project mode only the ready
+documents of that project). An upload button adds new documents inline.
 
-**Pannello chat della review.** Un pannello ridimensionabile a sinistra dentro
-la review. L'utente pone domande libere sulla review; l'IA risponde con
-contenuto in streaming, blocchi di ragionamento e passi "Letto {file}". Le
-risposte portano **citazioni tabellari** — pillole numerate che, cliccate, fanno
-scorrere la griglia alla cella riferita. Un'icona "orologio" elenca le chat di
-review precedenti (ricercabili); un "+" avvia una nuova chat; un cestino elimina
-quella corrente; il pannello ha un proprio selettore di modello. Streaming su
-`POST /tabular-review/{id}/chat`; eventi SSE inclusi `chat_id`, `chat_title`,
+**Review chat panel.** A resizable panel on the left inside the review. The
+user asks free questions about the review; the AI answers with streaming
+content, reasoning blocks and "Read {file}" steps. Answers carry **tabular
+citations** — numbered pills that, when clicked, scroll the grid to the
+referenced cell. A "clock" icon lists previous review chats (searchable); a "+"
+starts a new chat; a trash can deletes the current one; the panel has its own
+model selector. Streaming on `POST /tabular-review/{id}/chat`; SSE events
+including `chat_id`, `chat_title`,
 `reasoning_delta`/`reasoning_block_end`, `content_delta`, `doc_read_start`/`doc_read`,
-`citations`. Le chat persistono (`GET /tabular-review/{id}/chats`,
+`citations`. Chats persist (`GET /tabular-review/{id}/chats`,
 `.../chats/{chatId}/messages`, `DELETE …`).
 
-### Da fare
-1. Vista di dettaglio della review con intestazione, barra strumenti, ricerca.
-2. Componente griglia con colonne/celle, colonne appiccicate, intestazioni modificabili.
-3. Stati cella (pending/generating/error/done), pallino-bandiera, sovrapposizione in linea.
-4. Esecuzione via stream `generate` con aggiornamento ottimistico e gestione `cell_update`.
-5. Pannello di dettaglio cella con navigazione, rigenerazione, e aggancio al visualizzatore documenti.
-6. Modale "Aggiungi colonna" con preset, auto-suggerimento, generazione prompt, editor tag.
-7. Estensione della modale di creazione (progetto + selettore documenti + upload in linea).
-8. Pannello chat della review con storico, modello, citazioni tabellari.
-9. Esportazione griglia in Excel.
+### To do
+1. Review detail view with header, toolbar, search.
+2. Grid component with columns/cells, sticky columns, editable headers.
+3. Cell states (pending/generating/error/done), flag-dot, inline overlay.
+4. Run via the `generate` stream with optimistic update and `cell_update` handling.
+5. Cell detail panel with navigation, regeneration, and document-viewer hook-up.
+6. "Add column" modal with presets, auto-suggestion, prompt generation, tag editor.
+7. Extension of the creation modal (project + document selector + inline upload).
+8. Review chat panel with history, model, tabular citations.
+9. Grid export to Excel.
 
 ---
 
-## 7. Progetti — Dettaglio, documenti, cartelle, versioni, export/import
+## 7. Projects — Detail, documents, folders, versions, export/import
 
-### Stato attuale
-Funzionano: lista con ricerca e filtro dominio, creazione/modifica/eliminazione
-(nome, descrizione, dominio). **Manca**: vista di dettaglio (cliccare una riga
-non fa nulla), gestione documenti, modalità di isolamento, export/import
-`.mikeprj`, chat di progetto, review di progetto.
+### Current state
+Working: list with search and domain filter, create/edit/delete (name,
+description, domain). **Missing**: detail view (clicking a row does nothing),
+document management, isolation modes, `.mikeprj` export/import, project chat,
+project review.
 
-### Comportamento atteso
+### Expected behaviour
 
-**Vista di dettaglio del progetto.** Intestazione: briciole + titolo
-rinominabile (con eventuale numero pratica come suffisso), ricerca, un pulsante
-membri/persone, un **interruttore di isolamento RAG** (solo proprietario —
-commuta tra modalità "condivisa", in cui le chat del progetto vedono documenti
-globali + di progetto, e modalità "rigorosa", in cui vedono solo i documenti di
-progetto), un pulsante di **esportazione** (apre la modale di export), e i
-pulsanti "+ Chat" / "+ Tabular review".
+**Project detail view.** Header: breadcrumb + renamable title (with an optional
+case number as a suffix), search, a members/people button, a **RAG isolation
+toggle** (owner only — switches between "shared" mode, in which the project
+chats see global + project documents, and "strict" mode, in which they see only
+project documents), an **export** button (opens the export modal), and the
+"+ Chat" / "+ Tabular review" buttons.
 
-Tre schede (collegabili via parametro di query):
+Three tabs (linkable via a query parameter):
 
-**Scheda Documenti.** Un albero a cartelle: sottocartelle e documenti annidati
-liberamente. Ogni riga-documento mostra un'icona di tipo file (o uno spinner
-mentre è `pending`/`processing`, o un'allerta rossa su `error`), il nome file
-(rinominabile in linea), e una sezione espandibile per lo storico versioni.
-Trascinamento e rilascio per spostare documenti nelle cartelle e riordinare
-sottocartelle in altre cartelle (con protezione dai cicli). Menu contestuale
-(tasto destro) e barra strumenti offrono: Aggiungi sottocartella, Aggiungi
-documenti (caricamento o modale di sfoglia), rinomina/elimina cartella (a
-cascata). Azioni multiple sui documenti selezionati: Scarica (file singolo o un
-archivio zip via `POST /single-documents/download-zip`), Rimuovi dalla
-sottocartella, Elimina (riservato al proprietario). Cliccando un documento si
-apre nella modale/pannello di visualizzazione.
+**Documents tab.** A folder tree: subfolders and documents nested freely. Each
+document row shows a file-type icon (or a spinner while `pending`/`processing`,
+or a red alert on `error`), the file name (inline renamable), and an expandable
+section for the version history. Drag and drop to move documents into folders
+and reorder subfolders into other folders (with cycle protection). Context menu
+(right-click) and toolbar offer: Add subfolder, Add documents (upload or browse
+modal), rename/delete folder (cascading). Multi-actions on selected documents:
+Download (single file or a zip archive via
+`POST /single-documents/download-zip`), Remove from subfolder, Delete (reserved
+for the owner). Clicking a document opens it in the view modal/panel.
 
-**Versioni dei documenti.** Ogni documento può avere più versioni. Espandendo lo
-storico (`GET /single-documents/{id}/versions`) si elencano le versioni con
-numero, origine e nome visualizzato rinominabile. L'utente può caricare una
-nuova versione (`POST .../versions`, tramite modale) e rinominare le versioni
+**Document versions.** Each document can have multiple versions. Expanding the
+history (`GET /single-documents/{id}/versions`) lists the versions with number,
+origin and a renamable display name. The user can upload a new version
+(`POST .../versions`, via a modal) and rename versions
 (`PATCH .../versions/{vid}`).
 
-**Scheda Assistente.** Elenca le chat del progetto (`GET /projects/{id}/chats`),
-ognuna rinominabile/eliminabile. "+ Chat" crea una chat con ambito progetto e la
-apre. La chat di progetto si comporta esattamente come l'Assistente globale ma
-il suo ambito RAG è il progetto (secondo la modalità di isolamento).
+**Assistant tab.** Lists the project chats (`GET /projects/{id}/chats`), each
+renamable/deletable. "+ Chat" creates a project-scoped chat and opens it. The
+project chat behaves exactly like the global Assistant but its RAG scope is the
+project (according to the isolation mode).
 
-**Scheda Review.** Elenca le tabular review del progetto; "+ Tabular review" ne
-crea una con ambito progetto (richiede ≥ 1 documento pronto).
+**Review tab.** Lists the project's tabular reviews; "+ Tabular review" creates
+one with project scope (requires ≥ 1 ready document).
 
-**Esportazione progetto.** Una modale che chiede un'email destinataria e una
-casella "includi le chat". `POST /project/{id}/export` restituisce il binario
-`.mikeprj` cifrato, che viene scaricato. Il file è legato crittograficamente
-all'email del destinatario — solo quella persona potrà importarlo.
+**Project export.** A modal that asks for a recipient email and an "include the
+chats" checkbox. `POST /project/{id}/export` returns the encrypted `.mikeprj`
+binary, which is downloaded. The file is cryptographically bound to the
+recipient's email — only that person can import it.
 
-**Importazione progetto via drag & drop.** Trascinando un file `.mikeprj` sulla
-pagina dei progetti compare un overlay di rilascio; al rilascio, una finestra di
-conferma chiede l'email destinataria (il file è cifrato, legato a quell'email).
-`POST /project/import` lo importa e si naviga al nuovo progetto.
+**Project import via drag & drop.** Dragging a `.mikeprj` file onto the
+projects page shows a drop overlay; on drop, a confirmation window asks for the
+recipient email (the file is encrypted, bound to that email).
+`POST /project/import` imports it and navigates to the new project.
 
-**Modale di creazione/modifica progetto.** Da estendere con il numero pratica e
-con l'editabilità della modalità di isolamento (oggi assente dalla modale).
+**Project create/edit modal.** To be extended with the case number and the
+editability of the isolation mode (currently absent from the modal).
 
-### Da fare
-1. Rotta/vista di dettaglio del progetto con intestazione e tre schede.
-2. Albero documenti a cartelle con drag & drop, protezione cicli, menu contestuale, azioni multiple.
-3. Storico versioni: elenco, caricamento nuova versione, rinomina.
-4. Scheda Assistente con chat di progetto ad ambito RAG di progetto.
-5. Scheda Review con review ad ambito progetto.
-6. Interruttore di isolamento RAG (solo proprietario).
-7. Modale di esportazione `.mikeprj` e flusso di importazione via drag & drop con conferma email.
-8. Estensione della modale progetto (numero pratica, modalità di isolamento).
-
----
-
-## 8. Template DOCX — Dettaglio, generazione, applica-a-chat, **editor**
-
-### Stato attuale
-Lista, modale di dettaglio (`describe`), applica-a-chat e finestra di resa
-(`render`) sono implementati. **In sviluppo**: l'editor dei template, che
-permette di creare e modificare template DOCX dell'utente.
-
-### Comportamento atteso
-
-**Modale di dettaglio.** Cliccando una riga si apre una modale che recupera la
-definizione completa del template e il suo prompt di authoring auto-generato
-(`POST /docx-templates/describe`). La modale mostra: nome localizzato, id,
-badge dominio (più i domini "applicabile anche a"), badge di livello di
-automazione, marcatore "di sistema", l'elenco dei campi di metadati richiesti.
-
-**Applica a chat.** La modale di dettaglio ha un'azione "Applica alla chat" che
-apre una nuova chat dell'Assistente con il template già allegato come chip.
-Deve essere possibile anche un collegamento diretto dalla pagina Template che
-apre l'Assistente con il template pre-allegato.
-
-**Generazione/resa.** Il backend espone `POST /docx-templates/render` (restituisce
-un blob `.docx`) e `POST /docx-templates/describe`. Va costruita una finestra di
-resa che raccoglie i valori dei campi di metadati richiesti e produce il
-documento; va gestita l'intestazione di risposta che segnala i segnaposto non
-risolti, mostrandoli all'utente.
-
-### Editor dei template DOCX
-
-**Modello di persistenza.** I template di sistema vivono in
-`config/docx-templates/` come file JSON di sola lettura. I template dell'utente
-vivono in `config/docx-templates/user/` come file JSON **scrivibili**: creare o
-modificare un template significa scrivere un file JSON in quella cartella. Gli
-endpoint di lettura (`list`, `describe`, `render`) uniscono le due sorgenti; i
-template di sistema non sono mai modificabili né eliminabili dall'interfaccia.
-
-**Endpoint di scrittura del backend.**
-- `POST /docx-templates` — crea un nuovo template utente; il corpo è la
-  definizione JSON completa; il backend assegna un id sotto `user/`, valida e
-  scrive il file. Restituisce la definizione salvata.
-- `PUT /docx-templates/{id}` — aggiorna un template utente esistente; rifiuta
-  con errore se l'id appartiene a un template di sistema.
-- `DELETE /docx-templates/{id}` — elimina un template utente; rifiuta i
-  template di sistema.
-Dopo ogni scrittura lo stato in memoria dei template (`state.docx_templates`)
-va riallineato in modo che `list`/`describe`/`render` vedano subito le modifiche.
-
-**Editor a pagina intera (scope "core + layout completo").** Copre **tutti** i
-campi del modello `DocxTemplate`, non solo quelli di authoring:
-- *Anagrafica*: nome localizzato (per le 6 lingue), categoria, dominio e domini
-  "applicabile anche a", locale, livello di automazione, sintassi dei segnaposto,
-  riferimento di origine.
-- *Layout e tipografia*: formato carta, uso bollo, margini, tipografia/font,
-  note a piè di pagina, style map (baseline + override), direttive supportate,
-  blocco intestazione e piè di pagina, numerazione delle sezioni.
-- *Contenuto*: scheletro delle sezioni, prompt per campo, metadati richiesti,
-  limiti di caratteri, esempi few-shot, testo extra del prompt.
-I template di sistema si aprono nell'editor in sola lettura, con possibilità di
-**duplicarli** in un nuovo template utente modificabile.
-
-### Da fare
-1. ✅ Modale di dettaglio con `describe` e campi metadati.
-2. ✅ Azione "Applica alla chat" e collegamento diretto template → Assistente.
-3. ✅ Finestra di resa che raccoglie i metadati, chiama `render`, scarica il `.docx`.
-4. ✅ Endpoint di scrittura del backend (`POST /docx-templates/save` e `/delete`) su `config/docx-templates/user/` con merge in lettura.
-5. ✅ Editor a pagina intera con copertura completa dei campi e duplica-da-sistema.
+### To do
+1. Project detail route/view with header and three tabs.
+2. Folder-based document tree with drag & drop, cycle protection, context menu, multi-actions.
+3. Version history: list, upload new version, rename.
+4. Assistant tab with project chat at project RAG scope.
+5. Review tab with project-scoped reviews.
+6. RAG isolation toggle (owner only).
+7. `.mikeprj` export modal and drag-&-drop import flow with email confirmation.
+8. Extension of the project modal (case number, isolation mode).
 
 ---
 
-## 9. Documenti — Caricamento, stato indicizzazione, conversione
+## 8. DOCX templates — Detail, generation, apply-to-chat, **editor**
 
-### Stato attuale
-Nessuna schermata dedicata. I documenti sono raggiungibili solo come allegati
-della chat. Non esiste caricamento, né elenco, né visualizzazione dello stato di
-indicizzazione.
+### Current state
+List, detail modal (`describe`), apply-to-chat and the render window (`render`)
+are implemented. **In development**: the template editor, which lets the user
+create and edit their own DOCX templates.
 
-### Comportamento atteso
+### Expected behaviour
 
-**Caricamento.** I caricamenti accettano pdf/docx/doc/rtf/xlsx/xls/xlsb/ods/csv/txt/md
-e immagini. Un caricamento standalone va a `POST /single-documents`; i
-caricamenti di progetto a `POST /projects/{id}/documents`.
+**Detail modal.** Clicking a row opens a modal that retrieves the full template
+definition and its auto-generated authoring prompt
+(`POST /docx-templates/describe`). The modal shows: localized name, id, domain
+badge (plus the "also applicable to" domains), automation-level badge, "system"
+marker, the list of required metadata fields.
 
-**Stato del documento.** Dopo il caricamento un documento ha uno stato
-(`pending` → `processing` → `ready`, oppure `error`): il backend converte i
-formati e costruisce embedding/indici. Lo stato va mostrato visivamente
-(spinner durante l'elaborazione, allerta su errore, pronto a elaborazione finita).
+**Apply to chat.** The detail modal has an "Apply to chat" action that opens a
+new Assistant chat with the template already attached as a chip. A direct link
+from the Templates page that opens the Assistant with the template
+pre-attached must also be possible.
 
-**Risoluzione URL e byte.** Gli URL dei documenti si risolvono via
-`GET /single-documents/{id}/url`; i byte per la visualizzazione via gli endpoint
-`/display` e `/docx` (vedi sezione 4).
+**Generation/render.** The backend exposes `POST /docx-templates/render`
+(returns a `.docx` blob) and `POST /docx-templates/describe`. A render window
+must be built that collects the values of the required metadata fields and
+produces the document; the response header that signals unresolved placeholders
+must be handled, showing them to the user.
 
-### Da fare
-1. Componente di caricamento file (selettore nativo) usato dalla chat, dai progetti e dalle review.
-2. Indicatore di stato del documento (pending/processing/ready/error) riutilizzabile.
-3. Eventuale schermata/elenco documenti standalone se richiesto in seguito.
+### DOCX template editor
+
+**Persistence model.** System templates live in `config/docx-templates/` as
+read-only JSON files. User templates live in `config/docx-templates/user/` as
+**writable** JSON files: creating or editing a template means writing a JSON
+file in that folder. The read endpoints (`list`, `describe`, `render`) merge
+the two sources; system templates are never editable or deletable from the
+interface.
+
+**Backend write endpoints.**
+- `POST /docx-templates` — creates a new user template; the body is the full
+  JSON definition; the backend assigns an id under `user/`, validates and
+  writes the file. Returns the saved definition.
+- `PUT /docx-templates/{id}` — updates an existing user template; rejects with
+  an error if the id belongs to a system template.
+- `DELETE /docx-templates/{id}` — deletes a user template; rejects system
+  templates.
+After every write the in-memory template state (`state.docx_templates`) must be
+realigned so that `list`/`describe`/`render` see the changes immediately.
+
+**Full-page editor ("core + complete layout" scope).** Covers **all** fields of
+the `DocxTemplate` model, not just the authoring ones:
+- *Identity*: localized name (for the 6 languages), category, domain and "also
+  applicable to" domains, locale, automation level, placeholder syntax, origin
+  reference.
+- *Layout and typography*: paper format, stamp-duty use, margins,
+  typography/font, footnotes, style map (baseline + overrides), supported
+  directives, header and footer block, section numbering.
+- *Content*: section skeleton, per-field prompts, required metadata, character
+  limits, few-shot examples, extra prompt text.
+System templates open in the editor read-only, with the ability to **duplicate**
+them into a new editable user template.
+
+### To do
+1. ✅ Detail modal with `describe` and metadata fields.
+2. ✅ "Apply to chat" action and direct template → Assistant link.
+3. ✅ Render window that collects the metadata, calls `render`, downloads the `.docx`.
+4. ✅ Backend write endpoints (`POST /docx-templates/save` and `/delete`) to `config/docx-templates/user/` with read-side merge.
+5. ✅ Full-page editor with complete field coverage and duplicate-from-system.
 
 ---
 
-## 10. Impostazioni — Fonti dati (sync locale, EUR-Lex, corpora)
+## 9. Documents — Upload, indexing status, conversion
 
-### Stato attuale
-La sezione "Fonti dati" è una voce disabilitata che rende un segnaposto
-"prossimamente". Nessuna UI per sync locale, EUR-Lex, corpus legale italiano.
-Funzionano invece bene: Profilo, Sicurezza, Modelli, MCP.
+### Current state
+No dedicated screen. Documents are reachable only as chat attachments. There is
+no upload, no list, no display of the indexing status.
 
-### Comportamento atteso
+### Expected behaviour
 
-La sotto-navigazione delle Impostazioni include un gruppo "Documenti e fonti"
-con: Documenti locali/sync, più una voce per ogni corpus registrato dal backend
-(es. EUR-Lex, Legale Italiano). L'elenco dei corpora si ottiene da `GET /corpora`;
-i corpora non ancora collegati compaiono attenuati con un suffisso "prossimamente".
+**Upload.** Uploads accept pdf/docx/doc/rtf/xlsx/xls/xlsb/ods/csv/txt/md and
+images. A standalone upload goes to `POST /single-documents`; project uploads to
+`POST /projects/{id}/documents`.
 
-### 10.1 Sync documenti locali
-Indicizza cartelle del filesystem locale nella base di conoscenza RAG.
-Un modulo "aggiungi cartella" (percorso, etichetta, casella ricorsivo, e un
-selettore di ambito — globale o uno specifico progetto). L'elenco cartelle
-mostra per ognuna l'ambito, l'ora dell'ultima scansione, un pulsante **Scansiona**
-e un pulsante di rimozione. Durante una scansione, una sezione di avanzamento
-live mostra elaborati/totali, conteggi indicizzati/saltati/falliti, una barra di
-avanzamento, e il file corrente con la fase della pipeline (`extracting`/`embedding`).
-In cima alla pagina un banner mostra l'avanzamento di download/caricamento del
-modello di embedding. Espandendo una cartella si elencano i file sincronizzati
-con stato per-file (pronto/saltato/fallito) e numero di frammenti.
-Polling: `GET /sync/folders/{id}/status` (~1,5 s mentre scansiona) e
-`GET /sync/model-status` (~0,7 s).
+**Document status.** After upload a document has a status
+(`pending` → `processing` → `ready`, or `error`): the backend converts the
+formats and builds embeddings/indexes. The status must be shown visually
+(spinner while processing, alert on error, ready when processing is finished).
+
+**URL and byte resolution.** Document URLs resolve via
+`GET /single-documents/{id}/url`; the bytes for viewing via the `/display` and
+`/docx` endpoints (see section 4).
+
+### To do
+1. File upload component (native picker) used by chat, projects and reviews.
+2. Reusable document status indicator (pending/processing/ready/error).
+3. Optional standalone document screen/list if required later.
+
+---
+
+## 10. Settings — Data sources (local sync, EUR-Lex, corpora)
+
+### Current state
+The "Data sources" section is a disabled entry that renders a "coming soon"
+placeholder. No UI for local sync, EUR-Lex, Italian legal corpus. Working well,
+instead: Profile, Security, Models, MCP.
+
+### Expected behaviour
+
+The Settings sub-navigation includes a "Documents and sources" group with:
+Local documents/sync, plus an entry for each corpus registered by the backend
+(e.g. EUR-Lex, Italian Legal). The corpora list is obtained from `GET /corpora`;
+corpora not yet wired up appear dimmed with a "coming soon" suffix.
+
+### 10.1 Local document sync
+Indexes local filesystem folders into the RAG knowledge base. An "add folder"
+form (path, label, recursive checkbox, and a scope selector — global or a
+specific project). The folder list shows, for each, the scope, the time of the
+last scan, a **Scan** button and a remove button. During a scan, a live
+progress section shows processed/total, indexed/skipped/failed counts, a
+progress bar, and the current file with the pipeline phase
+(`extracting`/`embedding`). At the top of the page a banner shows the
+download/loading progress of the embedding model. Expanding a folder lists the
+synced files with a per-file status (ready/skipped/failed) and fragment count.
+Polling: `GET /sync/folders/{id}/status` (~1.5 s while scanning) and
+`GET /sync/model-status` (~0.7 s).
 API: `GET/POST /sync/folders`, `POST /sync/folders/{id}/scan`, `DELETE`, `GET .../files`.
 
-### 10.2 Corpus EUR-Lex
-Cerca e indicizza documenti legali UE nella base di conoscenza RAG.
-Un interruttore "abilitato", un selettore di lingua (24 lingue UE) con
-opzione "fallback inglese"; la configurazione si auto-salva (debounced) via
-`PUT /eurlex/config`. Una casella di **ricerca intelligente** accetta un
-identificatore CELEX, un riferimento naturale, o parole chiave;
-`POST /eurlex/search` restituisce i risultati. Ogni risultato mostra titolo,
-identificatore CELEX, lingue disponibili, un link "apri su EUR-Lex" (apre il
-browser di sistema), e un pulsante **Sincronizza** che recupera e indicizza il
-documento (`POST /eurlex/fetch`). Una sezione "documenti indicizzati" elenca i
-documenti già sincronizzati con badge di stato (indicizzato / in sincronia con %
-live / in coda / interrotto / "nessun frammento"), un comando di **resync** per
-quelli falliti (`POST .../resync`) e l'eliminazione. Durante la sincronizzazione
-fa polling di `GET /eurlex/embed-progress` e mostra una barra di avanzamento
-embedding per-documento.
+### 10.2 EUR-Lex corpus
+Searches and indexes EU legal documents into the RAG knowledge base. An
+"enabled" toggle, a language selector (24 EU languages) with an "English
+fallback" option; the configuration auto-saves (debounced) via
+`PUT /eurlex/config`. A **smart search** box accepts a CELEX identifier, a
+natural reference, or keywords; `POST /eurlex/search` returns the results. Each
+result shows title, CELEX identifier, available languages, an "open on EUR-Lex"
+link (opens the system browser), and a **Sync** button that fetches and indexes
+the document (`POST /eurlex/fetch`). An "indexed documents" section lists the
+already-synced documents with a status badge (indexed / syncing with a live % /
+queued / interrupted / "no fragments"), a **resync** command for the failed
+ones (`POST .../resync`) and deletion. During the sync it polls
+`GET /eurlex/embed-progress` and shows a per-document embedding progress bar.
 API: `GET /eurlex/config`, `GET /eurlex/documents`, `DELETE /eurlex/documents/{id}`.
 
-### 10.3 Corpus Legale Italiano (e corpora generici)
-Una pagina specifica del corpus che segue lo stesso schema di EUR-Lex/sync: un
-flusso di importazione massiva con avanzamento a fasi (`POST /corpora/{id}/import`,
-`GET .../import-status`, `GET .../import-progress`), ricerca/fetch, e gestione
-documenti — pilotato dalle capacità dichiarate dal corpus. I corpora non
-collegati ricadono su una pagina-corpus generica resa dai metadati di
+### 10.3 Italian Legal corpus (and generic corpora)
+A corpus-specific page that follows the same scheme as EUR-Lex/sync: a bulk
+import flow with phased progress (`POST /corpora/{id}/import`,
+`GET .../import-status`, `GET .../import-progress`), search/fetch, and document
+management — driven by the capabilities declared by the corpus. Corpora not
+wired up fall back to a generic corpus page rendered from the metadata of
 `GET /corpora/{id}`.
 
-### Da fare
-1. Abilitare la sezione "Fonti dati" con sotto-navigazione alimentata da `GET /corpora`.
-2. Pagina Sync locale: aggiungi cartella, elenco, scansione, avanzamento live, polling, elenco file.
-3. Pagina EUR-Lex: config auto-salvata, ricerca, sincronizzazione, documenti indicizzati, resync, polling embedding.
-4. Pagina corpus Legale Italiano e pagina-corpus generica.
-5. Moduli API e store dedicati per sync ed eurlex/corpora (oggi assenti).
+### To do
+1. Enable the "Data sources" section with sub-navigation fed by `GET /corpora`.
+2. Local Sync page: add folder, list, scan, live progress, polling, file list.
+3. EUR-Lex page: auto-saved config, search, sync, indexed documents, resync, embedding polling.
+4. Italian Legal corpus page and generic corpus page.
+5. Dedicated API modules and stores for sync and eurlex/corpora (absent today).
 
 ---
 
-## 11. Banner stato embedding (Assistente)
+## 11. Embedding status banner (Assistant)
 
-### Stato attuale
-Assente.
+### Current state
+Absent.
 
-### Comportamento atteso
-Sopra il compositore della chat, un banner compare **solo** quando la chat è in
-attesa di una risposta **e** il sottosistema di embedding è occupato:
-"download del modello" (una tantum, con avanzamento in MB), "caricamento del
-modello" (build di sessione di 5–10 s dopo un riavvio), oppure "calcolo
-embedding N/M" durante l'indicizzazione massiva. È invisibile a regime. Fa
-polling di `GET /sync/model-status` e `GET /eurlex/embed-progress` (~500 ms,
-con auto-throttling a riposo). Non blocca mai la digitazione.
+### Expected behaviour
+Above the chat composer, a banner appears **only** when the chat is waiting for
+a response **and** the embedding subsystem is busy: "downloading the model"
+(one-time, with MB progress), "loading the model" (a 5–10 s session build after
+a restart), or "computing embeddings N/M" during bulk indexing. It is invisible
+at steady state. It polls `GET /sync/model-status` and
+`GET /eurlex/embed-progress` (~500 ms, with auto-throttling at rest). It never
+blocks typing.
 
-### Da fare
-1. Componente banner con i tre stati, polling auto-limitato, visibile solo a sottosistema occupato.
-
----
-
-## 12. Approvazione tool MCP in chat
-
-### Stato attuale
-Assente. (Vedi anche la nota di memoria sul dialogo asincrono MCP ancora
-irrisolto: pattern richiesta/recupero con auto-concatenazione + timeout 300 s +
-ticker di avanzamento già spediti, ma restano modalità di fallimento residue.)
-
-### Comportamento atteso
-Quando uno strumento esterno/MCP richiede un'approvazione manuale durante una
-risposta, la riga dello strumento in corso deve mostrare il suggerimento "sta
-impiegando più del previsto" dopo ~10 s (vedi sezione 2, `tool_call_progress`).
-L'eventuale dialogo di approvazione va integrato con prudenza: **non modificare
-il prompt di sistema** del modello.
-
-### Da fare
-1. Allineare la riga-evento dello strumento al ticker di avanzamento.
-2. Valutare con l'utente se/come esporre un dialogo di approvazione esplicito (area ancora aperta).
+### To do
+1. Banner component with the three states, self-throttling polling, visible only when the subsystem is busy.
 
 ---
 
-## 13. Regressione i18n nelle Impostazioni *(difetto da correggere)*
+## 12. MCP tool approval in chat
 
-### Stato attuale
-Le sezioni Profilo, Sicurezza, Modelli, MCP e Zona pericolosa contengono
-**stringhe hard-coded in inglese** (etichette, messaggi toast). Anche l'overlay
-di verifica biometrica ha stringhe hard-coded. Questo viola la regola di
-progetto per cui ogni stringa visibile passa dal sistema i18n.
+### Current state
+Absent. (See also the memory note about the still-unresolved MCP asynchronous
+dialog: a request/retrieve pattern with auto-chaining + 300 s timeout +
+progress ticker already shipped, but residual failure modes remain.)
 
-### Da fare
-1. Estrarre tutte le stringhe visibili delle sezioni Impostazioni e dell'overlay biometrico in chiavi i18n.
-2. Aggiungere le chiavi in tutte e 6 le lingue (it/en/fr/de/es/pt) mantenendo la parità del bundle.
-3. Verificare a build che la parità delle chiavi sia mantenuta.
+### Expected behaviour
+When an external/MCP tool requires a manual approval during a response, the
+in-progress tool row must show the "this is taking longer than expected" hint
+after ~10 s (see section 2, `tool_call_progress`). Any approval dialog must be
+integrated with care: **do not modify the model's system prompt**.
+
+### To do
+1. Align the tool event row with the progress ticker.
+2. Evaluate with the user whether/how to expose an explicit approval dialog (still an open area).
 
 ---
 
-## Ordine consigliato di realizzazione
+## 13. i18n regression in Settings *(defect to fix)*
 
-Le funzionalità sono interdipendenti. Sequenza suggerita:
+### Current state
+The Profile, Security, Models, MCP and Danger zone sections contain
+**English hard-coded strings** (labels, toast messages). The biometric
+verification overlay also has hard-coded strings. This violates the project
+rule that every visible string goes through the i18n system.
 
-1. **Correzione i18n Impostazioni (sez. 13)** — difetto, veloce, sblocca conformità.
-2. **Visualizzatore documenti multi-formato (sez. 4)** — fondamento di citazioni e celle.
-3. **Citazioni assistente (sez. 1)** + **eventi tool/documento (sez. 2)** — completano la chat e dipendono dal visualizzatore.
-4. **Selettore modello + titolo automatico + modifiche tracciate (sez. 3)**.
-5. **Documenti: caricamento e stato (sez. 9)** — prerequisito per review e progetti.
-6. **Tabular review completa (sez. 6)** — grande, dipende da visualizzatore e documenti.
-7. **Progetti: dettaglio e schede (sez. 7)** — grande, dipende da documenti, chat e review.
-8. **Workflow: editor a pagina intera + modifica/eliminazione/condivisione (sez. 5)**.
-9. **Template DOCX: dettaglio e generazione (sez. 8)**.
-10. **Impostazioni → Fonti dati (sez. 10)** + **banner embedding (sez. 11)**.
-11. **Approvazione tool MCP (sez. 12)** — da discutere, area aperta.
+### To do
+1. Extract all visible strings of the Settings sections and the biometric overlay into i18n keys.
+2. Add the keys in all 6 languages (it/en/fr/de/es/pt) keeping bundle parity.
+3. Verify at build that key parity is maintained.
 
-Le cartelle dei componenti `documents/`, `domain/`, `tabular/` sono attualmente
-vuote: andranno popolate rispettivamente dalle sezioni 9, dai selettori di
-dominio già usati altrove, e dalla sezione 6.
+---
+
+## Suggested implementation order
+
+The features are interdependent. Suggested sequence:
+
+1. **Settings i18n fix (sec. 13)** — defect, quick, unblocks compliance.
+2. **Multi-format document viewer (sec. 4)** — foundation of citations and cells.
+3. **Assistant citations (sec. 1)** + **tool/document events (sec. 2)** — they complete the chat and depend on the viewer.
+4. **Model selector + automatic title + tracked changes (sec. 3)**.
+5. **Documents: upload and status (sec. 9)** — prerequisite for reviews and projects.
+6. **Complete tabular review (sec. 6)** — large, depends on the viewer and documents.
+7. **Projects: detail and tabs (sec. 7)** — large, depends on documents, chat and reviews.
+8. **Workflows: full-page editor + edit/delete/sharing (sec. 5)**.
+9. **DOCX templates: detail and generation (sec. 8)**.
+10. **Settings → Data sources (sec. 10)** + **embedding banner (sec. 11)**.
+11. **MCP tool approval (sec. 12)** — to be discussed, open area.
+
+The `documents/`, `domain/`, `tabular/` component folders are currently empty:
+they will be populated respectively by sections 9, by the domain selectors
+already used elsewhere, and by section 6.

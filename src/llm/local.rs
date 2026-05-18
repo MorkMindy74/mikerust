@@ -4,6 +4,7 @@ use anyhow::{anyhow, Result};
 use futures_util::stream;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::VecDeque;
 
 use super::types::{Message, Role, StreamEvent, StreamParams, ToolCall};
 use crate::llm::{strip_model_prefix, BoxStream};
@@ -53,6 +54,16 @@ fn resolve_endpoint(params: &StreamParams) -> Result<(String, String, String)> {
     Ok((base, key, model))
 }
 
+fn log_upstream_line(line: &str) {
+    let t = line.trim();
+    if !t.starts_with("data:") {
+        return;
+    }
+    let one_line = t.replace('\n', "\\n");
+    let preview: String = one_line.chars().take(1200).collect();
+    tracing::info!("[llm/local] upstream_sse {preview}");
+}
+
 #[derive(Deserialize)]
 struct StreamChunk {
     choices: Vec<Choice>,
@@ -66,6 +77,8 @@ struct Choice {
 #[derive(Deserialize, Default)]
 struct Delta {
     content: Option<String>,
+    reasoning: Option<String>,
+    reasoning_content: Option<String>,
     tool_calls: Option<Vec<ToolCallDelta>>,
 }
 
@@ -89,6 +102,8 @@ struct ChatRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<serde_json::Value>,
     stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    think: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
 }
@@ -174,6 +189,10 @@ pub async fn stream(
         messages,
         tools,
         stream: true,
+        // Ollama reasoning-capable profiles may emit almost everything in
+        // `reasoning` and only a tiny `content` fragment (e.g. "S").
+        // Ask for non-thinking mode so user-visible `content` is complete.
+        think: Some(false),
         // Ollama defaults to num_predict: 128 — too short for real answers.
         // OpenAI-compatible servers ignore this if their own limit is lower.
         max_tokens: Some(4096),
@@ -196,9 +215,26 @@ pub async fn stream(
     // Parse SSE stream
     let byte_stream = resp.bytes_stream();
     let event_stream = stream::unfold(
-        (byte_stream, String::new()),
-        |(mut bs, mut buf)| async move {
+        (byte_stream, String::new(), VecDeque::<StreamEvent>::new()),
+        |(mut bs, mut buf, mut pending)| async move {
             loop {
+                if let Some(ev) = pending.pop_front() {
+                    return Some((Ok(ev), (bs, buf, pending)));
+                }
+
+                while let Some(pos) = buf.find('\n') {
+                    let line = buf[..pos].trim().to_string();
+                    buf.drain(..=pos);
+                    log_upstream_line(&line);
+                    if let Some(ev) = parse_sse_line_opt(&line) {
+                        pending.push_back(ev);
+                    }
+                }
+
+                if let Some(ev) = pending.pop_front() {
+                    return Some((Ok(ev), (bs, buf, pending)));
+                }
+
                 use futures_util::StreamExt;
                 match bs.next().await {
                     None => {
@@ -210,28 +246,24 @@ pub async fn stream(
                         // failed stream when the response is actually fine.
                         let trimmed = buf.trim().to_string();
                         buf.clear();
-                        if trimmed.is_empty() {
-                            return None;
-                        }
-                        for line in trimmed.lines() {
-                            if let Some(ev) = parse_sse_line_opt(line.trim()) {
-                                return Some((Ok(ev), (bs, buf)));
+                        if !trimmed.is_empty() {
+                            for line in trimmed.lines() {
+                                log_upstream_line(line);
+                                if let Some(ev) = parse_sse_line_opt(line.trim()) {
+                                    pending.push_back(ev);
+                                }
                             }
+                        }
+                        if let Some(ev) = pending.pop_front() {
+                            return Some((Ok(ev), (bs, buf, pending)));
                         }
                         return None;
                     }
                     Some(Err(e)) => {
-                        return Some((Err(anyhow!("stream error: {e}")), (bs, buf)));
+                        return Some((Err(anyhow!("stream error: {e}")), (bs, buf, pending)));
                     }
                     Some(Ok(bytes)) => {
                         buf.push_str(&String::from_utf8_lossy(&bytes));
-                        if let Some(pos) = buf.find('\n') {
-                            let line = buf[..pos].trim().to_string();
-                            buf.drain(..=pos);
-                            if let Some(ev) = parse_sse_line_opt(&line) {
-                                return Some((Ok(ev), (bs, buf)));
-                            }
-                        }
                     }
                 }
             }
@@ -252,7 +284,7 @@ fn parse_sse_line_opt(line: &str) -> Option<StreamEvent> {
     if data == "[DONE]" { return Some(StreamEvent::Done); }
     let chunk: StreamChunk = serde_json::from_str(data).ok()?;
     let delta = chunk.choices.into_iter().next()?.delta;
-    if let Some(text) = delta.content {
+    if let Some(text) = delta.content.filter(|t| !t.is_empty()) {
         return Some(StreamEvent::ContentDelta(text));
     }
     if let Some(tcs) = delta.tool_calls {
@@ -285,6 +317,7 @@ pub async fn complete(params: StreamParams) -> Result<String> {
         "model": model,
         "messages": messages,
         "stream": false,
+        "think": false,
         "max_tokens": 512,
     });
 
@@ -308,10 +341,16 @@ pub async fn complete(params: StreamParams) -> Result<String> {
     #[derive(Deserialize)]
     struct RespChoice { message: RespMessage }
     #[derive(Deserialize)]
-    struct RespMessage { content: Option<String> }
+    struct RespMessage {
+        content: Option<String>,
+        reasoning: Option<String>,
+        reasoning_content: Option<String>,
+    }
 
     let raw = resp.text().await
         .map_err(|e| { tracing::error!("[llm/local] complete read body: {e}"); anyhow!(e) })?;
+    let preview: String = raw.replace('\n', "\\n").chars().take(2000).collect();
+    tracing::info!("[llm/local] upstream_complete_body {preview}");
     let data: Resp = serde_json::from_str(&raw)
         .map_err(|e| {
             tracing::error!("[llm/local] complete parse error: {e} (body: {})", raw.chars().take(400).collect::<String>());
@@ -363,6 +402,12 @@ mod tests {
             }
             other => panic!("expected ToolCalls, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn ignores_reasoning_only_delta() {
+        let line = r#"data: {"id":"x","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"reasoning":"thinking text"},"finish_reason":null}]}"#;
+        assert!(parse_sse_line_opt(line).is_none());
     }
 
     #[test]

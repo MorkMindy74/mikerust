@@ -14,7 +14,7 @@
   import TextView from './TextView.svelte'
   import Spinner from '$lib/components/ui/Spinner.svelte'
   import { i18n } from '$lib/stores/i18n.svelte'
-  import { X, Download, Quote, PanelRightClose, PanelRightOpen } from 'lucide-svelte'
+  import { X, Download, Quote, PanelRightClose, PanelRightOpen, Check } from 'lucide-svelte'
 
   type RendererKind = 'pdf' | 'docx' | 'sheet' | 'md' | 'rtf' | 'text' | 'unsupported'
 
@@ -59,6 +59,10 @@
     return 'unsupported'
   }
 
+  function isDocxTab(tab: ViewerTab): boolean {
+    return ['docx', 'doc'].includes(extOf(tab.title))
+  }
+
   async function loadActive(tab: ViewerTab) {
     if (loadedDocId === tab.docId && loaded) return
     const cached = cache.get(tab.docId)
@@ -71,7 +75,14 @@
     loadError = null
     loaded = null
     try {
-      const blob = await documentsApi.displayBytes(tab.docId)
+      const blob =
+        tab.source === 'kb'
+          ? tab.kbPath
+            ? await documentsApi.kbBytes(tab.kbPath)
+            : (() => {
+                throw new Error('KB citation missing path')
+              })()
+          : await documentsApi.displayBytes(tab.docId)
       const buf = new Uint8Array(await blob.arrayBuffer())
       const kind = rendererFor(blob, tab.title)
       const text =
@@ -96,7 +107,14 @@
 
   async function download(tab: ViewerTab) {
     try {
-      const blob = await documentsApi.downloadBytes(tab.docId)
+      const blob =
+        tab.source === 'kb'
+          ? tab.kbPath
+            ? await documentsApi.kbBytes(tab.kbPath)
+            : (() => {
+                throw new Error('KB citation missing path')
+              })()
+          : await documentsApi.downloadBytes(tab.docId)
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
@@ -226,6 +244,40 @@
                 <Download size={12} />{i18n.t('Documents.viewer.download')}
               </button>
             </div>
+            {#if isDocxTab(activeTab)}
+              <div class="flex flex-wrap items-center gap-1 mb-1.5">
+                <button
+                  type="button"
+                  class="h-6 px-2 rounded text-[11px] border border-(--color-surface-200)
+                         {activeTab.trackedPolicy === 'show'
+                           ? 'bg-(--color-surface-100) text-(--color-text-primary)'
+                           : 'text-(--color-text-secondary) hover:text-(--color-text-primary)'}"
+                  onclick={() => docViewer.setTrackedPolicy('show')}
+                >
+                  {i18n.t('DocViewer.trackedChange')}
+                </button>
+                <button
+                  type="button"
+                  class="h-6 px-2 rounded text-[11px] border border-(--color-surface-200)
+                         {activeTab.trackedPolicy === 'accept'
+                           ? 'bg-(--color-surface-100) text-(--color-text-primary)'
+                           : 'text-(--color-text-secondary) hover:text-(--color-text-primary)'}"
+                  onclick={() => docViewer.setTrackedPolicy('accept')}
+                >
+                  <span class="inline-flex items-center gap-1"><Check size={11} />{i18n.t('EditCard.accept')}</span>
+                </button>
+                <button
+                  type="button"
+                  class="h-6 px-2 rounded text-[11px] border border-(--color-surface-200)
+                         {activeTab.trackedPolicy === 'reject'
+                           ? 'bg-(--color-surface-100) text-(--color-text-primary)'
+                           : 'text-(--color-text-secondary) hover:text-(--color-text-primary)'}"
+                  onclick={() => docViewer.setTrackedPolicy('reject')}
+                >
+                  <span class="inline-flex items-center gap-1"><X size={11} />{i18n.t('EditCard.reject')}</span>
+                </button>
+              </div>
+            {/if}
             <p class="text-xs text-(--color-text-secondary) line-clamp-3 whitespace-pre-wrap">
               {activeTab.quote.replaceAll('[[PAGE_BREAK]]', ' … ')}
             </p>
@@ -233,13 +285,47 @@
         {:else}
           <div class="flex items-center justify-between gap-2">
             <span class="text-xs text-(--color-text-secondary) truncate">{activeTab.title}</span>
-            <button
-              type="button"
-              class="flex items-center gap-1 text-xs text-(--color-text-secondary) hover:text-(--color-text-primary)"
-              onclick={() => download(activeTab)}
-            >
-              <Download size={12} />{i18n.t('Documents.viewer.download')}
-            </button>
+            <div class="flex items-center gap-1.5">
+              {#if isDocxTab(activeTab)}
+                <button
+                  type="button"
+                  class="h-6 px-2 rounded text-[11px] border border-(--color-surface-200)
+                         {activeTab.mode === 'tracked' && activeTab.trackedPolicy === 'show'
+                           ? 'bg-(--color-surface-100) text-(--color-text-primary)'
+                           : 'text-(--color-text-secondary) hover:text-(--color-text-primary)'}"
+                  onclick={() => docViewer.setTrackedPolicy('show')}
+                >
+                  {i18n.t('DocViewer.trackedChange')}
+                </button>
+                <button
+                  type="button"
+                  class="h-6 px-2 rounded text-[11px] border border-(--color-surface-200)
+                         {activeTab.mode === 'tracked' && activeTab.trackedPolicy === 'accept'
+                           ? 'bg-(--color-surface-100) text-(--color-text-primary)'
+                           : 'text-(--color-text-secondary) hover:text-(--color-text-primary)'}"
+                  onclick={() => docViewer.setTrackedPolicy('accept')}
+                >
+                  <span class="inline-flex items-center gap-1"><Check size={11} />{i18n.t('EditCard.accept')}</span>
+                </button>
+                <button
+                  type="button"
+                  class="h-6 px-2 rounded text-[11px] border border-(--color-surface-200)
+                         {activeTab.mode === 'tracked' && activeTab.trackedPolicy === 'reject'
+                           ? 'bg-(--color-surface-100) text-(--color-text-primary)'
+                           : 'text-(--color-text-secondary) hover:text-(--color-text-primary)'}"
+                  onclick={() => docViewer.setTrackedPolicy('reject')}
+                >
+                  <span class="inline-flex items-center gap-1"><X size={11} />{i18n.t('EditCard.reject')}</span>
+                </button>
+              {/if}
+              <button
+                type="button"
+                class="flex items-center gap-1 text-xs text-(--color-text-secondary) hover:text-(--color-text-primary)"
+                onclick={() => download(activeTab)}
+              >
+                <Download size={12} />{i18n.t('Documents.viewer.download')}
+              </button>
+            </div>
           </div>
         {/if}
       </div>
@@ -264,7 +350,12 @@
               revision={docViewer.revision}
             />
           {:else if loaded.kind === 'docx'}
-            <DocxView blob={loaded.blob} quote={activeTab.quote} revision={docViewer.revision} />
+            <DocxView
+              blob={loaded.blob}
+              quote={activeTab.quote}
+              trackedPolicy={activeTab.trackedPolicy}
+              revision={docViewer.revision}
+            />
           {:else if loaded.kind === 'sheet'}
             <SheetView bytes={loaded.bytes} quote={activeTab.quote} revision={docViewer.revision} />
           {:else if loaded.kind === 'md'}

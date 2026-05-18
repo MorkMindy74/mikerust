@@ -20,6 +20,8 @@ export interface Citation {
   docId: string
   /** Human-readable source label (filename or KB path). */
   source: string
+  /** Synced KB source path (for global/project citations). */
+  kbPath?: string
   /** Page number, or a `"41-42"` range for a quote crossing a page break. */
   page?: number | string
   /** The exact quoted passage (used to highlight inside the viewer). */
@@ -45,11 +47,14 @@ export function toCitation(raw: Record<string, unknown>): Citation {
   const pageRaw = raw.page
   const realId = raw.document_id ?? raw.documentId
   const label = raw.doc_id ?? raw.docId
+  const kbPathRaw = raw.path
+  const kbPath = typeof kbPathRaw === 'string' && kbPathRaw.trim() ? kbPathRaw : undefined
   return {
     ref,
     scope: scopeForRef(ref),
     docId: String(realId ?? label ?? ''),
     source: String(raw.filename ?? raw.source ?? ''),
+    ...(kbPath ? { kbPath } : {}),
     page:
       typeof pageRaw === 'number' || typeof pageRaw === 'string'
         ? (pageRaw as number | string)

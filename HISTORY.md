@@ -12,6 +12,314 @@ diff. For the upstream-sync audit trail (which fixes were ported from
 
 ---
 
+## 2026-05-18 — KB citations open in viewer + formal verification trace
+
+Implemented the frontend wiring needed to open/download knowledge-base
+citations (`[gN]` / `[pN]`) from chat directly in the document viewer,
+and recorded a formal verification step so the change can be
+re-checked manually.
+
+### Fixed
+
+- KB citation payload `path` is now preserved in the frontend citation
+  model (`kbPath`) and routed through the viewer tab state (`source:
+  kb`) instead of being treated like `/document/{id}` only.
+- Viewer fetch path now switches by source:
+  - `document` -> `/document/{id}/display` and `/document/{id}/download`
+  - `kb` -> `/sync/kb-doc?path=...` (for both open and download)
+- DOCX viewer now supports tracked-change mode with per-tab policy
+  `show | accept | reject`, surfaced in the header controls.
+- `Accept` / `Reject` are implemented as renderer-level visual policies
+  (non-destructive): no backend persistence/mutation is performed in
+  this step.
+- Chat token strategy switched to quality-first: frontend compaction is
+  now emergency-only (very large payloads), while normal context
+  reduction is delegated to backend model-aware summarization (80%
+  context-window trigger). Emergency compaction preserves first user
+  anchor + recent window + selected older structured user turns.
+- Emergency compaction budgets are now model-aware on the frontend:
+  they read `context_window` from the model catalogue when available,
+  with dedicated fallback for local/OpenAI-compatible endpoints
+  (including Ollama/vLLM patterns) to avoid over-trimming on large local
+  context models.
+- `config/model.json` now includes a dedicated `local` provider catalogue
+  aligned to a 24GB-VRAM target: professional quantized shortlist only
+  (Qwen 3.6 27B, Qwen 3.5 27B, Qwen 2.5 32B, Mistral Small 3.1 24B),
+  with 70B entries removed.
+- Added `scripts/recommend-context-window.ps1` to auto-profile local host
+  resources (RAM/VRAM), read installed Ollama models via `ollama list`
+  + `ollama show`, and output a per-model recommended `context_window`
+  ready for `config/model.json` (`text`, `json`, or `markdown` formats).
+- Added `scripts/ollama-context-profiles.json` with Snapdragon X Elite
+  tuned profiles (`qwen3.5:4b` @ 16K, `qwen3.5:9b` @ 8K,
+  `gemma4:e2b` @ 8K), plus two operational scripts:
+  `scripts/apply-ollama-context-profiles.ps1` (dry-run by default,
+  `-Apply` to create aliases) and
+  `scripts/verify-ollama-context-profiles.ps1` (checks effective context
+  via `ollama show`).
+- `config/model.json` local provider now includes tuned alias IDs
+  aligned to those profiles:
+  `mikerust-qwen35-4b:ctx16k`, `mikerust-qwen35-9b:ctx8k`,
+  `mikerust-gemma4-e2b:ctx8k`.
+- Fixed `src-tauri/tauri.svelte.conf.json` dev/build commands pathing
+  for repository-root launches: `pnpm --dir ../frontend ...` ->
+  `pnpm --dir ./frontend ...`, avoiding accidental resolution to
+  `C:\Progetti\frontend`.
+- Fixed Settings → Model roles provider-filter logic so local models are
+  visible in role dropdowns when a local endpoint is configured
+  (`local_base_url` set). This unblocks selection of local tuned aliases
+  like `mikerust-qwen35-4b:ctx16k` as `main_model`.
+- Fixed broader Settings provider/model coherence to prevent cross-provider
+  mismatches (e.g. local model accidentally sent to Gemini):
+  - Active provider chips are now toggle-style multi-select (non-exclusive),
+    with enabled state tied to actually configured providers.
+  - Role-model dropdowns now show only models from configured + toggled
+    providers.
+  - Local models in role dropdowns are now emitted with `local:` prefix,
+    so backend provider routing is unambiguous.
+  - Local provider role options are filtered against the runtime
+    OpenAI-compatible `/models` list when available, so only truly
+    reachable local models are shown.
+  - Save path normalizes role model ids and persists a coherent
+    `active_provider` from toggled providers.
+- Updated `README.md` Quick start run command to the working Windows
+  repo-local Tauri CLI invocation:
+  - `.\frontend\node_modules\.bin\tauri.cmd dev --config src-tauri/tauri.svelte.conf.json`
+  - Added the global `cargo tauri dev ...` form as optional fallback only.
+- Updated `config/model.json` local provider catalogue for GPU-server
+  deployment, adding balanced runtime profiles discovered on the remote
+  Ollama endpoint:
+  - `rtx4090-qwen36:balanced`
+  - `rtx4090-qwen35-9b:balanced`
+  - `rtx4090-gemma4-26b:balanced`
+  - `rtx4090-gemma4-e4b:balanced`
+  - `rtx4090-gemma4-e2b:balanced`
+  and refreshed the local-provider quality note accordingly.
+- Fixed local OpenAI-compatible response handling for models that emit
+  reasoning text instead of assistant `content`:
+  - streaming parser now falls back to `delta.reasoning` /
+    `delta.reasoning_content` when `delta.content` is empty;
+  - non-stream completion parser now falls back to
+    `message.reasoning` / `message.reasoning_content`.
+  This prevents empty assistant turns with some `*balanced` profiles.
+- Fixed local model resolution in `build_local_config`: when the selected
+  model is explicitly prefixed (e.g. `local:rtx4090-qwen36:balanced`),
+  the backend now uses that requested model id instead of silently
+  overriding it with `local_model` from saved provider defaults. This
+  removes cross-model mismatches and `502` errors on `/generate-title`.
+- Refined local-output behavior to avoid exposing model thinking traces in
+  chat UI: `llm/local` now emits only assistant `content` as user-visible
+  text (stream + non-stream paths), ignoring `reasoning` fields that some
+  OpenAI-compatible backends include separately.
+- Added explicit server-console diagnostics for OpenAI-compatible upstream
+  payloads (`llm/local`):
+  - log each incoming SSE `data:` line from Ollama/vLLM as
+    `[llm/local] upstream_sse ...` (truncated preview);
+  - log non-stream completion raw body as
+    `[llm/local] upstream_complete_body ...` (truncated preview).
+- Forced non-thinking mode on OpenAI-compatible local requests
+  (`llm/local` stream + complete now send `think: false`) to reduce
+  pathological outputs where `content` was a single character (e.g. `S`)
+  while long reasoning text consumed the completion budget.
+- Fixed `llm/local` SSE parser buffering logic: when multiple upstream
+  `data:` lines arrive in the same buffer, the parser now drains and
+  queues all parseable events instead of returning only the first and
+  dropping the rest. This addresses truncated one-character replies seen
+  in chat despite richer upstream payloads.
+- Fixed `/chat/:id/generate-title` empty-title persistence: when the title
+  model returns empty `content`, backend now derives a deterministic
+  fallback from the first user message (up to 5 words), and finally
+  falls back to `New chat` if that is also empty. This prevents chats
+  remaining `Untitled`.
+- Updated Settings → Local provider UX:
+  - swapped field order so `API key (optional)` appears before `Model`;
+  - added a manual refresh button next to `Base URL` to query
+    `<base>/models` on demand;
+  - model roles (`Main`, `Title`, `Tabular`) now take local choices
+    strictly from the runtime `/models` response (when local provider is
+    active), so users can only pick actually available local models.
+- Finalized Local provider constraint: `Model` is now a runtime-backed
+  dropdown (not free text), populated only from `<base>/models` after
+  refresh, so users cannot save arbitrary local model IDs.
+- Follow-up per UX request: removed Local `Model` selector entirely from
+  the Local provider card. Users now choose runtime local models only in
+  Model roles (`Main`/`Title`/`Tabular`), with `Main` auto-defaulted to
+  the first runtime local model after refresh when unset/invalid.
+- Tightened global chat response-style instructions in
+  `MRUST_SYSTEM_PROMPT` to improve formatting quality:
+  - answer in the user's language;
+  - keep responses concise and structured;
+  - avoid repeating the same filename and duplicate document lists;
+  - avoid verbose meta-reasoning unless explicitly requested.
+- Added Recent Chats rename UX in the sidebar:
+  - pencil button added immediately left of the trash icon;
+  - inline title edit mode with Enter / blur save and Escape cancel;
+  - rename persisted through `PATCH /chat/:id` and reflected in local
+    chat list state.
+- New-chat UX tweak: creating a fresh chat now closes the right-side
+  document viewer panel (`docViewer.closeAll()`), so the new conversation
+  starts with a clean workspace.
+- Chat-rename UX polish: entering inline rename now autofocuses the input
+  and places the caret at the end of the current title text.
+- Settings → Active providers persistence: multi-selected provider chips
+  are now restored on reopen (filtered to currently configured providers)
+  via localStorage, so combinations like `Google + Local` survive page
+  reopen; disabling `Local` and saving leaves only `Google` active.
+- Fixed provider-toggle persistence timing: active-provider chips now
+  write to localStorage immediately on toggle (not only on Save), so
+  `Google + Local` remains selected after reopen even before a full
+  settings submit.
+
+### Tests
+
+- Formal validation command executed:
+  - `pnpm --dir frontend typecheck`
+- Result:
+  - `svelte-check found 0 errors and 0 warnings`
+- Added unit coverage for citation mapping of backend `path` ->
+  frontend `kbPath` in `frontend/src/lib/types/citation.test.ts`.
+- Formal validation re-run after tracked-change implementation:
+  - `pnpm --dir frontend typecheck`
+  - `svelte-check found 0 errors and 0 warnings`
+- Formal validation re-run after chat context-compaction update:
+  - `pnpm --dir frontend typecheck`
+  - `svelte-check found 0 errors and 0 warnings`
+- Formal validation re-run after quality-first compaction strategy update:
+  - `pnpm --dir frontend typecheck`
+  - `svelte-check found 0 errors and 0 warnings`
+- Formal validation re-run after model-aware budget update:
+  - `pnpm --dir frontend typecheck`
+  - `svelte-check found 0 errors and 0 warnings`
+- Formal validation after local model-catalogue update:
+  - `cargo check -p mike`
+  - `Finished dev profile` (compilation OK; non-blocking warnings only)
+- Formal validation after 24GB local shortlist alignment (Qwen 27B variants):
+  - `cargo check -p mike`
+  - `Finished dev profile` (compilation OK; non-blocking warnings only)
+- Formal validation after context-window recommendation script:
+  - `pwsh -File .\scripts\recommend-context-window.ps1 -Format json`
+  - Exit code `0`; JSON report generated with model max context + recommended context.
+- Formal validation after profile scripts and tuned aliases update:
+  - `pwsh -File .\scripts\apply-ollama-context-profiles.ps1`
+  - Exit code `0`; dry-run generated valid `ollama create` commands.
+  - `pwsh -File .\scripts\verify-ollama-context-profiles.ps1`
+  - Exit code `0`; aliases currently missing until explicit apply step.
+  - `cargo check -p mike`
+  - Compilation OK (`Finished dev profile`; non-blocking warnings only).
+- Formal validation after Tauri Svelte config fix:
+  - `.\frontend\node_modules\.bin\tauri.cmd dev --config src-tauri/tauri.svelte.conf.json`
+  - Vite dev server started on `http://127.0.0.1:5173/` and Tauri DevCommand started successfully (running background process).
+- Formal validation after local-role dropdown fix:
+  - `pnpm --dir frontend typecheck`
+  - `svelte-check found 0 errors and 0 warnings`.
+- Formal validation after provider/model coherence fix:
+  - `pnpm --dir frontend typecheck`
+  - `svelte-check found 0 errors and 0 warnings`.
+- Formal validation after README command update:
+  - `pnpm --dir frontend typecheck`
+  - `svelte-check found 0 errors and 0 warnings`.
+- Formal validation after GPU-server balanced catalogue update:
+  - `cargo check -p mike`
+  - Compilation OK (`Finished dev profile`; non-blocking warnings only).
+- Runtime validation after balanced catalogue update:
+  - `.\frontend\node_modules\.bin\tauri.cmd dev --config src-tauri/tauri.svelte.conf.json`
+  - Vite dev server started on `http://127.0.0.1:5173/`; Tauri DevCommand running.
+- Formal validation after local-balanced runtime fixes:
+  - `cargo check -p mike`
+  - Compilation OK (`Finished dev profile`; non-blocking warnings only).
+- Formal validation after thinking-visibility refinement:
+  - `cargo check -p mike`
+  - Compilation OK (`Finished dev profile`; non-blocking warnings only).
+- Formal validation after upstream-payload logging enhancement:
+  - `cargo check -p mike`
+  - Compilation OK (`Finished dev profile`; non-blocking warnings only).
+- Formal validation after forcing `think: false` on local requests:
+  - `cargo check -p mike`
+  - Compilation OK (`Finished dev profile`; non-blocking warnings only).
+- Formal validation after SSE buffering/parser fix:
+  - `cargo check -p mike`
+  - Compilation OK (`Finished dev profile`; non-blocking warnings only).
+- Formal validation after non-empty title fallback:
+  - `cargo check -p mike`
+  - Compilation OK (`Finished dev profile`; non-blocking warnings only).
+- Formal validation after Local provider settings UX/runtime-model binding:
+  - `pnpm --dir frontend typecheck`
+  - `svelte-check found 0 errors and 0 warnings`.
+- Formal validation after Local model field dropdown lock:
+  - `pnpm --dir frontend typecheck`
+  - `svelte-check found 0 errors and 0 warnings`.
+- Formal validation after removing Local model selector and defaulting
+  `Main` from runtime refresh:
+  - `pnpm --dir frontend typecheck`
+  - `svelte-check found 0 errors and 0 warnings`.
+- Formal validation after response-style prompt hardening:
+  - `cargo check -p mike`
+  - Compilation OK (`Finished dev profile`; non-blocking warnings only).
+- Formal validation after Recent Chats rename feature:
+  - `pnpm --dir frontend typecheck`
+  - `svelte-check found 0 errors and 0 warnings`.
+- Formal validation after new-chat doc-viewer auto-close:
+  - `pnpm --dir frontend typecheck`
+  - `svelte-check found 0 errors and 0 warnings`.
+- Formal validation after rename autofocus/caret UX polish:
+  - `pnpm --dir frontend typecheck`
+  - `svelte-check found 0 errors and 0 warnings`.
+- Formal validation after active-providers persistence:
+  - `pnpm --dir frontend typecheck`
+  - `svelte-check found 0 errors and 0 warnings`.
+- Formal validation after immediate provider-toggle persistence:
+  - `pnpm --dir frontend typecheck`
+  - `svelte-check found 0 errors and 0 warnings`.
+
+### Process
+
+- Per user request, every future development step must include at least
+  one formal technical validation (typecheck/build/targeted tests), and
+  both `HISTORY.md` and `PLAN_CODEX.md` must be updated with the
+  executed command(s) and result(s) for manual re-verification.
+
+## 2026-05-17 — Clean-room frontend rewrite (React → Svelte 5)
+
+The AGPL Next.js UI has been replaced by a clean-room Svelte 5 + Vite +
+Tailwind v4 application. The rewrite keeps the Rust backend contracts
+intact while rebuilding every screen in a new component system and store
+architecture.
+
+### Added — Svelte 5 foundations
+
+- clean-room scaffold + bootable Tauri shell; new design-system
+  primitives and layout shell (`Fase 0–1`). ([`b86fe5f`](#),
+  [`a6b7f3f`](#), [`9f20c21`](#))
+- API layer + Svelte runes stores + auth flow (`Fase 2–3`).
+  ([`5b45e71`](#))
+- Routed shell + Workflows screen (`Fase 4`). ([`2e42c92`](#))
+- Theme toggle (light/dark/system) and i18n store; locale bundles back
+  to 6 languages. ([`70e75d9`](#), [`43251fb`](#), [`501f58d`](#))
+
+### Added — Core product screens
+
+- Assistant chat with streaming responses, attachments, and model
+  selection. ([`c92f2a0`](#))
+- Projects screen (list/create/edit/delete) with project detail workflow.
+  ([`6ca253e`](#))
+- Tabular reviews screen. ([`0b8fe49`](#))
+- Workflow creation modal + editor path. ([`def3757`](#))
+- Templates (DOCX) screen. ([`4e1f6bd`](#))
+- Settings screens: profile/security, LLM models, MCP servers.
+  ([`f8a7700`](#), [`3c6863e`](#), [`5f0b4ea`](#))
+- Sidebar refinements (chat list, sticky settings). ([`9593df8`](#))
+
+### Removed
+
+- Legacy React/Next.js frontend removed from the repository.
+  ([`0a9bbcf`](#))
+
+### Docs
+
+- README reframed to explain the blind Svelte rewrite and code
+  independence; screenshots refreshed. ([`6342131`](#), [`46de002`](#))
+- Svelte rewrite gap-analysis document added. ([`def85a1`](#))
+
 ## 2026-05-14 — Toolkit commercialista (22 workflows + 3 DOCX templates)
 
 Mirror del toolkit medico-legale shipped earlier today, this time for

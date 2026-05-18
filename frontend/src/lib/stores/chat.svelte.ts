@@ -2,6 +2,7 @@
 
 import { chatApi, streamChat } from '$lib/api/chat'
 import { modelsStore } from '$lib/stores/models.svelte'
+import { docViewer } from '$lib/stores/doc-viewer.svelte'
 import { toCitation } from '$lib/types/citation'
 import type {
   Chat,
@@ -31,6 +32,104 @@ function toOutgoing(m: ChatMessage): OutgoingMessage {
       ? { files: m.files.map((f) => ({ document_id: f.document_id })) }
       : {}),
   }
+}
+
+/**
+ * Payload-size guardrail for `/chat` streaming requests.
+ *
+ * Quality-first strategy: let the backend summarizer handle normal
+ * context management (it is model-aware and triggers near 80% of the
+ * real context window). Frontend compaction is only an emergency brake
+ * for extremely large payloads (pathological long sessions), to protect
+ * transport/latency without degrading answer quality in regular chats.
+ */
+const EMERGENCY_MAX_CONTEXT_MESSAGES = 80
+const EMERGENCY_MAX_CONTEXT_CHARS = 240_000
+const EMERGENCY_PINNED_STRUCTURED_USER_MESSAGES = 6
+
+interface EmergencyBudget {
+  maxMessages: number
+  maxChars: number
+}
+
+function normalizeModelId(id: string): string {
+  return id.toLowerCase().replace(/^openai:/, '').replace(/^local:/, '')
+}
+
+function contextWindowForModel(modelId: string): number | undefined {
+  const normalized = normalizeModelId(modelId)
+  const hit = modelsStore.allModels.find((m) => normalizeModelId(m.id) === normalized)
+  return hit?.context_window
+}
+
+function emergencyBudgetForModel(modelId?: string | null): EmergencyBudget {
+  const id = (modelId ?? '').trim()
+  const normalized = normalizeModelId(id)
+  const cw = id ? contextWindowForModel(id) : undefined
+
+  if (cw != null) {
+    if (cw >= 1_000_000) return { maxMessages: 220, maxChars: 1_500_000 }
+    if (cw >= 200_000) return { maxMessages: 160, maxChars: 900_000 }
+    if (cw >= 128_000) return { maxMessages: 140, maxChars: 700_000 }
+    if (cw >= 32_000) return { maxMessages: 100, maxChars: 360_000 }
+  }
+
+  // Local/OpenAI-compatible endpoints often serve Ollama/vLLM with larger
+  // context windows than the conservative generic fallback.
+  if (
+    normalized.startsWith('ollama') ||
+    normalized.includes('vllm') ||
+    normalized.startsWith('qwen') ||
+    normalized.startsWith('llama') ||
+    id.toLowerCase().startsWith('local:')
+  ) {
+    return { maxMessages: 140, maxChars: 700_000 }
+  }
+
+  return {
+    maxMessages: EMERGENCY_MAX_CONTEXT_MESSAGES,
+    maxChars: EMERGENCY_MAX_CONTEXT_CHARS,
+  }
+}
+
+function estimateOutgoingChars(all: OutgoingMessage[]): number {
+  return all.reduce((n, m) => {
+    const filesCost = (m.files?.length ?? 0) * 40
+    const workflowCost = m.workflow?.title.length ?? 0
+    const templateCost = m.template?.title.length ?? 0
+    return n + m.content.length + filesCost + workflowCost + templateCost + 24
+  }, 0)
+}
+
+function compactOutgoingContext(all: OutgoingMessage[], modelId?: string | null): OutgoingMessage[] {
+  const budget = emergencyBudgetForModel(modelId)
+  const estimatedChars = estimateOutgoingChars(all)
+  const emergency = all.length > budget.maxMessages || estimatedChars > budget.maxChars
+  if (!emergency) return all
+
+  const tailStart = Math.max(0, all.length - budget.maxMessages)
+  const keep = new Set<number>()
+
+  for (let i = tailStart; i < all.length; i++) keep.add(i)
+
+  // Keep first user turn as a stable task anchor.
+  const firstUserIdx = all.findIndex((m) => m.role === 'user')
+  if (firstUserIdx >= 0) keep.add(firstUserIdx)
+
+  // Keep a few older structured user turns (attachments/workflow/template)
+  // because they often encode constraints the model should not forget.
+  let pinned = 0
+  for (let i = tailStart - 1; i >= 0 && pinned < EMERGENCY_PINNED_STRUCTURED_USER_MESSAGES; i--) {
+    const m = all[i]
+    const structured =
+      m.role === 'user' && (!!m.workflow || !!m.template || (m.files?.length ?? 0) > 0)
+    if (structured) {
+      keep.add(i)
+      pinned++
+    }
+  }
+
+  return all.filter((_, idx) => keep.has(idx))
 }
 
 function createChatStore() {
@@ -90,6 +189,7 @@ function createChatStore() {
       activeId = null
       messages = []
       error = null
+      docViewer.closeAll()
     },
 
     async selectChat(id: string) {
@@ -127,6 +227,13 @@ function createChatStore() {
       }
     },
 
+    async rename(id: string, title: string) {
+      const next = title.trim()
+      if (!next) return
+      await chatApi.rename(id, next)
+      chats = chats.map((c) => (c.id === id ? { ...c, title: next } : c))
+    },
+
     /** Send a user message and stream the assistant reply. */
     async send(text: string, attach: SendAttachments = {}) {
       if (streaming || !text.trim()) return
@@ -152,7 +259,20 @@ function createChatStore() {
         ...(attach.files && attach.files.length ? { files: attach.files } : {}),
       }
       messages = [...messages, userMsg]
-      const outgoing = messages.map(toOutgoing)
+      const model = modelsStore.settings.main_model
+      const outgoingAll = messages.map(toOutgoing)
+      const budget = emergencyBudgetForModel(model)
+      const outgoing = compactOutgoingContext(outgoingAll, model)
+      if (outgoing.length !== outgoingAll.length) {
+        console.info('[chat] context compacted before stream', {
+          before: outgoingAll.length,
+          after: outgoing.length,
+          maxMessages: budget.maxMessages,
+          maxChars: budget.maxChars,
+          model: model ?? '(backend default)',
+          strategy: 'quality-first-emergency-only',
+        })
+      }
       messages = [
         ...messages,
         { role: 'assistant', content: '', streaming: true, steps: [], citations: [] },
@@ -164,7 +284,6 @@ function createChatStore() {
         return last && last.role === 'assistant' ? last : null
       }
 
-      const model = modelsStore.settings.main_model
       streamingModel = model ?? null
       abortCtrl = streamChat(
         {
