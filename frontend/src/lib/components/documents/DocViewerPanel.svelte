@@ -127,21 +127,40 @@
   }
 
   // ── Resize handle ────────────────────────────────────────────────
-  let resizing = false
+  // The grip uses pointer capture: once the drag starts, every move/up
+  // event for that pointer is routed to the grip element itself — even
+  // when the cursor travels over the chat pane or a document renderer.
+  // Window-level listeners alone would lose the stream the moment the
+  // cursor crossed another element, freezing the drag mid-resize.
+  let resizing = $state(false)
   function startResize(e: PointerEvent) {
-    resizing = true
     e.preventDefault()
+    const grip = e.currentTarget as HTMLElement
+    grip.setPointerCapture(e.pointerId)
+    resizing = true
+    // Suppress text selection / cursor flicker for the whole drag.
+    document.body.style.userSelect = 'none'
+    document.body.style.cursor = 'col-resize'
+
     const onMove = (ev: PointerEvent) => {
-      if (!resizing) return
       docViewer.setWidth(window.innerWidth - ev.clientX)
     }
-    const onUp = () => {
+    const onUp = (ev: PointerEvent) => {
       resizing = false
-      window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', onUp)
+      document.body.style.userSelect = ''
+      document.body.style.cursor = ''
+      try {
+        grip.releasePointerCapture(ev.pointerId)
+      } catch {
+        // pointer already released — nothing to do
+      }
+      grip.removeEventListener('pointermove', onMove)
+      grip.removeEventListener('pointerup', onUp)
+      grip.removeEventListener('pointercancel', onUp)
     }
-    window.addEventListener('pointermove', onMove)
-    window.addEventListener('pointerup', onUp)
+    grip.addEventListener('pointermove', onMove)
+    grip.addEventListener('pointerup', onUp)
+    grip.addEventListener('pointercancel', onUp)
   }
 </script>
 
@@ -168,10 +187,11 @@
     <div
       role="separator"
       aria-label="Resize document viewer"
+      aria-orientation="vertical"
       tabindex="-1"
       onpointerdown={startResize}
-      class="absolute left-0 top-0 h-full w-1 -ml-0.5 cursor-col-resize z-10
-             hover:bg-(--color-brand-400)"
+      class="absolute left-0 top-0 h-full w-1.5 -ml-1 cursor-col-resize z-10 touch-none
+             hover:bg-(--color-brand-400) {resizing ? 'bg-(--color-brand-400)' : ''}"
     ></div>
 
     <!-- tab bar -->
