@@ -692,9 +692,42 @@ fn build_mcp_system_prompt(servers: &[McpDiscovered]) -> String {
     s
 }
 
+/// Repair the invalid backslash escapes LLMs routinely emit inside the
+/// `<CITATIONS>` JSON. The model copies verbatim quotes and over-escapes
+/// them — most commonly an apostrophe as `\'`, which is NOT a legal JSON
+/// escape and makes `serde_json` reject the whole block. JSON only
+/// allows `\` before `" \ / b f n r t u`; for any other follower the
+/// backslash is spurious, so we drop it and keep the character. This
+/// only ever turns an unparseable block into a parseable one.
+fn repair_json_escapes(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.peek() {
+            Some(&n) if matches!(n, '"' | '\\' | '/' | 'b' | 'f' | 'n' | 'r' | 't' | 'u') => {
+                out.push('\\');
+                out.push(n);
+                chars.next();
+            }
+            // Spurious escape (e.g. `\'`): drop the backslash, keep the char.
+            Some(&n) => {
+                out.push(n);
+                chars.next();
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
 /// Extract the JSON inside a `<CITATIONS>...</CITATIONS>` block at the end
-/// of the assistant response. Tolerant of surrounding whitespace and code
-/// fences. Returns the parsed `Value` (an array) or `None`.
+/// of the assistant response. Tolerant of surrounding whitespace, code
+/// fences, and the invalid backslash escapes LLMs commonly emit. Returns
+/// the parsed `Value` (an array) or `None`.
 pub(crate) fn extract_citations_block(text: &str) -> Option<Value> {
     let lower = text.to_lowercase();
     let open = lower.rfind("<citations>")?;
@@ -705,7 +738,22 @@ pub(crate) fn extract_citations_block(text: &str) -> Option<Value> {
     // Strip optional Markdown fences like ```json … ```
     let inner = inner.trim_start_matches("```json").trim_start_matches("```").trim();
     let inner = inner.trim_end_matches("```").trim();
-    serde_json::from_str::<Value>(inner).ok()
+    if let Ok(v) = serde_json::from_str::<Value>(inner) {
+        return Some(v);
+    }
+    // Clean parse failed — most often an over-escaped apostrophe (`\'`).
+    // Retry once with the escapes repaired before giving up.
+    let repaired = repair_json_escapes(inner);
+    if repaired != inner {
+        if let Ok(v) = serde_json::from_str::<Value>(&repaired) {
+            tracing::info!(
+                "[chat] <CITATIONS> block parsed after repairing invalid JSON escapes"
+            );
+            return Some(v);
+        }
+    }
+    tracing::warn!("[chat] <CITATIONS> block found but is not valid JSON — citations dropped");
+    None
 }
 
 /// Result of processing one attached document.
@@ -3954,6 +4002,28 @@ mod tests {
     #[test]
     fn returns_none_for_invalid_json() {
         assert!(extract_citations_block("<CITATIONS>not json</CITATIONS>").is_none());
+    }
+
+    #[test]
+    fn repairs_over_escaped_apostrophe() {
+        // LLMs copy verbatim quotes and emit `\'`, which is not legal
+        // JSON — the block must still parse after the escape repair.
+        let text = "Answer [c1].\n<CITATIONS>\n\
+            [{\"ref\": \"c1\", \"doc_id\": \"doc-0\", \
+              \"quote\": \"SOCIETA\\' ALBA LEASING S.P.A.\"}]\n\
+            </CITATIONS>";
+        let v = extract_citations_block(text).unwrap();
+        assert_eq!(v[0]["ref"], "c1");
+        assert_eq!(v[0]["quote"], "SOCIETA' ALBA LEASING S.P.A.");
+    }
+
+    #[test]
+    fn repair_leaves_valid_escapes_intact() {
+        // A clean block with legitimate \n / \" escapes must round-trip
+        // unchanged (it parses on the first attempt, no repair applied).
+        let text = "<CITATIONS>[{\"quote\":\"line one\\nsays \\\"hi\\\"\"}]</CITATIONS>";
+        let v = extract_citations_block(text).unwrap();
+        assert_eq!(v[0]["quote"], "line one\nsays \"hi\"");
     }
 
     #[test]
