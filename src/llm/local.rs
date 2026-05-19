@@ -297,6 +297,9 @@ fn parse_sse_line_opt(line: &str) -> Option<StreamEvent> {
                     name: f.name.unwrap_or_default(),
                     input: serde_json::from_str(f.arguments.as_deref().unwrap_or("{}"))
                         .unwrap_or(json!({})),
+                    // Gemini-only field; OpenAI-compatible endpoints
+                    // don't emit a thought signature.
+                    thought_signature: None,
                 })
             })
             .collect();

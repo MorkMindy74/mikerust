@@ -83,12 +83,20 @@ fn to_wire_contents(messages: &[Message]) -> Vec<Value> {
                     .tool_calls
                     .iter()
                     .map(|c| {
-                        json!({
+                        // Gemini 3.5+ requires us to echo back the
+                        // `thoughtSignature` that came with the original
+                        // functionCall part; omitting it on replay is a
+                        // hard 400 INVALID_ARGUMENT.
+                        let mut part = json!({
                             "functionCall": {
                                 "name": c.name,
                                 "args": c.input
                             }
-                        })
+                        });
+                        if let Some(sig) = &c.thought_signature {
+                            part["thoughtSignature"] = Value::String(sig.clone());
+                        }
+                        part
                     })
                     .collect();
                 out.push(json!({ "role": "model", "parts": parts }));
@@ -268,10 +276,19 @@ fn parse_gemini_sse_opt(line: &str, tc_counter: &mut u64) -> Option<StreamEvent>
             let fc = p.get("functionCall")?;
             *tc_counter += 1;
             let id = format!("gemini-fc-{tc_counter}");
+            // `thoughtSignature` is the opaque token the model emits on
+            // functionCall parts produced during a thinking pass; we
+            // MUST echo it back when the conversation is replayed, or
+            // Gemini 3.5+ rejects the request with 400 INVALID_ARGUMENT.
+            let thought_signature = p
+                .get("thoughtSignature")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
             Some(ToolCall {
                 id,
                 name: fc.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string(),
                 input: fc.get("args").cloned().unwrap_or(json!({})),
+                thought_signature,
             })
         })
         .collect();
@@ -302,6 +319,11 @@ fn parse_gemini_sse_opt(line: &str, tc_counter: &mut u64) -> Option<StreamEvent>
                 id,
                 name,
                 input: args,
+                // tool_code prose is text-mode output (the model
+                // bypassed structured functionCalls), so there is no
+                // signature to echo. Gemini accepts the absence here
+                // because the original part wasn't a functionCall.
+                thought_signature: None,
             }]));
         }
         return Some(StreamEvent::ContentDelta(text));
@@ -706,6 +728,50 @@ mod tests {
             Some(StreamEvent::ToolCalls(calls)) => assert_eq!(calls[0].id, "gemini-fc-2"),
             other => panic!("got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_sse_function_call_captures_thought_signature() {
+        // Gemini 3.5+ tags functionCall parts produced during a thinking
+        // pass with `thoughtSignature`; we must capture and echo it back.
+        let mut counter = 0u64;
+        let line = r#"data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"read_workflow","args":{"workflow_id":"x"}},"thoughtSignature":"opaque-token-abc"}]}}]}"#;
+        match parse_gemini_sse_opt(line, &mut counter) {
+            Some(StreamEvent::ToolCalls(calls)) => {
+                assert_eq!(calls[0].thought_signature.as_deref(), Some("opaque-token-abc"));
+            }
+            other => panic!("expected ToolCalls, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn to_wire_contents_echoes_thought_signature_on_replay() {
+        // Round-trip: an assistant turn carrying a Gemini tool call with
+        // a thought_signature must surface it as `thoughtSignature` on
+        // the wire, or Gemini 3.5+ rejects the request with
+        // 400 INVALID_ARGUMENT on the next iteration.
+        let msg = Message::assistant_tool_calls(vec![ToolCall {
+            id: "gemini-fc-1".into(),
+            name: "read_workflow".into(),
+            input: json!({"workflow_id": "x"}),
+            thought_signature: Some("opaque-token-abc".into()),
+        }]);
+        let wire = to_wire_contents(&[msg]);
+        assert_eq!(wire[0]["role"], "model");
+        let part = &wire[0]["parts"][0];
+        assert_eq!(part["functionCall"]["name"], "read_workflow");
+        assert_eq!(part["thoughtSignature"], "opaque-token-abc");
+
+        // And the field is omitted when None (other providers, legacy
+        // captures without a signature).
+        let msg_nosig = Message::assistant_tool_calls(vec![ToolCall {
+            id: "tool-1".into(),
+            name: "x".into(),
+            input: json!({}),
+            thought_signature: None,
+        }]);
+        let wire_nosig = to_wire_contents(&[msg_nosig]);
+        assert!(wire_nosig[0]["parts"][0].get("thoughtSignature").is_none());
     }
 
     #[test]

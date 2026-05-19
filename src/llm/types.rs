@@ -117,6 +117,17 @@ pub struct ToolCall {
     pub id: String,
     pub name: String,
     pub input: serde_json::Value,
+    /// Opaque per-part token Gemini 2.5+ emits on `functionCall` parts
+    /// generated during a thinking pass. The Gemini API requires the
+    /// client to echo this back verbatim on the corresponding
+    /// `functionCall` part when re-submitting the conversation for the
+    /// next turn, or the request is rejected with
+    /// `400 INVALID_ARGUMENT: Function call is missing a
+    /// thought_signature in functionCall parts`. Always `None` for
+    /// providers other than Gemini.
+    /// See https://ai.google.dev/gemini-api/docs/thought-signatures
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thought_signature: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

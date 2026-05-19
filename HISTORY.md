@@ -12,6 +12,68 @@ diff. For the upstream-sync audit trail (which fixes were ported from
 
 ---
 
+## 2026-05-20 — Gemini 3.5 Flash (GA) + thought_signature plumbing
+
+Google released **Gemini 3.5 Flash** as GA at Google I/O '26 (model id
+`gemini-3.5-flash`, 1M input / 64K output context, vision, tools,
+agentic thinking, no region restrictions). Registered the new model
+and promoted it to the default chat model. The release also surfaced
+a hard requirement that broke our tool-use loop on day one and is now
+fixed.
+
+### Added
+
+- **`config/model.json`** — `gemini-3.5-flash` registered at the top
+  of the Google model list (`standard` tier, `1_048_576` context,
+  `65_536` output, vision + tools + thinking, `preview: false`).
+  Released 2026-05-19 GA, available globally.
+- **`src/llm/types.rs`** — `ToolCall::thought_signature: Option<String>`.
+  Gemini 2.5+ tags `functionCall` parts produced during a thinking
+  pass with an opaque `thoughtSignature`; clients are required to echo
+  it back on replay, or Gemini 3.5+ rejects the next turn with
+  `400 INVALID_ARGUMENT: Function call is missing a thought_signature
+  in functionCall parts`. The field is serialised only when set, so
+  non-Gemini providers keep emitting a clean shape.
+- **`src/llm/gemini.rs`** — parse `thoughtSignature` from incoming SSE
+  `functionCall` parts; echo it back in `to_wire_contents` when
+  replaying assistant tool-calls; two new unit tests pin both halves
+  of the round-trip.
+
+### Changed
+
+- **`src/llm/summarize.rs`** — `context_window_tokens` recognises
+  `gemini-3.5-flash` as a 1M-token model.
+- **`src/llm/mod.rs`** — tests extended to cover `gemini-3.5-flash`
+  on `provider_for_model` / `supports_mcp_tools` /
+  `is_vision_capable` (the runtime predicates already match via
+  prefix / `contains`).
+- **`src/routes/chat.rs`** — the five default-model literals
+  (`gemini-3-flash-preview`) replaced with `gemini-3.5-flash`. New
+  chats, the generate-title fallback and the "first configured
+  provider" fallback all land on the GA model.
+- **`config/model.json`** — `gemini-3-flash-preview` marked
+  `legacy: true` with a `_legacy_note` pointing users at the new
+  3.5 entry; pinned-preview settings keep working but new picks see
+  the GA model first.
+
+### Fixed
+
+- **Gemini 3.5 Flash tool-use** — the first `read_workflow` call in
+  the running app failed with `400 INVALID_ARGUMENT: Function call
+  is missing a thought_signature in functionCall parts. ... Additional
+  data, function call default_api:read_workflow, position 6`. Plumbing
+  the `thoughtSignature` through `ToolCall` and back into the wire
+  payload on replay clears it; covered by
+  `parse_sse_function_call_captures_thought_signature` and
+  `to_wire_contents_echoes_thought_signature_on_replay`.
+
+### Tests
+
+`cargo test -p mike --lib llm::` → **66/66** green, including the
+two new thought-signature round-trip tests.
+
+---
+
 ## 2026-05-20 — ONNX Runtime downgrade preparatory to data-privacy work
 
 Downgraded the embedding stack from `ort 2.0.0-rc.12` / `fastembed 5.13.4`
