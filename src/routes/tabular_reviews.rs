@@ -37,6 +37,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/{id}/generate", post(generate_cells))
         .route("/{id}/regenerate-cell", post(regenerate_cell))
         .route("/{id}/clear-cells", post(clear_cells))
+        .route("/{id}/export", get(export_tabular_review))
 }
 
 // ---------------------------------------------------------------------------
@@ -219,6 +220,88 @@ fn row_json(r: &ReviewRow) -> Value {
         "status": r.status,
         "cells": r.cells,
     })
+}
+
+// ---------------------------------------------------------------------------
+// GET /tabular-review/:id/export — download the grid as an .xlsx
+// ---------------------------------------------------------------------------
+async fn export_tabular_review(
+    State(state): State<Arc<AppState>>,
+    auth: AuthUser,
+    Path(id): Path<String>,
+) -> Result<Response, (StatusCode, Json<Value>)> {
+    use rust_xlsxwriter::{Format, Workbook};
+
+    // TabularReviewRow is a tuple: (id, title, project_id, workflow_id,
+    // columns_config, created_at, updated_at, domain).
+    let meta = load_review_meta(&state, &auth.user_id, &id).await?;
+    let cols = parse_columns(&meta.4);
+    let rows = load_review_rows(&state, &id).await?;
+
+    let mut workbook = Workbook::new();
+    let sheet = workbook.add_worksheet();
+    let header = Format::new().set_bold();
+    let xerr = |e: rust_xlsxwriter::XlsxError| {
+        err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
+    };
+
+    // Header: first column is the document name, then one per review column.
+    sheet
+        .write_with_format(0, 0, "Document", &header)
+        .map_err(xerr)?;
+    for (i, (_, label, _, _)) in cols.iter().enumerate() {
+        sheet
+            .write_with_format(0, (i + 1) as u16, label.as_str(), &header)
+            .map_err(xerr)?;
+    }
+
+    for (r, row) in rows.iter().enumerate() {
+        let rr = (r + 1) as u32;
+        sheet
+            .write(rr, 0, row.filename.as_deref().unwrap_or(""))
+            .map_err(xerr)?;
+        for (i, (key, _, _, _)) in cols.iter().enumerate() {
+            let content = row
+                .cells
+                .iter()
+                .find(|c| {
+                    c.get("key").and_then(|v| v.as_str()) == Some(key.as_str())
+                })
+                .and_then(|c| c.get("content").and_then(|v| v.as_str()))
+                .unwrap_or("");
+            sheet.write(rr, (i + 1) as u16, content).map_err(xerr)?;
+        }
+    }
+
+    let bytes = workbook.save_to_buffer().map_err(xerr)?;
+    let safe_title: String = meta
+        .1
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let filename = format!("{}.xlsx", safe_title.trim());
+
+    Ok((
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    .to_string(),
+            ),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        bytes,
+    )
+        .into_response())
 }
 
 // ---------------------------------------------------------------------------

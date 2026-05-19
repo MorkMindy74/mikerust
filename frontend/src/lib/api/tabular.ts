@@ -59,6 +59,19 @@ export const tabularApi = {
       method: 'POST',
       body: { row_ids },
     }),
+
+  /** Download the review grid as an .xlsx blob. */
+  exportXlsx: async (id: string): Promise<Blob> => {
+    const res = await fetch(
+      new URL(
+        `/tabular-review/${encodeURIComponent(id)}/export`,
+        apiBase.url || 'http://127.0.0.1:3001',
+      ),
+      { headers: { Authorization: `Bearer ${authStore.token ?? ''}` } },
+    )
+    if (!res.ok) throw new Error(`export failed (${res.status})`)
+    return res.blob()
+  },
 }
 
 export interface GenerateCallbacks {

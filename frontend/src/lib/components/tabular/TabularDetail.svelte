@@ -20,7 +20,7 @@
   import { i18n } from '$lib/stores/i18n.svelte'
   import { domainLabel } from '$lib/types/domain'
   import type { TabularReview, TabularRow, TabularCell } from '$lib/types/tabular'
-  import { ArrowLeft, Play, Plus, Eraser, AlertCircle, RefreshCw, FileText } from 'lucide-svelte'
+  import { ArrowLeft, Play, Plus, Eraser, AlertCircle, RefreshCw, FileText, Download } from 'lucide-svelte'
 
   let { id, onback }: { id: string; onback: () => void } = $props()
 
@@ -44,6 +44,24 @@
       error = (e as Error).message
     } finally {
       loading = false
+    }
+  }
+
+  let exporting = $state(false)
+  async function exportXlsx() {
+    exporting = true
+    try {
+      const blob = await tabularApi.exportXlsx(id)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${review?.title ?? 'review'}.xlsx`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      toastStore.danger(t('Errors.somethingWrong'), { detail: (e as Error).message })
+    } finally {
+      exporting = false
     }
   }
 
@@ -210,6 +228,15 @@
           </Button>
           <Button size="sm" variant="ghost" onclick={clearResults} disabled={running}>
             <Eraser size={14} class="mr-1" />{t('TabularReviews.clearResults')}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onclick={exportXlsx}
+            loading={exporting}
+            disabled={rows.length === 0}
+          >
+            <Download size={14} class="mr-1" />{t('TabularReviews.exportToExcel')}
           </Button>
           {#if running}
             <Button size="sm" variant="secondary" onclick={stop}>{t('Common.stop')}</Button>

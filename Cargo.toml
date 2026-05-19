@@ -133,9 +133,11 @@ arrow-schema = "53"
 rtf-parser = "0.4"
 
 # ------------------------------------------------------------------
-# XLSX parsing — calamine (pure Rust, supports xlsx, xls, xlsb, ods)
+# XLSX — calamine reads (xlsx/xls/xlsb/ods); rust_xlsxwriter writes.
+# Both pure Rust. Used by the tabular-review Excel import/export.
 # ------------------------------------------------------------------
 calamine = "0.26"
+rust_xlsxwriter = "0.79"
 
 # ------------------------------------------------------------------
 # HTTP client — LLM API calls + MCP client + SSE streaming
