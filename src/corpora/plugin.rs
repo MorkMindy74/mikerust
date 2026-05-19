@@ -103,6 +103,15 @@ pub struct CorpusPlugin {
     #[serde(default = "default_true")]
     pub enabled_by_default: bool,
 
+    /// Whether the corpus is offered to the user at all. `false`
+    /// retires a corpus whose connector isn't verified working
+    /// end-to-end — the manifest stays on disk (revivable by flipping
+    /// the flag) but the UI hides it entirely. Distinct from
+    /// `enabled_by_default` (per-user on/off of a *working* corpus)
+    /// and from `is_runnable()` (does an adapter exist at all).
+    #[serde(default = "default_true")]
+    pub available: bool,
+
     /// How MikeRust actually fetches and indexes documents from
     /// this corpus. Discriminated union — see `CorpusStrategy`.
     pub strategy: CorpusStrategy,

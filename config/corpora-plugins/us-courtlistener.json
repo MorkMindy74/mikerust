@@ -20,6 +20,7 @@
         "search_mode": "free-text",
         "fetch_format": "json"
     },
+    "available": false,
     "strategy": {
         "kind": "http-fetch-per-id",
         "search_by_id": {

@@ -13,6 +13,7 @@
     "identifier_label": "LEGIARTI",
     "identifier_example": "LEGIARTI000006419297",
     "enabled_by_default": false,
+    "available": false,
     "discovery": {
         "jurisdiction": "fr",
         "doc_types": ["legislation"],

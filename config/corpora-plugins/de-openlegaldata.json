@@ -13,6 +13,7 @@
     "identifier_label": "Case ID",
     "identifier_example": "279301",
     "enabled_by_default": true,
+    "available": false,
     "discovery": {
         "jurisdiction": "de",
         "doc_types": ["case_law"],

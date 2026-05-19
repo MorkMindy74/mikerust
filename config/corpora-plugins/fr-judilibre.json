@@ -13,6 +13,7 @@
     "identifier_label": "Decision ID",
     "identifier_example": "JURI000000000000",
     "enabled_by_default": false,
+    "available": false,
     "discovery": {
         "jurisdiction": "fr",
         "doc_types": ["case_law"],

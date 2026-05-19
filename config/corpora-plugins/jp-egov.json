@@ -13,6 +13,7 @@
     "identifier_label": "LawId",
     "identifier_example": "417AC0000000086",
     "enabled_by_default": true,
+    "available": false,
     "discovery": {
         "jurisdiction": "jp",
         "doc_types": ["legislation"],

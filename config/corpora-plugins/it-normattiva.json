@@ -13,6 +13,7 @@
     "identifier_label": "ELI path",
     "identifier_example": "/eli/id/2024/01/01/legge/1/sg",
     "enabled_by_default": true,
+    "available": false,
     "discovery": {
         "jurisdiction": "it",
         "doc_types": ["legislation"],

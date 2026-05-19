@@ -13,6 +13,7 @@
     "identifier_label": "InfoLEG ID",
     "identifier_example": "123456",
     "enabled_by_default": true,
+    "available": false,
     "discovery": {
         "jurisdiction": "ar",
         "doc_types": ["legislation"],

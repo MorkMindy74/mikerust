@@ -5,7 +5,7 @@
         "it": "Paesi Bassi — Rechtspraak",
         "en": "Netherlands — Rechtspraak"
     },
-    "description": "Giurisprudenza olandese (Rechtspraak). Fonte attiva con ricerca e fetch via adapter runtime.",
+    "description": "Giurisprudenza olandese (Rechtspraak). Fonte resa selezionabile in UI, con adapter runtime in roadmap.",
     "homepage": "https://www.rechtspraak.nl/",
     "languages": ["nl"],
     "default_language": "nl",
@@ -13,13 +13,7 @@
     "identifier_label": "ECLI",
     "identifier_example": "ECLI:NL:HR:2024:1234",
     "enabled_by_default": true,
-    "discovery": {
-        "jurisdiction": "nl",
-        "doc_types": ["case_law"],
-        "auth": "public",
-        "search_mode": "free-text",
-        "fetch_format": "xml"
-    },
+    "available": false,
     "strategy": {
         "kind": "http-fetch-per-id",
         "search_by_id": {

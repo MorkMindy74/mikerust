@@ -13,6 +13,7 @@
     "identifier_label": "Register ID",
     "identifier_example": "C2004A00594",
     "enabled_by_default": true,
+    "available": false,
     "discovery": {
         "jurisdiction": "au",
         "doc_types": ["legislation"],

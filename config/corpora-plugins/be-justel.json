@@ -13,6 +13,7 @@
     "identifier_label": "ELI / Numac",
     "identifier_example": "2019/01/01/123",
     "enabled_by_default": true,
+    "available": false,
     "discovery": {
         "jurisdiction": "be",
         "doc_types": ["legislation"],

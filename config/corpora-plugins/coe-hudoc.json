@@ -13,6 +13,7 @@
     "identifier_label": "HUDOC itemid",
     "identifier_example": "001-233001",
     "enabled_by_default": false,
+    "available": false,
     "discovery": {
         "jurisdiction": "coe",
         "doc_types": ["case_law"],

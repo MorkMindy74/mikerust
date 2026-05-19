@@ -32,12 +32,14 @@
     return label === key ? code.toUpperCase() : label
   }
 
-  // Every runnable corpus gets a tab. EUR-Lex renders its dedicated
-  // EurlexSection (via the active === 'eurlex' branch below); CNIL,
-  // Italian-Legal and every declarative plugin render CorpusSection.
+  // A corpus gets a tab only when it has a runnable adapter AND its
+  // manifest hasn't retired it (`available: false`). EUR-Lex renders
+  // its dedicated EurlexSection (via the active === 'eurlex' branch
+  // below); CNIL, Italian-Legal and declarative plugins render
+  // CorpusSection.
   const allCorpora = $derived.by(() => {
     return corpora
-      .filter((c) => c.runnable)
+      .filter((c) => c.runnable && c.available)
       .sort((a, b) => a.display_name.localeCompare(b.display_name))
   })
 

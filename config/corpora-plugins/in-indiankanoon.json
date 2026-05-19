@@ -13,6 +13,7 @@
     "identifier_label": "tid",
     "identifier_example": "123456789",
     "enabled_by_default": false,
+    "available": false,
     "discovery": {
         "jurisdiction": "in",
         "doc_types": ["legislation", "case_law"],

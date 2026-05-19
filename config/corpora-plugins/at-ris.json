@@ -13,6 +13,7 @@
     "identifier_label": "RIS Doc ID",
     "identifier_example": "leg:00000000",
     "enabled_by_default": true,
+    "available": false,
     "discovery": {
         "jurisdiction": "at",
         "doc_types": ["legislation", "case_law"],

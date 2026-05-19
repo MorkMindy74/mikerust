@@ -13,6 +13,7 @@
     "identifier_label": "Citation",
     "identifier_example": "2018/act/7",
     "enabled_by_default": true,
+    "available": false,
     "discovery": {
         "jurisdiction": "ie",
         "doc_types": ["legislation"],

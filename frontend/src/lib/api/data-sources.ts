@@ -173,6 +173,8 @@ export interface CorpusItem {
   identifier_label: string
   identifier_example: string
   enabled_by_default: boolean
+  /** Manifest kill switch — false retires a non-working connector. */
+  available: boolean
   runnable: boolean
   capabilities: CorpusCapabilities
   sources: CorpusSourceItem[]

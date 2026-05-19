@@ -90,6 +90,9 @@ struct CorpusItem {
     identifier_label: String,
     identifier_example: Option<String>,
     enabled_by_default: bool,
+    /// Manifest-level kill switch — `false` retires a corpus whose
+    /// connector isn't verified working; the UI hides it.
+    available: bool,
     runnable: bool,
     capabilities: Capabilities,
     sources: Vec<CorpusSource>,
@@ -109,6 +112,7 @@ fn project(p: &crate::corpora::plugin::CorpusPlugin) -> CorpusItem {
         identifier_label: p.identifier_label.clone(),
         identifier_example: p.identifier_example.clone(),
         enabled_by_default: p.enabled_by_default,
+        available: p.available,
         runnable: p.is_runnable(),
         capabilities: p.capabilities.clone(),
         sources: p.sources.clone(),

@@ -13,6 +13,7 @@
     "identifier_label": "ELI IRI",
     "identifier_example": "https://fedlex.data.admin.ch/eli/cc/1999/404",
     "enabled_by_default": false,
+    "available": false,
     "discovery": {
         "jurisdiction": "ch",
         "doc_types": ["legislation"],
