@@ -23,7 +23,6 @@
   import { i18n } from '$lib/stores/i18n.svelte'
   import { domainLabel } from '$lib/types/domain'
   import type { ProjectDetail, IsolationMode } from '$lib/types/project'
-  import type { Chat } from '$lib/types/chat'
   import type { TabularReview } from '$lib/types/tabular'
   import { ArrowLeft, Download, MessageSquare, Table2 } from 'lucide-svelte'
 
@@ -38,8 +37,12 @@
   let loading = $state(true)
   let error = $state<string | null>(null)
 
-  let chats = $state<Chat[]>([])
-  let chatsLoaded = $state(false)
+  // Conversations are derived from the global chat store, the same list
+  // the sidebar renders — so deleting a chat in the sidebar drops it
+  // here immediately instead of leaving a stale local copy behind.
+  const chats = $derived(chatStore.chats.filter((c) => c.project_id === id))
+  let chatsRefreshed = $state(false)
+  let chatsRefreshing = $state(false)
   let reviews = $state<TabularReview[]>([])
   let reviewsLoaded = $state(false)
 
@@ -49,7 +52,8 @@
     loading = true
     error = null
     project = null
-    chatsLoaded = reviewsLoaded = false
+    chatsRefreshed = false
+    reviewsLoaded = false
     projectsApi
       .get(id)
       .then((p) => (project = p))
@@ -57,16 +61,6 @@
       .finally(() => (loading = false))
   })
 
-  async function loadChats() {
-    try {
-      const r = await chatApi.list()
-      chats = r.chats.filter((c) => c.project_id === id)
-    } catch {
-      chats = []
-    } finally {
-      chatsLoaded = true
-    }
-  }
   async function loadReviews() {
     try {
       reviews = await tabularApi.list({ project_id: id })
@@ -79,7 +73,13 @@
 
   $effect(() => {
     // The documents tab owns its own loading (ProjectFolderTree).
-    if (tab === 'chats' && !chatsLoaded) void loadChats()
+    // The chats list is reactive (derived from chatStore); we still
+    // refresh the store once on open to pick up chats created elsewhere.
+    if (tab === 'chats' && !chatsRefreshed) {
+      chatsRefreshed = true
+      chatsRefreshing = true
+      void chatStore.refreshChats().finally(() => (chatsRefreshing = false))
+    }
     if (tab === 'reviews' && !reviewsLoaded) void loadReviews()
   })
 
@@ -108,7 +108,7 @@
   async function newChat() {
     try {
       const created = await chatApi.createRecord(id)
-      await loadChats()
+      await chatStore.refreshChats()
       openChat(created.id)
     } catch (e) {
       toastStore.danger(t('Errors.somethingWrong'), { detail: (e as Error).message })
@@ -211,7 +211,7 @@
           <MessageSquare size={14} class="mr-1" />{t('Assistant.newChat')}
         </Button>
       </div>
-      {#if !chatsLoaded}
+      {#if chatsRefreshing && chats.length === 0}
         <div class="flex justify-center py-8"><Spinner size="sm" /></div>
       {:else if chats.length === 0}
         <EmptyState title={t('Sidebar.noChats')} description={t('Projects.emptyHint')} />
