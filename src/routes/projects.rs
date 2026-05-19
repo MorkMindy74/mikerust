@@ -24,6 +24,264 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/{id}/export", post(export_project))
         .route("/import", post(import_project))
         .route("/{id}/documents/{doc_id}", axum::routing::patch(rename_project_document))
+        // Document folder tree (per project).
+        .route("/{id}/folders", get(list_folders).post(create_folder))
+        .route(
+            "/{id}/folders/{folder_id}",
+            axum::routing::patch(update_folder).delete(delete_folder),
+        )
+        .route(
+            "/{id}/documents/{doc_id}/folder",
+            axum::routing::patch(move_project_document),
+        )
+}
+
+// ---------------------------------------------------------------------------
+// Project document folders — a per-project tree.
+// ---------------------------------------------------------------------------
+
+/// 404 unless `project_id` exists and is owned by `user_id`.
+async fn verify_project_owner(
+    state: &AppState,
+    user_id: &str,
+    project_id: &str,
+) -> Result<(), (StatusCode, Json<Value>)> {
+    let row: Option<(i64,)> =
+        sqlx::query_as("SELECT 1 FROM projects WHERE id = ? AND user_id = ?")
+            .bind(project_id)
+            .bind(user_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    if row.is_none() {
+        return Err(err(StatusCode::NOT_FOUND, "Project not found"));
+    }
+    Ok(())
+}
+
+/// 404 unless `folder_id` exists inside `project_id`.
+async fn folder_in_project(
+    state: &AppState,
+    project_id: &str,
+    folder_id: &str,
+) -> Result<(), (StatusCode, Json<Value>)> {
+    let row: Option<(i64,)> = sqlx::query_as(
+        "SELECT 1 FROM project_folders WHERE id = ? AND project_id = ?",
+    )
+    .bind(folder_id)
+    .bind(project_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    if row.is_none() {
+        return Err(err(StatusCode::NOT_FOUND, "Folder not found"));
+    }
+    Ok(())
+}
+
+/// True when re-parenting `folder_id` under `new_parent` would create a
+/// cycle — i.e. `new_parent` is `folder_id` itself or one of its
+/// descendants. Walks the parent chain over a one-shot snapshot.
+async fn would_create_cycle(
+    state: &AppState,
+    project_id: &str,
+    folder_id: &str,
+    new_parent: &str,
+) -> Result<bool, (StatusCode, Json<Value>)> {
+    let rows: Vec<(String, Option<String>)> = sqlx::query_as(
+        "SELECT id, parent_id FROM project_folders WHERE project_id = ?",
+    )
+    .bind(project_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    let parent_of: std::collections::HashMap<String, Option<String>> =
+        rows.into_iter().collect();
+
+    let mut cur = Some(new_parent.to_string());
+    let mut hops = 0usize;
+    while let Some(c) = cur {
+        if c == folder_id {
+            return Ok(true);
+        }
+        hops += 1;
+        if hops > 100_000 {
+            // Defensive: a pre-existing cycle would loop forever.
+            return Ok(true);
+        }
+        cur = parent_of.get(&c).cloned().flatten();
+    }
+    Ok(false)
+}
+
+async fn list_folders(
+    State(state): State<Arc<AppState>>,
+    auth: AuthUser,
+    Path(project_id): Path<String>,
+) -> ApiResult {
+    verify_project_owner(&state, &auth.user_id, &project_id).await?;
+    let rows: Vec<(String, Option<String>, String, String)> = sqlx::query_as(
+        "SELECT id, parent_id, name, created_at FROM project_folders \
+         WHERE project_id = ? ORDER BY name COLLATE NOCASE",
+    )
+    .bind(&project_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    let folders: Vec<Value> = rows
+        .into_iter()
+        .map(|(id, parent_id, name, created_at)| {
+            json!({ "id": id, "parent_id": parent_id, "name": name, "created_at": created_at })
+        })
+        .collect();
+    Ok(Json(json!({ "folders": folders })))
+}
+
+#[derive(Deserialize)]
+struct CreateFolderBody {
+    name: String,
+    parent_id: Option<String>,
+}
+
+async fn create_folder(
+    State(state): State<Arc<AppState>>,
+    auth: AuthUser,
+    Path(project_id): Path<String>,
+    Json(body): Json<CreateFolderBody>,
+) -> ApiResult {
+    verify_project_owner(&state, &auth.user_id, &project_id).await?;
+    let name = body.name.trim();
+    if name.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "folder name is required"));
+    }
+    if let Some(pid) = &body.parent_id {
+        folder_in_project(&state, &project_id, pid).await?;
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO project_folders (id, project_id, parent_id, name) \
+         VALUES (?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(&project_id)
+    .bind(&body.parent_id)
+    .bind(name)
+    .execute(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    Ok(Json(json!({ "id": id, "parent_id": body.parent_id, "name": name })))
+}
+
+/// PATCH a folder — rename (`name`) and/or move (`parent_id`). A raw
+/// `Value` body lets us tell "move to root" (`parent_id: null`) apart
+/// from "leave parent unchanged" (field absent).
+async fn update_folder(
+    State(state): State<Arc<AppState>>,
+    auth: AuthUser,
+    Path((project_id, folder_id)): Path<(String, String)>,
+    Json(body): Json<Value>,
+) -> ApiResult {
+    verify_project_owner(&state, &auth.user_id, &project_id).await?;
+    folder_in_project(&state, &project_id, &folder_id).await?;
+
+    if let Some(name) = body.get("name").and_then(|v| v.as_str()) {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(err(StatusCode::BAD_REQUEST, "folder name is required"));
+        }
+        sqlx::query("UPDATE project_folders SET name = ? WHERE id = ?")
+            .bind(name)
+            .bind(&folder_id)
+            .execute(&state.db)
+            .await
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    }
+
+    if let Some(pv) = body.get("parent_id") {
+        let new_parent = pv.as_str(); // None when JSON null → move to root
+        if let Some(pid) = new_parent {
+            if pid == folder_id {
+                return Err(err(
+                    StatusCode::BAD_REQUEST,
+                    "a folder cannot be its own parent",
+                ));
+            }
+            folder_in_project(&state, &project_id, pid).await?;
+            if would_create_cycle(&state, &project_id, &folder_id, pid).await? {
+                return Err(err(
+                    StatusCode::BAD_REQUEST,
+                    "cannot move a folder into its own subtree",
+                ));
+            }
+        }
+        sqlx::query("UPDATE project_folders SET parent_id = ? WHERE id = ?")
+            .bind(new_parent)
+            .bind(&folder_id)
+            .execute(&state.db)
+            .await
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    }
+    Ok(Json(json!({ "id": folder_id })))
+}
+
+async fn delete_folder(
+    State(state): State<Arc<AppState>>,
+    auth: AuthUser,
+    Path((project_id, folder_id)): Path<(String, String)>,
+) -> ApiResult {
+    verify_project_owner(&state, &auth.user_id, &project_id).await?;
+    folder_in_project(&state, &project_id, &folder_id).await?;
+    // Subfolders cascade (parent_id FK); documents fall back to the
+    // project root (project_folder_id FK SET NULL).
+    sqlx::query("DELETE FROM project_folders WHERE id = ? AND project_id = ?")
+        .bind(&folder_id)
+        .bind(&project_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    Ok(Json(json!({ "ok": true, "id": folder_id })))
+}
+
+#[derive(Deserialize)]
+struct MoveDocumentBody {
+    /// Target folder; `null` / absent moves the document to the project root.
+    folder_id: Option<String>,
+}
+
+async fn move_project_document(
+    State(state): State<Arc<AppState>>,
+    auth: AuthUser,
+    Path((project_id, doc_id)): Path<(String, String)>,
+    Json(body): Json<MoveDocumentBody>,
+) -> ApiResult {
+    verify_project_owner(&state, &auth.user_id, &project_id).await?;
+    let row: Option<(i64,)> = sqlx::query_as(
+        "SELECT 1 FROM documents \
+         WHERE id = ? AND project_id = ? AND user_id = ?",
+    )
+    .bind(&doc_id)
+    .bind(&project_id)
+    .bind(&auth.user_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    if row.is_none() {
+        return Err(err(StatusCode::NOT_FOUND, "Document not found"));
+    }
+    if let Some(fid) = &body.folder_id {
+        folder_in_project(&state, &project_id, fid).await?;
+    }
+    sqlx::query(
+        "UPDATE documents SET project_folder_id = ? \
+         WHERE id = ? AND project_id = ?",
+    )
+    .bind(&body.folder_id)
+    .bind(&doc_id)
+    .bind(&project_id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    Ok(Json(json!({ "id": doc_id, "folder_id": body.folder_id })))
 }
 
 // ---------------------------------------------------------------------------

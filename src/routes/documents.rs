@@ -70,7 +70,8 @@ async fn list_documents(
         .filter(|s| !s.is_empty() && crate::domain::is_valid(s));
 
     let mut sql = String::from(
-        "SELECT id, filename, file_type, size_bytes, status, created_at, domain \
+        "SELECT id, filename, file_type, size_bytes, status, created_at, domain, \
+                project_folder_id \
          FROM documents WHERE user_id = ?",
     );
     if q.project_id.is_some() {
@@ -81,8 +82,11 @@ async fn list_documents(
     }
     sql.push_str(" ORDER BY created_at DESC");
 
-    let mut query = sqlx::query_as::<_, (String, String, String, i64, Option<String>, String, String)>(&sql)
-        .bind(&auth.user_id);
+    let mut query = sqlx::query_as::<
+        _,
+        (String, String, String, i64, Option<String>, String, String, Option<String>),
+    >(&sql)
+    .bind(&auth.user_id);
     if let Some(pid) = &q.project_id {
         query = query.bind(pid);
     }
@@ -96,10 +100,11 @@ async fn list_documents(
 
     let docs: Vec<Value> = rows
         .into_iter()
-        .map(|(id, filename, file_type, size, status, created_at, domain)| {
+        .map(|(id, filename, file_type, size, status, created_at, domain, project_folder_id)| {
             json!({ "id": id, "filename": filename, "file_type": file_type,
                     "size_bytes": size, "status": status,
-                    "domain": domain, "created_at": created_at })
+                    "domain": domain, "created_at": created_at,
+                    "project_folder_id": project_folder_id })
         })
         .collect();
 
