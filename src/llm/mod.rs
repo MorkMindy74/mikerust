@@ -162,6 +162,7 @@ mod tests {
     fn provider_routing_gemini_family() {
         assert_eq!(provider_for_model("gemini-2.5-pro"), Provider::Gemini);
         assert_eq!(provider_for_model("gemini-3-flash-preview"), Provider::Gemini);
+        assert_eq!(provider_for_model("gemini-3.5-flash"), Provider::Gemini);
     }
 
     #[test]
@@ -198,6 +199,7 @@ mod tests {
         assert!(supports_mcp_tools("claude-sonnet-4-6"));
         assert!(supports_mcp_tools("gemini-2.5-pro"));
         assert!(supports_mcp_tools("gemini-2.5-flash"));
+        assert!(supports_mcp_tools("gemini-3.5-flash"));
         assert!(supports_mcp_tools("gpt-4o"));
         assert!(supports_mcp_tools("gpt-4.1"));
         assert!(supports_mcp_tools("openai:gpt-4o"));
@@ -215,6 +217,7 @@ mod tests {
         assert!(is_vision_capable("gpt-4o"));
         assert!(is_vision_capable("claude-opus-4-7"));
         assert!(is_vision_capable("gemini-2.5-pro"));
+        assert!(is_vision_capable("gemini-3.5-flash"));
         assert!(is_vision_capable("gemma-3-27b"));
         assert!(is_vision_capable("local:gemma3:4b"));
         assert!(is_vision_capable("openai:gpt-4-turbo"));

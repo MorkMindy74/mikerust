@@ -89,7 +89,10 @@ pub fn context_window_tokens(model: &str) -> usize {
     if m == "gemini-2.5-pro" || m.contains("gemini-3.1-pro") {
         return 1_000_000;
     }
-    if m.starts_with("gemini-2.5-flash") || m.starts_with("gemini-3-flash") {
+    if m.starts_with("gemini-2.5-flash")
+        || m.starts_with("gemini-3-flash")
+        || m.starts_with("gemini-3.5-flash")
+    {
         return 1_000_000;
     }
     if m.starts_with("gemini-1.5-pro") {
@@ -373,6 +376,7 @@ mod tests {
         assert_eq!(context_window_tokens("gemini-2.5-pro"), 1_000_000);
         assert_eq!(context_window_tokens("gemini-2.5-flash"), 1_000_000);
         assert_eq!(context_window_tokens("gemini-3-flash-preview"), 1_000_000);
+        assert_eq!(context_window_tokens("gemini-3.5-flash"), 1_000_000);
         assert_eq!(context_window_tokens("gemini-1.5-pro"), 2_000_000);
         assert_eq!(context_window_tokens("gemini-pro"), 32_000);
     }

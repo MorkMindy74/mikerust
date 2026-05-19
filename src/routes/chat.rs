@@ -2032,7 +2032,7 @@ async fn stream_chat_root(
     let user_settings = fetch_llm_settings(&state.db, &auth.user_id).await.ok();
     let raw_model = model_request
         .or_else(|| user_settings.as_ref().and_then(|s| s.main_model.clone()))
-        .unwrap_or_else(|| "gemini-3-flash-preview".to_string());
+        .unwrap_or_else(|| "gemini-3.5-flash".to_string());
 
     let local_config = build_local_config(&raw_model, user_settings.as_ref());
 
@@ -3634,7 +3634,7 @@ async fn post_message(
         user_settings
             .as_ref()
             .and_then(|s| s.main_model.clone())
-            .unwrap_or_else(|| "gemini-3-flash-preview".to_string())
+            .unwrap_or_else(|| "gemini-3.5-flash".to_string())
     });
     let model = raw_model.clone();
 
@@ -3831,7 +3831,7 @@ async fn generate_title(
                     .gemini_api_key
                     .as_ref()
                     .filter(|k| !k.trim().is_empty())
-                    .map(|_| "gemini-3-flash-preview".to_string()),
+                    .map(|_| "gemini-3.5-flash".to_string()),
                 _ => None,
             })
         })
@@ -3854,10 +3854,10 @@ async fn generate_title(
                 }
             }
             if s.claude_api_key.is_some() { return Some("claude-sonnet-4-6".to_string()); }
-            if s.gemini_api_key.is_some() { return Some("gemini-3-flash-preview".to_string()); }
+            if s.gemini_api_key.is_some() { return Some("gemini-3.5-flash".to_string()); }
             None
         })
-        .unwrap_or_else(|| "gemini-3-flash-preview".to_string());
+        .unwrap_or_else(|| "gemini-3.5-flash".to_string());
 
     tracing::info!("[chat] generate_title using model={title_model}");
 

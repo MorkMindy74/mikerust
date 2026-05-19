@@ -138,6 +138,20 @@
             ],
             "models": [
                 {
+                    "id": "gemini-3.5-flash",
+                    "display_name": "Gemini 3.5 Flash",
+                    "family": "gemini-3.5",
+                    "tier": "standard",
+                    "context_window": 1048576,
+                    "max_output_tokens": 65536,
+                    "supports_vision": true,
+                    "supports_tools": true,
+                    "supports_streaming": true,
+                    "supports_thinking": true,
+                    "preview": false,
+                    "_release_note": "Released 2026-05-19 at Google I/O '26 as GA; available globally with no region restrictions. Supersedes gemini-3-flash-preview."
+                },
+                {
                     "id": "gemini-2.5-pro",
                     "display_name": "Gemini 2.5 Pro",
                     "family": "gemini-2.5",
@@ -191,7 +205,7 @@
                 },
                 {
                     "id": "gemini-3-flash-preview",
-                    "display_name": "Gemini 3 Flash (preview)",
+                    "display_name": "Gemini 3 Flash (preview, superseded)",
                     "family": "gemini-3",
                     "tier": "standard",
                     "context_window": 1000000,
@@ -200,7 +214,9 @@
                     "supports_tools": true,
                     "supports_streaming": true,
                     "supports_thinking": true,
-                    "preview": true
+                    "preview": true,
+                    "legacy": true,
+                    "_legacy_note": "Superseded by gemini-3.5-flash (GA, 2026-05-19). Kept so users with the preview pinned in their settings don't lose their choice; new selections should pick the 3.5 GA entry above."
                 },
                 {
                     "id": "gemini-2.0-flash",
