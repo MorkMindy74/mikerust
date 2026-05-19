@@ -2371,44 +2371,85 @@ async fn stream_chat_root(
                                 result.len()
                             );
                         }
-                        // If this tool produced a downloadable document
-                        // (envelope `{ "doc_id": "...", "filename": "..." }`,
-                        // no error), surface it to the chat UI as a
-                        // `doc_created` event so the assistant message
-                        // grows a download card. Today this fires for
-                        // `generate_docx`; the same envelope is what any
-                        // future generator (xlsx, pdf-export, …) will
-                        // return, so the detection is on the shape rather
-                        // than the tool name.
-                        if let Ok(envelope) = serde_json::from_str::<Value>(&result)
-                            && envelope.get("error").is_none()
-                            && let (Some(doc_id), Some(filename)) = (
-                                envelope.get("doc_id").and_then(|v| v.as_str()),
-                                envelope.get("filename").and_then(|v| v.as_str()),
-                            )
+                        // Typed step events for the document / workflow
+                        // builtin tools. Name-based (not shape-based):
+                        // read_document also returns {doc_id,filename,…},
+                        // so a shape match used to mis-fire a bogus
+                        // download card for a plain read.
+                        //   generate_docx    → doc_created (download card,
+                        //                      persisted so it survives reload)
+                        //   read_document    → doc_read
+                        //   find_in_document → doc_find
+                        //   read_workflow    → workflow_applied
+                        // A future generator (xlsx, pdf-export, …) adds
+                        // its own arm here.
+                        if let Ok(rv) = serde_json::from_str::<Value>(&result)
+                            && rv.get("error").is_none()
                         {
-                            let payload = json!({
-                                "type": "doc_created",
-                                "filename": filename,
-                                "download_url": format!("/document/{doc_id}/download"),
-                                "document_id": doc_id,
-                            });
-                            let _ = tx
-                                .send(Ok(Event::default().data(payload.to_string())))
-                                .await;
-                            // Persist so the card re-renders on chat
-                            // reopen (see migration 0020 + get_chat
-                            // hydration). Stored as the same shape the
-                            // SSE event uses, plus `isStreaming: false`
-                            // because by the time we serialise it the
-                            // generation has finished.
-                            persistent_events.push(json!({
-                                "type": "doc_created",
-                                "filename": filename,
-                                "download_url": format!("/document/{doc_id}/download"),
-                                "document_id": doc_id,
-                                "isStreaming": false,
-                            }));
+                            let s = |k: &str| {
+                                rv.get(k).and_then(|v| v.as_str()).unwrap_or("")
+                            };
+                            match call.name.as_str() {
+                                "generate_docx" => {
+                                    let doc_id = s("doc_id");
+                                    let filename = s("filename");
+                                    if !doc_id.is_empty() && !filename.is_empty() {
+                                        let ev = json!({
+                                            "type": "doc_created",
+                                            "filename": filename,
+                                            "download_url": format!("/document/{doc_id}/download"),
+                                            "document_id": doc_id,
+                                        });
+                                        let _ = tx
+                                            .send(Ok(Event::default().data(ev.to_string())))
+                                            .await;
+                                        // Persisted so the download card
+                                        // re-renders when the chat reopens.
+                                        persistent_events.push(json!({
+                                            "type": "doc_created",
+                                            "filename": filename,
+                                            "download_url": format!("/document/{doc_id}/download"),
+                                            "document_id": doc_id,
+                                            "isStreaming": false,
+                                        }));
+                                    }
+                                }
+                                "read_document" => {
+                                    let ev = json!({
+                                        "type": "doc_read",
+                                        "doc_id": s("doc_id"),
+                                        "filename": s("filename"),
+                                    });
+                                    let _ = tx
+                                        .send(Ok(Event::default().data(ev.to_string())))
+                                        .await;
+                                }
+                                "find_in_document" => {
+                                    let ev = json!({
+                                        "type": "doc_find",
+                                        "doc_id": s("doc_id"),
+                                        "filename": s("filename"),
+                                        "query": s("query"),
+                                        "match_count": rv.get("match_count")
+                                            .and_then(|v| v.as_u64())
+                                            .unwrap_or(0),
+                                    });
+                                    let _ = tx
+                                        .send(Ok(Event::default().data(ev.to_string())))
+                                        .await;
+                                }
+                                "read_workflow" => {
+                                    let ev = json!({
+                                        "type": "workflow_applied",
+                                        "workflow_id": s("workflow_id"),
+                                        "title": s("title"),
+                                    });
+                                    let _ = tx
+                                        .send(Ok(Event::default().data(ev.to_string())))
+                                        .await;
+                                }
+                                _ => {}
+                            }
                         }
                         current_messages.push(Message::tool_result(&call.id, &call.name, &result));
                     }

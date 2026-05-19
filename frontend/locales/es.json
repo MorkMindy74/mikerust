@@ -461,7 +461,10 @@
     "interruptBody": "El chat actual todavía está recibiendo una respuesta de {model}. Si continúas, esa comunicación se interrumpirá.",
     "interruptConfirm": "Interrumpir y continuar",
     "genericModel": "el asistente",
-    "reasoning": "Razonamiento"
+    "reasoning": "Razonamiento",
+    "stepDocRead": "Leído {file}",
+    "stepDocFind": "Encontrado «{query}» ({count}) en {file}",
+    "stepWorkflowApplied": "Workflow {title} aplicado"
   },
   "People": {
     "addByEmail": "Añadir por correo electrónico…",

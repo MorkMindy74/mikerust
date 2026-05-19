@@ -7,11 +7,31 @@ import { toCitation } from '$lib/types/citation'
 import type {
   Chat,
   ChatMessage,
+  ChatStep,
   FileRef,
   OutgoingMessage,
   TemplateRef,
   WorkflowRef,
 } from '$lib/types/chat'
+
+/** Replace the most recent generic `tool` step for `toolName` with a
+ *  typed step (doc_read / doc_find / workflow_applied), so the UI shows
+ *  "Read contract.pdf" instead of "Running read_document…". Appends
+ *  when no matching tool step is found. */
+function upgradeToolStep(
+  steps: ChatStep[],
+  toolName: string,
+  typed: ChatStep,
+): void {
+  for (let i = steps.length - 1; i >= 0; i--) {
+    const s = steps[i]
+    if (s.kind === 'tool' && s.name === toolName) {
+      steps[i] = typed
+      return
+    }
+  }
+  steps.push(typed)
+}
 
 /** Attachments selected in the composer for the next user message. */
 export interface SendAttachments {
@@ -345,6 +365,32 @@ function createChatStore() {
               filename: doc.filename,
               documentId: doc.documentId,
               downloadUrl: doc.downloadUrl,
+            })
+          },
+          onDocRead: (filename) => {
+            const m = assistant()
+            if (!m) return
+            m.steps ??= []
+            upgradeToolStep(m.steps, 'read_document', { kind: 'doc_read', filename })
+          },
+          onDocFind: (query, filename, occurrences) => {
+            const m = assistant()
+            if (!m) return
+            m.steps ??= []
+            upgradeToolStep(m.steps, 'find_in_document', {
+              kind: 'doc_find',
+              query,
+              filename,
+              occurrences,
+            })
+          },
+          onWorkflowApplied: (title) => {
+            const m = assistant()
+            if (!m) return
+            m.steps ??= []
+            upgradeToolStep(m.steps, 'read_workflow', {
+              kind: 'workflow_applied',
+              title,
             })
           },
           onCitations: (data) => {

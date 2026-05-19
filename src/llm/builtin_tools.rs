@@ -301,6 +301,7 @@ async fn exec_find_in_document(
     }
     json!({
         "doc_id": doc_label,
+        "filename": filename,
         "query": query,
         "match_count": matches.len(),
         "matches": matches,

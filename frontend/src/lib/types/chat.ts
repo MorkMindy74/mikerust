@@ -43,6 +43,12 @@ export interface FileRef {
 export type ChatStep =
   | { kind: 'tool'; name: string; elapsedSecs: number; done: boolean }
   | { kind: 'doc'; filename: string; documentId: string; downloadUrl: string }
+  /** read_document finished — typed render of the generic tool step. */
+  | { kind: 'doc_read'; filename: string }
+  /** find_in_document finished. */
+  | { kind: 'doc_find'; query: string; filename: string; occurrences: number }
+  /** read_workflow finished — a workflow was applied to this turn. */
+  | { kind: 'workflow_applied'; title: string }
 
 export interface ChatMessage {
   role: ChatRole

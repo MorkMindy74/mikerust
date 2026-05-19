@@ -55,6 +55,10 @@ export interface ChatStreamCallbacks {
   /** Model reasoning / "thinking" chunks — shown in a collapsible block. */
   onReasoningDelta?: (text: string) => void
   onReasoningDone?: () => void
+  /** Typed builtin-tool steps — nicer than the generic tool_call_*. */
+  onDocRead?: (filename: string) => void
+  onDocFind?: (query: string, filename: string, occurrences: number) => void
+  onWorkflowApplied?: (title: string) => void
   onError: (message: string) => void
   onDone: () => void
 }
@@ -109,6 +113,19 @@ function dispatchSseChunk(chunk: string, cb: ChatStreamCallbacks): void {
         break
       case 'reasoning_done':
         cb.onReasoningDone?.()
+        break
+      case 'doc_read':
+        cb.onDocRead?.(String(ev.filename ?? ev.doc_id ?? ''))
+        break
+      case 'doc_find':
+        cb.onDocFind?.(
+          String(ev.query ?? ''),
+          String(ev.filename ?? ev.doc_id ?? ''),
+          Number(ev.match_count ?? 0),
+        )
+        break
+      case 'workflow_applied':
+        cb.onWorkflowApplied?.(String(ev.title ?? ''))
         break
       case 'error':
         cb.onError(String(ev.message ?? 'stream error'))

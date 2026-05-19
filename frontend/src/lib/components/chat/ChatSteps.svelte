@@ -9,7 +9,7 @@
   import { i18n } from '$lib/stores/i18n.svelte'
   import { docViewer } from '$lib/stores/doc-viewer.svelte'
   import { documentsApi } from '$lib/api/documents'
-  import { Check, FileText, Download } from 'lucide-svelte'
+  import { Check, FileText, Download, Eye, Search, Workflow } from 'lucide-svelte'
 
   let { steps }: { steps: ChatStep[] } = $props()
 
@@ -56,6 +56,27 @@
             {i18n.t('Assistant.slowToolHint')}
           </p>
         {/if}
+      </div>
+    {:else if step.kind === 'doc_read'}
+      <div class="flex items-center gap-2 text-xs text-(--color-text-secondary)">
+        <Eye size={13} class="text-(--color-success-500) shrink-0" />
+        <span>{i18n.t('Assistant.stepDocRead', { file: step.filename })}</span>
+      </div>
+    {:else if step.kind === 'doc_find'}
+      <div class="flex items-center gap-2 text-xs text-(--color-text-secondary)">
+        <Search size={13} class="text-(--color-success-500) shrink-0" />
+        <span>
+          {i18n.t('Assistant.stepDocFind', {
+            query: step.query,
+            count: step.occurrences,
+            file: step.filename,
+          })}
+        </span>
+      </div>
+    {:else if step.kind === 'workflow_applied'}
+      <div class="flex items-center gap-2 text-xs text-(--color-text-secondary)">
+        <Workflow size={13} class="text-(--color-success-500) shrink-0" />
+        <span>{i18n.t('Assistant.stepWorkflowApplied', { title: step.title })}</span>
       </div>
     {:else}
       <div
