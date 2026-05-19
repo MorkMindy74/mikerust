@@ -1007,6 +1007,30 @@ GENERAL GUIDANCE:
 - Do not use emojis in your responses
 "#;
 
+/// System-prompt block listing a project's indexed documents. They are
+/// exposed to the assistant as `doc-N` labels (read on demand via
+/// `read_document`) — NOT loaded inline, to keep the context small.
+/// `base` offsets the labels past the inline-attached documents so the
+/// two label ranges never collide.
+fn build_project_docs_prompt(base: usize, docs: &[(String, String)]) -> String {
+    if docs.is_empty() {
+        return String::new();
+    }
+    let mut s = String::from(
+        "PROJECT DOCUMENTS — this chat belongs to a project and the \
+         documents below are already part of it. They are available to \
+         you right now: open one in full with the `read_document` tool \
+         using its label, or search it with `find_in_document`. NEVER \
+         tell the user to attach these — they are already attached. \
+         When asked which documents the project has, list exactly \
+         these:\n",
+    );
+    for (i, (_, filename)) in docs.iter().enumerate() {
+        s.push_str(&format!("  - doc-{} : {}\n", base + i, filename));
+    }
+    s
+}
+
 fn build_doc_system_prompt(docs: &[DocPayload]) -> String {
     let with_text: Vec<&DocPayload> = docs.iter().filter(|d| d.text.is_some()).collect();
     let with_imgs: Vec<&DocPayload> = docs.iter().filter(|d| !d.images.is_empty()).collect();
@@ -1810,6 +1834,40 @@ async fn stream_chat_root(
         }
     }
 
+    // Project documents — when this chat belongs to a project, the
+    // project's indexed documents are made available to the assistant
+    // as labelled, read-on-demand entries (so it never tells the user
+    // to attach documents that are already in the project). They are
+    // NOT appended to `doc_ids`: that would load every project doc
+    // inline on every turn. Instead they get `doc-N` labels after the
+    // inline attachments and an inventory line in the system prompt.
+    let chat_project_id: Option<String> = sqlx::query_as::<_, (Option<String>,)>(
+        "SELECT project_id FROM chats WHERE id = ?",
+    )
+    .bind(&chat_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()
+    .and_then(|(p,)| p);
+    let project_documents: Vec<(String, String)> = if let Some(pid) = &chat_project_id {
+        sqlx::query_as::<_, (String, String)>(
+            "SELECT id, filename FROM documents \
+             WHERE project_id = ? AND user_id = ? AND status = 'ready' \
+             ORDER BY created_at ASC",
+        )
+        .bind(pid)
+        .bind(&auth.user_id)
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(id, _)| !doc_ids.contains(id))
+        .collect()
+    } else {
+        Vec::new()
+    };
+
     // Persist the *last* user message. We store:
     //   - the ORIGINAL content (raw user-typed text), not the
     //     marker-augmented form that goes to the LLM — markers like
@@ -1941,6 +1999,11 @@ async fn stream_chat_root(
     if !docs_prompt.is_empty() {
         sections.push(docs_prompt);
     }
+    let project_docs_prompt =
+        build_project_docs_prompt(doc_ids.len(), &project_documents);
+    if !project_docs_prompt.is_empty() {
+        sections.push(project_docs_prompt);
+    }
     if !mcp_prompt.is_empty() {
         sections.push(mcp_prompt);
     }
@@ -2000,6 +2063,11 @@ async fn stream_chat_root(
     let mut doc_label_map: HashMap<String, String> = HashMap::new();
     for (idx, doc_id) in doc_ids.iter().enumerate() {
         doc_label_map.insert(format!("doc-{idx}"), doc_id.clone());
+    }
+    // Project documents continue the label sequence after the inline
+    // attachments so read_document / find_in_document resolve them too.
+    for (i, (id, _)) in project_documents.iter().enumerate() {
+        doc_label_map.insert(format!("doc-{}", doc_ids.len() + i), id.clone());
     }
 
     tracing::info!(
