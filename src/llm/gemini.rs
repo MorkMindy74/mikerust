@@ -110,6 +110,53 @@ fn to_wire_contents(messages: &[Message]) -> Vec<Value> {
     out
 }
 
+/// `safetySettings` payload turning OFF all four content filters.
+///
+/// MikeRust is used on legal, insurance and PA workloads where the source
+/// material legitimately contains references to violence (sentences,
+/// claims), sexual content (employment-law / harassment cases), threats
+/// (anti-corruption files) and hate-speech evidence (discrimination
+/// litigation). Gemini's default `BLOCK_MEDIUM_AND_ABOVE` will silently
+/// refuse or empty-respond on those — invisible until the first refused
+/// case. The four categories Google currently exposes via the API
+/// (matches the SDK example) all go to OFF.
+fn safety_settings_off() -> Value {
+    json!([
+        { "category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "OFF" },
+        { "category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "OFF" },
+        { "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "OFF" },
+        { "category": "HARM_CATEGORY_HARASSMENT", "threshold": "OFF" },
+    ])
+}
+
+/// Build the `thinkingConfig` payload appropriate to the model family.
+///
+/// Gemini 3.5 (and later) exposes a discrete `thinkingLevel` enum
+/// (`OFF` / `LOW` / `MEDIUM` / `HIGH`). The default on Flash-class 3.5
+/// is `HIGH`, which observed empirically tends to burn output budget
+/// thinking instead of writing — implicated in the truncated NIS2
+/// report. `MEDIUM` is the documented balanced setting.
+///
+/// Gemini 2.5 uses the older integer `thinkingBudget` (in tokens);
+/// `-1` is the dynamic mode where the model chooses but stays within
+/// model-published caps.
+///
+/// Returns `None` for families that don't expose a thinking knob
+/// (e.g. legacy `gemini-1.5*`, `gemini-2.0*`).
+fn thinking_config_for_model(model: &str) -> Option<Value> {
+    let m = model.to_ascii_lowercase();
+    if m.starts_with("gemini-3.5")
+        || m.starts_with("gemini-3-flash")
+        || m.starts_with("gemini-3-pro")
+    {
+        Some(json!({ "thinkingLevel": "MEDIUM" }))
+    } else if m.starts_with("gemini-2.5") {
+        Some(json!({ "thinkingBudget": -1 }))
+    } else {
+        None
+    }
+}
+
 fn build_body(params: &StreamParams) -> Value {
     let mut body = json!({ "contents": to_wire_contents(&params.messages) });
     // Stable prefix first, volatile tail last: Gemini 2.5 implicit caching
@@ -135,6 +182,10 @@ fn build_body(params: &StreamParams) -> Value {
             })
             .collect();
         body["tools"] = json!([{ "function_declarations": function_declarations }]);
+    }
+    body["safetySettings"] = safety_settings_off();
+    if let Some(thinking) = thinking_config_for_model(&params.model) {
+        body["generationConfig"] = json!({ "thinkingConfig": thinking });
     }
     body
 }
@@ -681,6 +732,123 @@ mod tests {
         });
         let cleaned = sanitize_schema_for_gemini(&raw);
         assert!(cleaned.as_object().unwrap().get("required").is_none());
+    }
+
+    fn empty_params(model: &str) -> StreamParams {
+        StreamParams {
+            model: model.to_string(),
+            system_prompt: String::new(),
+            system_volatile: String::new(),
+            messages: vec![Message::user("hi".to_string())],
+            tools: vec![],
+            max_iterations: 1,
+            enable_thinking: false,
+            local_config: None,
+            claude_api_key: None,
+            gemini_api_key: None,
+            gemini_region: None,
+        }
+    }
+
+    #[test]
+    fn build_body_always_attaches_safety_settings_off() {
+        // Every Gemini call must carry the four safety categories set
+        // to OFF — legal / insurance / PA workloads legitimately touch
+        // violence / sex / threats / hate-speech material and the
+        // default `BLOCK_MEDIUM_AND_ABOVE` would silently refuse.
+        let body = build_body(&empty_params("gemini-3.5-flash"));
+        let settings = body["safetySettings"].as_array().expect("array");
+        assert_eq!(settings.len(), 4);
+        let categories: std::collections::HashSet<&str> = settings
+            .iter()
+            .map(|s| s["category"].as_str().unwrap())
+            .collect();
+        for required in [
+            "HARM_CATEGORY_HATE_SPEECH",
+            "HARM_CATEGORY_DANGEROUS_CONTENT",
+            "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+            "HARM_CATEGORY_HARASSMENT",
+        ] {
+            assert!(categories.contains(required), "missing category {required}");
+        }
+        for s in settings {
+            assert_eq!(s["threshold"], "OFF", "category {} not OFF", s["category"]);
+        }
+    }
+
+    #[test]
+    fn build_body_thinking_config_shape_is_model_aware() {
+        // Gemini 3.5 takes a discrete level enum; 2.5 takes the legacy
+        // integer thinking_budget. Wrong shape → 400 from Google.
+        let body_35 = build_body(&empty_params("gemini-3.5-flash"));
+        assert_eq!(
+            body_35["generationConfig"]["thinkingConfig"]["thinkingLevel"],
+            "MEDIUM"
+        );
+        assert!(body_35["generationConfig"]["thinkingConfig"]
+            .as_object()
+            .unwrap()
+            .get("thinkingBudget")
+            .is_none());
+
+        let body_25 = build_body(&empty_params("gemini-2.5-flash"));
+        assert_eq!(
+            body_25["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+            -1
+        );
+        assert!(body_25["generationConfig"]["thinkingConfig"]
+            .as_object()
+            .unwrap()
+            .get("thinkingLevel")
+            .is_none());
+
+        // gemini-2.5-pro and gemini-2.5-flash-lite ride the same 2.5
+        // wire shape.
+        assert_eq!(
+            build_body(&empty_params("gemini-2.5-pro"))["generationConfig"]["thinkingConfig"]
+                ["thinkingBudget"],
+            -1
+        );
+    }
+
+    #[test]
+    fn build_body_omits_thinking_config_on_legacy_families() {
+        // Pre-2.5 models have no thinking knob — sending the field on
+        // those gets a 400 INVALID_ARGUMENT, so we must omit it.
+        let body = build_body(&empty_params("gemini-1.5-pro"));
+        assert!(body.get("generationConfig").is_none());
+        let body = build_body(&empty_params("gemini-2.0-flash"));
+        assert!(body.get("generationConfig").is_none());
+    }
+
+    #[test]
+    fn build_body_still_carries_tools_and_system_instruction() {
+        // Adding safety + generationConfig must NOT regress the other
+        // payload sections. Smoke-test on a request with both tools
+        // and a system prompt.
+        let mut p = empty_params("gemini-3.5-flash");
+        p.system_prompt = "you are mike".into();
+        p.tools = vec![crate::llm::types::ToolSchema {
+            kind: "function".into(),
+            function: crate::llm::types::ToolFunction {
+                name: "read_document".into(),
+                description: "read a doc".into(),
+                parameters: json!({"type": "object", "properties": {}, "required": []}),
+            },
+        }];
+        let body = build_body(&p);
+        assert!(body["systemInstruction"]["parts"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("you are mike"));
+        let fns = body["tools"][0]["function_declarations"].as_array().unwrap();
+        assert_eq!(fns[0]["name"], "read_document");
+        // And the new fields are still there.
+        assert!(body["safetySettings"].is_array());
+        assert_eq!(
+            body["generationConfig"]["thinkingConfig"]["thinkingLevel"],
+            "MEDIUM"
+        );
     }
 
     #[test]

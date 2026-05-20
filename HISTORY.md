@@ -12,6 +12,68 @@ diff. For the upstream-sync audit trail (which fixes were ported from
 
 ---
 
+## 2026-05-20 — Gemini wire payload: explicit `safetySettings` + per-model `thinkingConfig`
+
+Our `gemini.rs` was sending neither `safetySettings` nor a
+`generationConfig.thinkingConfig`, falling back to Google's defaults
+on both. Two consequences:
+
+1. **Silent content-filter refusals.** Default safety is
+   `BLOCK_MEDIUM_AND_ABOVE` across the four harm categories. Legal,
+   insurance and PA workflows legitimately handle sentences citing
+   violence, harassment investigations, anti-corruption files and
+   discrimination cases — Gemini would empty-respond or refuse without
+   any error surface in our logs.
+2. **Default `thinkingLevel = HIGH` on Gemini 3.5.** The model burns
+   output budget thinking before writing, which is implicated in the
+   truncated NIS2 report we fixed earlier in the parser.
+
+### Added
+
+- **`safety_settings_off()`** in [src/llm/gemini.rs](src/llm/gemini.rs)
+  builds the four-category payload with `threshold: "OFF"` — matches
+  the canonical SDK example shape and the same toggles available in
+  AI Studio.
+- **`thinking_config_for_model(model)`** returns the right shape for
+  the model family:
+  - `gemini-3.5*` / `gemini-3-flash*` / `gemini-3-pro*` →
+    `{"thinkingLevel": "MEDIUM"}` (3.5 API)
+  - `gemini-2.5*` → `{"thinkingBudget": -1}` (2.5 API, dynamic
+    thinking)
+  - everything else (1.5, 2.0, future names) → `None`, omit the
+    field — the older API rejects it with 400.
+- Both are wired into `build_body`: every request now carries
+  `safetySettings`, and Gemini 2.5+ requests also carry
+  `generationConfig.thinkingConfig`.
+
+### Not changed (deliberate)
+
+- **`maxOutputTokens`** — left unset. Setting it to 65 535 is one
+  token below the model cap, so it would be a no-op disguised as a
+  change. Lower values risk truncation; higher are clamped.
+- **`temperature`**, **`topP`** — already the Gemini defaults
+  (1.0 and 0.95). Explicit values would be cargo-cult.
+- **`seed`** — DELIBERATELY omitted in chat. A fixed seed would
+  pin every response to the same output for the same prompt — useful
+  for deterministic test fixtures, not for live chat.
+
+### Tests
+
+Five new tests in `llm::gemini`:
+- `build_body_always_attaches_safety_settings_off`
+- `build_body_thinking_config_shape_is_model_aware` (3.5 → enum
+  `thinkingLevel`; 2.5 → integer `thinkingBudget: -1`; cross-checks
+  that neither shape leaks into the other model family)
+- `build_body_omits_thinking_config_on_legacy_families`
+  (gemini-1.5 / 2.0)
+- `build_body_still_carries_tools_and_system_instruction`
+  (regression guard: new fields don't displace tools / system prompt)
+- plus `empty_params` helper.
+
+`cargo test -p mike --lib` → **381/381** green (was 377 +4).
+
+---
+
 ## 2026-05-20 — `<CITATIONS>` block parser: tolerate truncated output
 
 A NIS2 report generation produced **31** `[cN]` markers in prose plus
