@@ -740,24 +740,40 @@ fn repair_json_escapes(s: &str) -> String {
 }
 
 /// Extract the JSON inside a `<CITATIONS>...</CITATIONS>` block at the end
-/// of the assistant response. Tolerant of surrounding whitespace, code
-/// fences, and the invalid backslash escapes LLMs commonly emit. Returns
-/// the parsed `Value` (an array) or `None`.
+/// of the assistant response. Tolerant of:
+/// * surrounding whitespace and `` ```json `` code fences,
+/// * the invalid backslash escapes LLMs commonly emit (`\'` etc.),
+/// * a **missing closing tag** — the model ran out of output tokens
+///   before writing `</CITATIONS>` (observed when emitting 30+ citations
+///   for a full report). In that case we take everything from the open
+///   tag to end-of-text.
+/// * a **truncated JSON array** — if the array itself was cut mid-entry,
+///   recover the longest complete prefix (`[ {…}, {…}, …, {…} ]`) so
+///   we surface the entries the model managed to finish.
+///
+/// Returns the parsed `Value` (an array) or `None`.
 pub(crate) fn extract_citations_block(text: &str) -> Option<Value> {
     let lower = text.to_lowercase();
     let open = lower.rfind("<citations>")?;
     let after_open = open + "<citations>".len();
-    // Find the matching close tag *after* the open.
-    let close_rel = lower[after_open..].find("</citations>")?;
-    let inner = text[after_open..after_open + close_rel].trim();
+    let inner_raw = if let Some(close_rel) = lower[after_open..].find("</citations>") {
+        text[after_open..after_open + close_rel].trim()
+    } else {
+        // No closing tag — model output was truncated before it
+        // finished. Take everything that came through.
+        text[after_open..].trim()
+    };
     // Strip optional Markdown fences like ```json … ```
-    let inner = inner.trim_start_matches("```json").trim_start_matches("```").trim();
+    let inner = inner_raw
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim();
     let inner = inner.trim_end_matches("```").trim();
     if let Ok(v) = serde_json::from_str::<Value>(inner) {
         return Some(v);
     }
     // Clean parse failed — most often an over-escaped apostrophe (`\'`).
-    // Retry once with the escapes repaired before giving up.
+    // Retry once with the escapes repaired.
     let repaired = repair_json_escapes(inner);
     if repaired != inner {
         if let Ok(v) = serde_json::from_str::<Value>(&repaired) {
@@ -767,8 +783,67 @@ pub(crate) fn extract_citations_block(text: &str) -> Option<Value> {
             return Some(v);
         }
     }
+    // Last resort: truncation recovery. Walk the (repaired) prefix as
+    // a JSON array, keep every complete top-level entry, drop the
+    // partial one at the tail, close with `]`.
+    if let Some(recovered) = recover_truncated_citations_array(&repaired) {
+        let n = recovered.as_array().map(|a| a.len()).unwrap_or(0);
+        tracing::warn!(
+            "[chat] <CITATIONS> block was truncated — recovered first {n} entries from the JSON prefix"
+        );
+        return Some(recovered);
+    }
     tracing::warn!("[chat] <CITATIONS> block found but is not valid JSON — citations dropped");
     None
+}
+
+/// Recover the longest valid `[…]` prefix from a truncated citations
+/// JSON array. The input is the body that should have been a full
+/// array; we walk it character-by-character respecting string scope
+/// (so a quote-contained `}` doesn't fool us) and remember the offset
+/// of the most recent `}` that closed a top-level array entry. Cutting
+/// there and appending `]` gives a syntactically valid prefix.
+///
+/// Returns `None` when the prefix doesn't even start with `[` or no
+/// complete entry was emitted.
+fn recover_truncated_citations_array(inner: &str) -> Option<Value> {
+    let s = inner.trim();
+    if !s.starts_with('[') {
+        return None;
+    }
+    let bytes = s.as_bytes();
+    let mut depth: i32 = 0;
+    let mut in_str = false;
+    let mut esc = false;
+    let mut last_top_level_entry_end: Option<usize> = None;
+    for (i, &b) in bytes.iter().enumerate() {
+        let c = b as char;
+        if in_str {
+            if esc {
+                esc = false;
+            } else if c == '\\' {
+                esc = true;
+            } else if c == '"' {
+                in_str = false;
+            }
+            continue;
+        }
+        match c {
+            '"' => in_str = true,
+            '{' | '[' => depth += 1,
+            '}' | ']' => {
+                if c == '}' && depth == 2 {
+                    // Closes an entry inside the outer array.
+                    last_top_level_entry_end = Some(i);
+                }
+                depth -= 1;
+            }
+            _ => {}
+        }
+    }
+    let cut = last_top_level_entry_end?;
+    let recovered = format!("{}]", &s[..=cut]);
+    serde_json::from_str::<Value>(&recovered).ok()
 }
 
 /// Result of processing one attached document.
@@ -3893,13 +3968,20 @@ async fn get_messages(
     let messages: Vec<Value> = rows
         .into_iter()
         .map(|(id, role, content, created_at, annotations)| {
-            // Hydrate annotations from the stored JSON so the chat-history
-            // path delivers the same shape as the live SSE event. Falls
-            // back to an empty array when the column is NULL (older
-            // assistant turns from before migration 0012).
+            // Hydrate annotations from the stored JSON. When the column
+            // is NULL — older turns from before migration 0012, or
+            // turns where the live pass dropped the citations (e.g.
+            // <CITATIONS> block truncated without `</CITATIONS>` before
+            // the truncation-tolerant parser shipped) — re-parse the
+            // persisted content with the current (smarter) extractor.
+            // This retroactively re-renders pills on chats that broke
+            // silently in earlier builds.
             let annotations_value = annotations
                 .as_deref()
                 .and_then(|s| serde_json::from_str::<Value>(s).ok())
+                .or_else(|| {
+                    content.as_deref().and_then(extract_citations_block)
+                })
                 .map(|v| enrich_doc_citations(v, &chat_docs))
                 .unwrap_or_else(|| Value::Array(Vec::new()));
             json!({
@@ -4403,8 +4485,12 @@ mod tests {
     }
 
     #[test]
-    fn returns_none_for_unclosed_block() {
-        assert!(extract_citations_block("<CITATIONS>[1,2,3]").is_none());
+    fn unclosed_block_still_parses_when_inner_is_valid_json() {
+        // Truncation tolerance: a JSON array that arrived without its
+        // closing tag must still parse — this is the recovery path the
+        // citation-rendering UI depends on for long reports.
+        let v = extract_citations_block("<CITATIONS>[1,2,3]").expect("parses");
+        assert_eq!(v, json!([1, 2, 3]));
     }
 
     #[test]
@@ -4543,6 +4629,53 @@ mod tests {
         assert_eq!(canonical_corpus_key(""), "");
         assert_eq!(canonical_corpus_key("   "), "");
         assert_eq!(canonical_corpus_key("[ ]"), "");
+    }
+
+    #[test]
+    fn recovers_block_without_closing_tag() {
+        // Exact shape observed in the wild: model wrote the JSON array
+        // fully but ran out of output tokens before emitting the
+        // `</CITATIONS>` tag. We must still surface the citations.
+        let text = "Prose.\n<CITATIONS>\n[\n  {\"ref\":\"c1\",\"doc_id\":\"doc-0\",\"page\":1,\"quote\":\"hi\"},\n  {\"ref\":\"c2\",\"doc_id\":\"doc-0\",\"page\":2,\"quote\":\"bye\"}\n]";
+        let v = extract_citations_block(text).expect("recovers without close tag");
+        let arr = v.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["ref"], "c1");
+        assert_eq!(arr[1]["ref"], "c2");
+    }
+
+    #[test]
+    fn recovers_truncated_array_with_partial_last_entry() {
+        // The model's output was cut off mid-entry: the last
+        // {"ref":"c3", … is missing its closing `}` and quote string.
+        // We must recover c1 and c2 and drop the partial c3.
+        let text = "<CITATIONS>\n[\n  {\"ref\":\"c1\",\"doc_id\":\"doc-0\",\"page\":1,\"quote\":\"hi\"},\n  {\"ref\":\"c2\",\"doc_id\":\"doc-0\",\"page\":2,\"quote\":\"bye\"},\n  {\"ref\":\"c3\",\"doc_id\":\"doc-0\",\"page\":3,\"quote\":\"truncated mid-stri";
+        let v = extract_citations_block(text).expect("recovers truncated array");
+        let arr = v.as_array().unwrap();
+        assert_eq!(arr.len(), 2, "expected first two complete entries");
+        assert_eq!(arr[0]["ref"], "c1");
+        assert_eq!(arr[1]["ref"], "c2");
+    }
+
+    #[test]
+    fn truncation_recovery_handles_quote_with_brace_inside() {
+        // A quote containing `}` must NOT trick the depth tracker — the
+        // `}` inside the string is part of content, not structure.
+        let text = "<CITATIONS>\n[\n  {\"ref\":\"c1\",\"quote\":\"value has } brace\"},\n  {\"ref\":\"c2\",\"quote\":\"second\"";
+        let v = extract_citations_block(text).expect("recovers despite brace-in-string");
+        let arr = v.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["ref"], "c1");
+    }
+
+    #[test]
+    fn recovers_block_without_closing_tag_via_escape_repair() {
+        // Missing `</CITATIONS>` AND an over-escaped apostrophe inside
+        // a quote — both must be tolerated, and the array must parse.
+        let text = "<CITATIONS>\n[{\"ref\":\"c1\",\"quote\":\"SOCIETA\\' ALBA\"}]";
+        let v = extract_citations_block(text).expect("parses after both repairs");
+        let arr = v.as_array().unwrap();
+        assert_eq!(arr[0]["quote"], "SOCIETA' ALBA");
     }
 
     #[test]

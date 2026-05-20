@@ -12,6 +12,52 @@ diff. For the upstream-sync audit trail (which fixes were ported from
 
 ---
 
+## 2026-05-20 — `<CITATIONS>` block parser: tolerate truncated output
+
+A NIS2 report generation produced **31** `[cN]` markers in prose plus
+a fully-written `<CITATIONS>` JSON array of 31 entries — but the
+response ran out of output tokens **before emitting the closing
+`</CITATIONS>` tag**. `extract_citations_block` required that closing
+tag and returned `None`, so all 31 citations were dropped silently
+(`parsed 0 citations from response`) and every pill rendered as plain
+text. The user saw `[c1] [c2] … [c31]` with no clickable behaviour.
+
+### Fixed
+
+- **`extract_citations_block`** now treats the closing tag as
+  optional: if missing, it takes everything from the opening tag to
+  end-of-text. This recovers the common "model ran out of tokens"
+  case where the JSON itself is syntactically complete.
+- **New `recover_truncated_citations_array`** — last-resort safety
+  net for genuinely truncated JSON arrays (cut mid-entry). Walks the
+  prefix as JSON respecting string scope (a `}` inside a quoted
+  value doesn't confuse the depth tracker), remembers the offset of
+  the most recent top-level `}` that closed an entry, and rebuilds
+  `[ entry₁, …, entryₖ ]` as a valid prefix. Logs a warn so we know
+  when this path fires.
+- **`get_messages` retroactive recovery** — when the persisted
+  `annotations` column is `NULL` (older turn or a turn the live
+  pass silently dropped) but the message body still contains the
+  `<CITATIONS>` block, the loader re-parses the content with the
+  smarter extractor. Chats that broke silently in earlier builds
+  now render pills again on reload.
+
+### Tests
+
+Four new tests in `routes::chat`:
+- `unclosed_block_still_parses_when_inner_is_valid_json`
+- `recovers_block_without_closing_tag` (the exact shape from the
+  NIS2 report turn).
+- `recovers_truncated_array_with_partial_last_entry`.
+- `truncation_recovery_handles_quote_with_brace_inside` (security:
+  a `}` inside a string must not be mistaken for an entry-close).
+- `recovers_block_without_closing_tag_via_escape_repair` (the
+  truncation tolerance composes with the existing `\'` repair).
+
+`cargo test -p mike --lib` → **377/377** green (was 373 +4).
+
+---
+
 ## 2026-05-20 — Rewrite free-form `[doc-id: …]` references into clickable `[cN]` pills
 
 Verbose `generate_docx` follow-up descriptions occasionally bypassed the
