@@ -47,6 +47,10 @@ export interface DocCreatedEvent {
 export interface ChatStreamCallbacks {
   onChatId?: (chatId: string) => void
   onDelta: (text: string) => void
+  /** Replace the entire assistant body — sent by the backend after it
+   *  rewrites free-form `[doc-id: …]` references into canonical `[cN]`
+   *  markers so pills render live on this turn (not only after reload). */
+  onContentReplace?: (text: string) => void
   onToolCallStart?: (name: string) => void
   onToolCallProgress?: (name: string, elapsedSecs: number) => void
   onToolCallDone?: (name: string) => void
@@ -82,6 +86,9 @@ function dispatchSseChunk(chunk: string, cb: ChatStreamCallbacks): void {
       case 'content_delta':
       case 'content':
         cb.onDelta(String(ev.text ?? ''))
+        break
+      case 'content_replace':
+        cb.onContentReplace?.(String(ev.text ?? ''))
         break
       case 'tool_call_start':
         cb.onToolCallStart?.(String(ev.name ?? ''))

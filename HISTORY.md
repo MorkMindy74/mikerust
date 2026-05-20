@@ -12,6 +12,63 @@ diff. For the upstream-sync audit trail (which fixes were ported from
 
 ---
 
+## 2026-05-20 — Rewrite free-form `[doc-id: …]` references into clickable `[cN]` pills
+
+Verbose `generate_docx` follow-up descriptions occasionally bypassed the
+`[cN]` + `<CITATIONS>` contract and emitted free-form bracketed
+references such as `[doc-id: cdbe5ce0-…, page 1]` or `[doc-id: doc-0,
+pages 2-3]` inline in the prose. These rendered as plain text — the
+file and page were visible but not clickable. Fixed end-to-end.
+
+### Added
+
+- **`src/routes/chat.rs::extract_inline_docid_refs`** — manual scanner
+  that finds every `[doc-id: <handle>[, page[s] <N|N-M>]]` occurrence
+  in the assistant's prose. Tolerates variable whitespace, `page` vs
+  `pages`, capital `Doc-ID:` / `DOC-ID:`, and the form without a page.
+  Returns matches in order with byte offsets so the rewriter can do
+  in-place substitution.
+- **`src/routes/chat.rs::rewrite_inline_docid_citations`** — given the
+  scanned references and a `resolve(handle) -> Option<(uuid, filename)>`
+  closure (security: never reveals an arbitrary UUID through the
+  viewer), assigns sequential `c1, c2, …` refs, replaces each
+  occurrence in the prose, and produces a `<CITATIONS>`-compatible
+  JSON array. Two references with the same `(uuid, page)` share one
+  ref so the block stays compact.
+- **`content_replace` SSE event** — the chat handler streams the
+  rewritten body to the live view immediately after the rewrite, so
+  pills render on the current turn without waiting for a reload.
+  The frontend (`api/chat.ts` + `stores/chat.svelte.ts::onContentReplace`)
+  swaps `message.content` wholesale on receipt.
+
+### Changed
+
+- **Chat handler** rewrites the body BEFORE persistence and BEFORE
+  `extract_citations_block`, so the DB row also has `[cN]` markers and
+  a synthesised citations array — reload of the chat shows the same
+  clickable pills the live turn did.
+- **`MRUST_SYSTEM_PROMPT`** picked up an explicit anti-pattern rule
+  banning free-form `[doc-id: …]` style references in prose. The
+  rewriter is a safety net; the prompt is the prevention.
+
+### Tests
+
+Seven new tests in `routes::chat` pin the scanner and the rewriter:
+- `extract_inline_docid_refs_picks_up_the_observed_pattern` — the
+  exact NIS2-turn shape (UUID + `page N` and `page N-M`).
+- `extract_inline_docid_refs_handles_doc_n_and_pages_and_no_page`.
+- `extract_inline_docid_refs_ignores_malformed_and_unrelated_brackets`.
+- `rewrite_inline_docid_citations_collapses_repeats_into_one_ref`.
+- `rewrite_inline_docid_citations_distinct_pages_get_distinct_refs`.
+- `rewrite_inline_docid_citations_leaves_unresolved_handles_alone`
+  (the security guarantee).
+- `rewrite_inline_docid_citations_returns_none_when_nothing_resolves`.
+
+`cargo test -p mike --lib` → **373/373** green (was 366 +7).
+Frontend `pnpm typecheck` → 0 errors / 0 warnings.
+
+---
+
 ## 2026-05-20 — Citation viewer: resolve corpus-inventory `doc_id` via canonical key
 
 Clicking a citation pill could return `Impossibile caricare il documento

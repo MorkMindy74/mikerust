@@ -1033,6 +1033,7 @@ Rules:
 - "page" refers to the sequential [Page N] marker in the text you were given (1-indexed from the first page). IGNORE any page numbers printed inside the document itself (footers, roman numerals, etc.)
 - For a single-page quote, set "page" to an integer. If a quote is one continuous sentence that spans two pages, set "page" to "N-M" and insert [[PAGE_BREAK]] in the quote at the page break. Otherwise, use separate citations for text on different pages
 - Put the <CITATIONS> block at the very end of the response. Omit it entirely if there are no citations
+- DO NOT write free-form references like "[doc-id: <uuid>, page N]", "[doc-id: doc-0, page 1]", "(see doc-0, p. 3)", or any other ad-hoc bracketed format in your prose. The ONLY recognised inline marker is "[cN]" (paired with a "ref": "cN" entry in the <CITATIONS> block). Free-form references render as plain text — the user cannot click them
 
 DOCX GENERATION:
 If asked to draft or generate a document, use the generate_docx tool to produce a downloadable Word document. Always use this tool rather than just displaying the document content inline when the user asks for a document to be created.
@@ -1625,6 +1626,186 @@ fn synthesise_kb_citations_from_markers(
         arr.len()
     );
     Some(Value::Array(arr))
+}
+
+/// One inline `[doc-id: <handle>, page <N>]`-style reference found in
+/// the assistant's prose. `handle` is either a `doc-N` chat-local label
+/// or a 36-char UUID; `page` is the digit (or `N-M` range) the model
+/// emitted (may be `None` for a `[doc-id: <handle>]` without page).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InlineDocIdRef {
+    start: usize,
+    end: usize,
+    handle: String,
+    page: Option<String>,
+}
+
+/// Scan `text` for every `[doc-id: <handle>[, page[s] <N|N-M>]]`
+/// occurrence the model emits as a free-form citation when it ignores
+/// the `[cN]` + `<CITATIONS>` contract (most common with verbose
+/// `generate_docx` follow-up descriptions). Returns the matches in
+/// order of appearance — the caller assigns sequential `cN` refs and
+/// rewrites the prose. Tolerant of variable whitespace, `page` vs
+/// `pages`, capital `Doc-ID:` / `DOC-ID:`, and missing-page form.
+fn extract_inline_docid_refs(text: &str) -> Vec<InlineDocIdRef> {
+    let mut out = Vec::new();
+    let bytes = text.as_bytes();
+    let lower = text.to_ascii_lowercase();
+    let needle = "[doc-id:";
+    let mut search_from = 0;
+    while let Some(off) = lower[search_from..].find(needle) {
+        let start = search_from + off;
+        let after_prefix = start + needle.len();
+        let mut i = after_prefix;
+        // skip whitespace after the colon
+        while i < bytes.len() && (bytes[i] as char).is_whitespace() {
+            i += 1;
+        }
+        // read the handle: UUID hex+dash characters or doc-\d+
+        let handle_start = i;
+        while i < bytes.len() {
+            let c = bytes[i] as char;
+            if c.is_ascii_alphanumeric() || c == '-' {
+                i += 1;
+            } else {
+                break;
+            }
+        }
+        let handle = text[handle_start..i].to_string();
+        if handle.is_empty() {
+            search_from = after_prefix;
+            continue;
+        }
+        // optional `, page[s] N` clause
+        let mut page: Option<String> = None;
+        let mut j = i;
+        while j < bytes.len() && (bytes[j] as char).is_whitespace() {
+            j += 1;
+        }
+        if j < bytes.len() && bytes[j] == b',' {
+            j += 1;
+            while j < bytes.len() && (bytes[j] as char).is_whitespace() {
+                j += 1;
+            }
+            // accept `page` or `pages`, case-insensitive
+            let rest_lower = &lower[j..];
+            let page_word = if rest_lower.starts_with("pages") {
+                Some("pages")
+            } else if rest_lower.starts_with("page") {
+                Some("page")
+            } else {
+                None
+            };
+            if let Some(w) = page_word {
+                j += w.len();
+                while j < bytes.len() && (bytes[j] as char).is_whitespace() {
+                    j += 1;
+                }
+                let digits_start = j;
+                while j < bytes.len() && bytes[j].is_ascii_digit() {
+                    j += 1;
+                }
+                if j > digits_start {
+                    // optional `-N` range
+                    let mut k = j;
+                    if k < bytes.len() && bytes[k] == b'-' {
+                        k += 1;
+                        let r = k;
+                        while k < bytes.len() && bytes[k].is_ascii_digit() {
+                            k += 1;
+                        }
+                        if k > r {
+                            j = k;
+                        }
+                    }
+                    page = Some(text[digits_start..j].to_string());
+                    while j < bytes.len() && (bytes[j] as char).is_whitespace() {
+                        j += 1;
+                    }
+                }
+            }
+        }
+        if j < bytes.len() && bytes[j] == b']' {
+            out.push(InlineDocIdRef {
+                start,
+                end: j + 1,
+                handle,
+                page,
+            });
+            search_from = j + 1;
+        } else {
+            // Not a well-formed marker — keep scanning from after the colon.
+            search_from = after_prefix;
+        }
+    }
+    out
+}
+
+/// Rewrite an assistant response that cites attached documents through
+/// the free-form `[doc-id: <handle>, page <N>]` pattern into the
+/// canonical `[cN]` markers + `<CITATIONS>` block format. `resolve`
+/// returns `Some((document_uuid, filename))` for handles that point to
+/// a real document the user can access — handles that resolve to
+/// `None` are left untouched in the prose (they continue to render as
+/// plain text, which is the safest fallback).
+///
+/// Returns `Some((rewritten_text, citations_array))` when at least one
+/// reference was successfully rewritten; `None` means the text had no
+/// such references (or none resolved). Two references with the same
+/// `(uuid, page)` share a `cN` ref so the `<CITATIONS>` block stays
+/// compact.
+fn rewrite_inline_docid_citations<F>(text: &str, mut resolve: F) -> Option<(String, Value)>
+where
+    F: FnMut(&str) -> Option<(String, String)>,
+{
+    let refs = extract_inline_docid_refs(text);
+    if refs.is_empty() {
+        return None;
+    }
+    let mut citations: Vec<Value> = Vec::new();
+    let mut key_to_ref: HashMap<(String, Option<String>), String> = HashMap::new();
+    let mut rewrites: Vec<(usize, usize, String)> = Vec::new();
+    for r in &refs {
+        let Some((uuid, filename)) = resolve(&r.handle) else {
+            continue; // unresolved → keep the original text as-is
+        };
+        let key = (uuid.clone(), r.page.clone());
+        let ref_id = match key_to_ref.get(&key) {
+            Some(id) => id.clone(),
+            None => {
+                let id = format!("c{}", citations.len() + 1);
+                let mut obj = serde_json::Map::new();
+                obj.insert("ref".into(), Value::String(id.clone()));
+                // Keep both `doc_id` and `document_id` — the downstream
+                // citation enrichment looks at both names.
+                obj.insert("doc_id".into(), Value::String(uuid.clone()));
+                obj.insert("document_id".into(), Value::String(uuid.clone()));
+                obj.insert("filename".into(), Value::String(filename.clone()));
+                if let Some(p) = &r.page {
+                    if let Ok(n) = p.parse::<i64>() {
+                        obj.insert("page".into(), Value::Number(n.into()));
+                    } else {
+                        obj.insert("page".into(), Value::String(p.clone()));
+                    }
+                }
+                obj.insert("source".into(), Value::String("attached".to_string()));
+                citations.push(Value::Object(obj));
+                key_to_ref.insert(key, id.clone());
+                id
+            }
+        };
+        rewrites.push((r.start, r.end, ref_id));
+    }
+    if citations.is_empty() {
+        return None;
+    }
+    // Rewrite in REVERSE order so earlier byte offsets stay valid as
+    // later replacements change the string length.
+    let mut out = text.to_string();
+    for (start, end, ref_id) in rewrites.iter().rev() {
+        out.replace_range(*start..*end, &format!("[{ref_id}]"));
+    }
+    Some((out, Value::Array(citations)))
 }
 
 type ApiResult = Result<Json<Value>, (StatusCode, Json<Value>)>;
@@ -2679,6 +2860,98 @@ async fn stream_chat_root(
             got_error
         );
 
+        // Rewrite free-form `[doc-id: <handle>, page <N>]` references the
+        // model occasionally writes (ignoring the `[cN]` + <CITATIONS>
+        // contract — observed routinely on verbose generate_docx
+        // descriptions) into the canonical `[cN]` markers and synthesize
+        // the matching citations array. Done BEFORE persistence so the
+        // stored body has the right markers and pills render on reload
+        // too, and a `content_replace` SSE event swaps the live view.
+        let mut prebuilt_citations: Option<Value> = None;
+        if extract_citations_block(&full_response).is_none() {
+            let inline_refs = extract_inline_docid_refs(&full_response);
+            if !inline_refs.is_empty() {
+                // Collect every distinct handle, resolve doc-N labels
+                // locally, and validate raw UUIDs against the user's
+                // documents in one batch query.
+                let mut handles: Vec<String> =
+                    inline_refs.iter().map(|r| r.handle.clone()).collect();
+                handles.sort();
+                handles.dedup();
+                let mut uuids_to_validate: Vec<String> = Vec::new();
+                for h in &handles {
+                    if let Some(uuid) = doc_label_map.get(h) {
+                        uuids_to_validate.push(uuid.clone());
+                    } else if h.len() == 36
+                        && h.chars().filter(|c| *c == '-').count() == 4
+                    {
+                        uuids_to_validate.push(h.clone());
+                    }
+                }
+                uuids_to_validate.sort();
+                uuids_to_validate.dedup();
+                let mut filename_by_uuid: HashMap<String, String> = HashMap::new();
+                if !uuids_to_validate.is_empty() {
+                    let placeholders = std::iter::repeat("?")
+                        .take(uuids_to_validate.len())
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    let q = format!(
+                        "SELECT id, filename FROM documents \
+                         WHERE user_id = ? AND id IN ({})",
+                        placeholders
+                    );
+                    let mut query = sqlx::query_as::<_, (String, String)>(&q)
+                        .bind(&auth.user_id);
+                    for u in &uuids_to_validate {
+                        query = query.bind(u);
+                    }
+                    if let Ok(rows) = query.fetch_all(&state_clone.db).await {
+                        for (id, fname) in rows {
+                            filename_by_uuid.insert(id, fname);
+                        }
+                    }
+                }
+                let mut handle_to_doc: HashMap<String, (String, String)> = HashMap::new();
+                for h in &handles {
+                    let real_uuid = doc_label_map
+                        .get(h)
+                        .cloned()
+                        .unwrap_or_else(|| h.clone());
+                    if let Some(filename) = filename_by_uuid.get(&real_uuid) {
+                        handle_to_doc.insert(
+                            h.clone(),
+                            (real_uuid, filename.clone()),
+                        );
+                    }
+                }
+                if let Some((new_body, citations_array)) =
+                    rewrite_inline_docid_citations(&full_response, |h| {
+                        handle_to_doc.get(h).cloned()
+                    })
+                {
+                    let n_refs = citations_array
+                        .as_array()
+                        .map(|a| a.len())
+                        .unwrap_or(0);
+                    tracing::info!(
+                        "[chat] rewrote {n_refs} inline [doc-id: …] reference(s) to [cN] markers"
+                    );
+                    full_response = new_body;
+                    prebuilt_citations = Some(citations_array);
+                    // Live view: replace the message body wholesale so
+                    // pills render immediately for this turn.
+                    let payload = json!({
+                        "type": "content_replace",
+                        "text": full_response,
+                    });
+                    let _ = tx
+                        .send(Ok(Event::default().data(payload.to_string())))
+                        .await;
+                }
+            }
+        }
+
         // We hold the assistant-message id outside the if-block so the
         // citations-resolution step below can update the same row with
         // the parsed annotations JSON. Without that link the chat
@@ -2864,11 +3137,14 @@ async fn stream_chat_root(
             }
         }
 
-        let citations_json = extract_citations_block(&full_response).or_else(|| {
-            // Fallback: model wrote [gN]/[pN] inline but skipped the
-            // <CITATIONS> JSON block. Synthesise from markers so the
-            // pills still render.
-            synthesise_kb_citations_from_markers(&full_response, &kb_by_tag)
+        // Resolution order: the inline `[doc-id: …]` rewriter wins if it
+        // synthesised any citations earlier (the body is already rewritten
+        // and has `[cN]` markers); otherwise parse a model-emitted block;
+        // otherwise synthesise from inline `[gN]`/`[pN]` KB markers.
+        let citations_json = prebuilt_citations.or_else(|| {
+            extract_citations_block(&full_response).or_else(|| {
+                synthesise_kb_citations_from_markers(&full_response, &kb_by_tag)
+            })
         });
         let citations_array: Vec<Value> = match citations_json {
             Some(v) => v
@@ -4013,6 +4289,7 @@ async fn generate_title(
 mod tests {
     use super::{
         canonical_corpus_key, enrich_doc_citations, extract_citations_block,
+        extract_inline_docid_refs, rewrite_inline_docid_citations,
         sanitise_annotations_quotes, strip_page_markers,
     };
     use serde_json::{json, Value};
@@ -4133,6 +4410,107 @@ mod tests {
     #[test]
     fn returns_none_for_invalid_json() {
         assert!(extract_citations_block("<CITATIONS>not json</CITATIONS>").is_none());
+    }
+
+    #[test]
+    fn extract_inline_docid_refs_picks_up_the_observed_pattern() {
+        // The exact shape the model emitted on the NIS2 report turn that
+        // surfaced this bug: UUID + comma + `page N` (or `page N-M`).
+        let text = "**Introduzione** [doc-id: cdbe5ce0-36f1-4574-a818-64e06826e632, page 1]. \
+                    Continua [doc-id: cdbe5ce0-36f1-4574-a818-64e06826e632, page 1-2] eccetera.";
+        let refs = extract_inline_docid_refs(text);
+        assert_eq!(refs.len(), 2);
+        assert_eq!(refs[0].handle, "cdbe5ce0-36f1-4574-a818-64e06826e632");
+        assert_eq!(refs[0].page.as_deref(), Some("1"));
+        assert_eq!(refs[1].handle, "cdbe5ce0-36f1-4574-a818-64e06826e632");
+        assert_eq!(refs[1].page.as_deref(), Some("1-2"));
+    }
+
+    #[test]
+    fn extract_inline_docid_refs_handles_doc_n_and_pages_and_no_page() {
+        // Three legitimate variants: doc-N label, `pages` plural, and no
+        // page at all (model cited the document without a page).
+        let text = "A [doc-id: doc-0, page 3] B [doc-id: doc-1, pages 4] C [doc-id: doc-2] D";
+        let refs = extract_inline_docid_refs(text);
+        assert_eq!(refs.len(), 3);
+        assert_eq!((refs[0].handle.as_str(), refs[0].page.as_deref()), ("doc-0", Some("3")));
+        assert_eq!((refs[1].handle.as_str(), refs[1].page.as_deref()), ("doc-1", Some("4")));
+        assert_eq!(refs[2].handle.as_str(), "doc-2");
+        assert!(refs[2].page.is_none());
+    }
+
+    #[test]
+    fn extract_inline_docid_refs_ignores_malformed_and_unrelated_brackets() {
+        // Real bracket-rich prose must not produce false positives.
+        let text = "Vedi [Page 3] e [art. 5] e [doc-id]: testo. \
+                    Anche [doc-id: ] vuoto e [doc-id: foo, page abc] malformato.";
+        let refs = extract_inline_docid_refs(text);
+        assert!(refs.is_empty(), "expected no matches, got {refs:?}");
+    }
+
+    #[test]
+    fn rewrite_inline_docid_citations_collapses_repeats_into_one_ref() {
+        // Two references to the same (uuid, page) MUST share a single
+        // c1 in the <CITATIONS> array — keeps the block compact.
+        let text = "Vedi [doc-id: doc-0, page 1] e di nuovo [doc-id: doc-0, page 1].";
+        let (out, cits) = rewrite_inline_docid_citations(text, |h| {
+            if h == "doc-0" {
+                Some(("uuid-abc".into(), "Report.docx".into()))
+            } else {
+                None
+            }
+        })
+        .expect("at least one rewrite");
+        assert_eq!(out, "Vedi [c1] e di nuovo [c1].");
+        let arr = cits.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["ref"], "c1");
+        assert_eq!(arr[0]["doc_id"], "uuid-abc");
+        assert_eq!(arr[0]["document_id"], "uuid-abc");
+        assert_eq!(arr[0]["filename"], "Report.docx");
+        assert_eq!(arr[0]["page"], 1);
+        assert_eq!(arr[0]["source"], "attached");
+    }
+
+    #[test]
+    fn rewrite_inline_docid_citations_distinct_pages_get_distinct_refs() {
+        let text = "Sez. A [doc-id: doc-0, page 1]; sez. B [doc-id: doc-0, page 2].";
+        let (out, cits) = rewrite_inline_docid_citations(text, |h| {
+            (h == "doc-0").then(|| ("uuid-abc".into(), "Report.docx".into()))
+        })
+        .expect("rewrite");
+        assert_eq!(out, "Sez. A [c1]; sez. B [c2].");
+        let arr = cits.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["page"], 1);
+        assert_eq!(arr[1]["page"], 2);
+    }
+
+    #[test]
+    fn rewrite_inline_docid_citations_leaves_unresolved_handles_alone() {
+        // Security: handles that don't resolve through the user's
+        // documents MUST NOT be rewritten — keep the model's text and
+        // emit no citation for them, so we never reveal an arbitrary
+        // UUID through the viewer.
+        let text = "[doc-id: doc-0, page 1] e [doc-id: fake-uuid, page 2].";
+        let (out, cits) = rewrite_inline_docid_citations(text, |h| {
+            (h == "doc-0").then(|| ("uuid-abc".into(), "Report.docx".into()))
+        })
+        .expect("rewrite");
+        assert_eq!(out, "[c1] e [doc-id: fake-uuid, page 2].");
+        let arr = cits.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["ref"], "c1");
+    }
+
+    #[test]
+    fn rewrite_inline_docid_citations_returns_none_when_nothing_resolves() {
+        let text = "Nessun riferimento qui, solo prosa.";
+        assert!(rewrite_inline_docid_citations(text, |_| None).is_none());
+        // Even with a [doc-id: ...] marker — if every handle is unknown
+        // we must return None and let the original body stand.
+        let text = "[doc-id: ignoto, page 1]";
+        assert!(rewrite_inline_docid_citations(text, |_| None).is_none());
     }
 
     #[test]

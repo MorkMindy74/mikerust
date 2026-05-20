@@ -324,6 +324,13 @@ function createChatStore() {
             const m = assistant()
             if (m) m.content += delta
           },
+          onContentReplace: (text) => {
+            // Backend rewrote free-form `[doc-id: …]` references into
+            // `[cN]` markers and is sending us the canonical body so
+            // pills render on this turn (without needing a reload).
+            const m = assistant()
+            if (m) m.content = text
+          },
           onReasoningDelta: (delta) => {
             const m = assistant()
             if (m) m.reasoning = (m.reasoning ?? '') + delta
