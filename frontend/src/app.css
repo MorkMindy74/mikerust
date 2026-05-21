@@ -227,47 +227,48 @@ body {
   transform-origin: center;
 }
 /*
- * Three-phase pulse over the same 2.1s cycle:
- *   phase 1 [0%-33%]  — cells 5, 6, 8, 9 (the bottom-right 2×2 quad)
- *   phase 2 [33%-66%] — cell 9 alone (the corner spark)
- *   phase 3 [66%-100%]— all nine cells together
- * Each cell rests at scale(0.78) and peaks at scale(1.08) only during
- * the phase(s) it belongs to; the keyframes are aligned so the corner
- * (which participates in every phase) stays in sync with the quad and
- * the full board when they join.
+ * Five-state choreography over a single 2.4s cycle. All transitions
+ * are ease-in-out and span ~480ms each — smooth pulse like the
+ * original, no flash. The five rest cells (1,2,3,4,7) sit out the
+ * dance entirely and stay at their natural scale.
+ *
+ *  state 0% — tutti                         all cells full size
+ *  state 20% — shrink corner                 only cell 9 shrunk
+ *  state 40% — shrink quad                   cells 5,6,8,9 all shrunk
+ *  state 60% — restore quad (corner stays)   5,6,8 full again; 9 still small
+ *  state 80% — restore corner = back to tutti
+ *  state 100% — hold tutti, loop
+ *
+ * Each keyframe is a stable plateau between transitions; ease-in-out
+ * makes the move into and out of every plateau gentle.
  */
 .mike-logo-thinking .mike-logo-tier-corner,
 .mike-logo-docx     .mike-logo-tier-corner,
 .mike-logo-upload   .mike-logo-tier-corner {
-  animation: mike-logo-pulse-corner 2.1s ease-in-out infinite;
+  animation: mike-logo-pulse-corner 2.4s ease-in-out infinite;
 }
 .mike-logo-thinking .mike-logo-tier-quad,
 .mike-logo-docx     .mike-logo-tier-quad,
 .mike-logo-upload   .mike-logo-tier-quad {
-  animation: mike-logo-pulse-quad   2.1s ease-in-out infinite;
+  animation: mike-logo-pulse-quad   2.4s ease-in-out infinite;
 }
-.mike-logo-thinking .mike-logo-tier-rest,
-.mike-logo-docx     .mike-logo-tier-rest,
-.mike-logo-upload   .mike-logo-tier-rest {
-  animation: mike-logo-pulse-rest   2.1s ease-in-out infinite;
-}
-/* Cell 9 — pulses in all three phases. */
+/* Cell 9 (corner) — large → small from 0 to 20%, holds small until
+ * 60%, grows back to large by 80%, then holds large to the loop. */
 @keyframes mike-logo-pulse-corner {
-  0%,    8%,    25%,
-  41.5%, 58.5%,
-  75%,   91.5%, 100% { transform: scale(0.78); }
-  16.5%, 50%,   83%  { transform: scale(1.08); }
+  0%   { transform: scale(1); }
+  20%  { transform: scale(0.78); }
+  60%  { transform: scale(0.78); }
+  80%  { transform: scale(1); }
+  100% { transform: scale(1); }
 }
-/* Cells 5, 6, 8 — pulse with the quad in phase 1 and again with everyone in phase 3. */
+/* Cells 5, 6, 8 (quad without corner) — large through 20%, shrink to
+ * small at 40%, restore to large by 60%, hold large through the loop. */
 @keyframes mike-logo-pulse-quad {
-  0%,    8%,    25%,
-  75%,   91.5%, 100% { transform: scale(0.78); }
-  16.5%, 83%         { transform: scale(1.08); }
-}
-/* Cells 1, 2, 3, 4, 7 — quiet until phase 3, then pulse once with the full board. */
-@keyframes mike-logo-pulse-rest {
-  0%,    75%,   91.5%, 100% { transform: scale(0.78); }
-  83%                       { transform: scale(1.08); }
+  0%   { transform: scale(1); }
+  20%  { transform: scale(1); }
+  40%  { transform: scale(0.78); }
+  60%  { transform: scale(1); }
+  100% { transform: scale(1); }
 }
 /* Activity colour: rust (default) → blue (docx) → green (upload). */
 .mike-logo-docx { filter: hue-rotate(198deg) saturate(1.05); }
