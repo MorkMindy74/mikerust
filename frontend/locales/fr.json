@@ -319,7 +319,11 @@
       "uk": "Britannique",
       "us": "Américaine"
     },
-    "sourceEnabled": "Source activée"
+    "sourceEnabled": "Source activée",
+    "previewLoading": "Chargement du texte…",
+    "previewCtrlFHint": "Appuyez sur Ctrl+F pour rechercher dans le texte.",
+    "openOnSource": "Ouvrir sur la source",
+    "viewText": "Afficher le texte"
   },
   "Eurlex": {
     "title": "EUR-Lex",

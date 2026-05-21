@@ -274,6 +274,24 @@ export function genericCorpusApi(id: string) {
         body: { identifier, date: opts?.date },
         signal: opts?.signal,
       }),
+    /** Read-only preview — fetches the document body without persisting
+     *  or chunking. Backed by `GET /corpora/<id>/preview?identifier=…`. */
+    preview: (
+      identifier: string,
+      opts?: { signal?: AbortSignal; language?: string },
+    ) => {
+      const params = new URLSearchParams({ identifier })
+      if (opts?.language) params.set('language', opts.language)
+      return api<{
+        identifier: string
+        title: string
+        source_url: string
+        text: string
+      }>(`${base}/preview?${params.toString()}`, {
+        method: 'GET',
+        signal: opts?.signal,
+      })
+    },
     documents: () => api<{ documents: CorpusDocument[] }>(`${base}/documents`),
     deleteDocument: (docId: string) =>
       api<{ ok: boolean }>(`${base}/documents/${encodeURIComponent(docId)}`, {

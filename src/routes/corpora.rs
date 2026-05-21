@@ -11,7 +11,7 @@
 //! `corpus_settings` (see /eurlex/config etc.) keyed per-corpus.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     routing::{delete, get, post},
     Json, Router,
@@ -57,6 +57,12 @@ pub fn router() -> Router<Arc<AppState>> {
         // for now).
         .route("/{id}/search", post(generic_search))
         .route("/{id}/fetch", post(generic_fetch))
+        // Read-only preview of a corpus document body. Same dispatch as
+        // /fetch (DilaBulkXml → corpus_documents; italian-legal →
+        // HuggingFace /rows; ManifestAdapter → live HTTP), but does NOT
+        // persist or chunk. Used by the UI's "view text" modal so the
+        // user can read the source before deciding to index it.
+        .route("/{id}/preview", get(generic_preview))
         .route("/{id}/documents", get(generic_list_documents))
         .route("/{id}/documents/{doc_id}", delete(generic_delete_document))
         .route("/{id}/documents/{doc_id}/resync", post(generic_resync_document))
@@ -685,6 +691,148 @@ async fn generic_fetch(
         "chunks_indexed": chunks_indexed,
         "indexing_error": indexing_error,
         "status": final_status,
+    })))
+}
+
+// ---------------------------------------------------------------------------
+// GET /corpora/:id/preview?identifier=…&language=…
+// ---------------------------------------------------------------------------
+//
+// Read-only "what's in this document?" — returns the plain-text body
+// of a corpus document so the UI can show it in a scrollable viewer
+// before the user decides to index it. Mirrors `generic_fetch`'s
+// strategy dispatch but DOES NOT persist anything (no `documents` row,
+// no cache file, no chunking, no embedding side-effects).
+//
+// Strategy fan-out:
+//   * DilaBulkXml         — read body from `corpus_documents`
+//   * builtin italian-legal — look up row_offset in `italian_corpus`,
+//                            then fetch the HF /rows endpoint
+//   * ManifestAdapter     — invoke the live adapter `.fetch()` and
+//                            return its bytes verbatim
+//
+// Response shape: `{ identifier, title, source_url, text }`.
+
+#[derive(Deserialize)]
+struct PreviewQuery {
+    identifier: String,
+    language: Option<String>,
+}
+
+async fn generic_preview(
+    State(state): State<Arc<AppState>>,
+    _auth: AuthUser,
+    Path(id): Path<String>,
+    Query(q): Query<PreviewQuery>,
+) -> ApiResult {
+    let plugin = lookup_plugin(&state, &id)?;
+    let identifier = q.identifier.trim().to_string();
+    if identifier.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "identifier is empty"));
+    }
+
+    // Branch 1: bulk-XML strategy — body already in corpus_documents.
+    if matches!(
+        plugin.strategy,
+        crate::corpora::plugin::CorpusStrategy::DilaBulkXml(_)
+    ) {
+        let doc = fetch_corpus_document(&state.db, &id, &identifier)
+            .await
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+            .ok_or_else(|| {
+                err(
+                    StatusCode::NOT_FOUND,
+                    &format!(
+                        "corpus {id}: identifier {identifier:?} not in local index — \
+                         run /corpora/{id}/import first"
+                    ),
+                )
+            })?;
+        let text = String::from_utf8_lossy(&doc.bytes).into_owned();
+        return Ok(Json(json!({
+            "identifier": doc.identifier,
+            "title": doc.title,
+            "source_url": doc.source_url,
+            "text": text,
+        })));
+    }
+
+    // Branch 2: italian-legal builtin — text lives in the HuggingFace
+    // dataset, fetched by row_offset (kept in `italian_corpus`).
+    if id == "italian-legal" {
+        let row: Option<(i64, Option<String>)> = sqlx::query_as(
+            "SELECT row_offset, title FROM italian_corpus WHERE hf_id = ?",
+        )
+        .bind(&identifier)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        let Some((row_offset, title_opt)) = row else {
+            return Err(err(
+                StatusCode::NOT_FOUND,
+                &format!(
+                    "italian-legal: hf_id {identifier:?} not in local index — \
+                     run the corpus import first"
+                ),
+            ));
+        };
+        let client = reqwest::Client::builder()
+            .user_agent("MikeRust/0.1 (italian-legal-corpus preview)")
+            .build()
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        let (hf_title, text) =
+            crate::corpora::italian_legal::fetch_full_text(&client, row_offset)
+                .await
+                .map_err(|e| {
+                    err(
+                        StatusCode::BAD_GATEWAY,
+                        &format!("HuggingFace fetch: {e}"),
+                    )
+                })?;
+        let title = title_opt
+            .filter(|s| !s.is_empty())
+            .unwrap_or(if hf_title.is_empty() {
+                identifier.clone()
+            } else {
+                hf_title
+            });
+        return Ok(Json(json!({
+            "identifier": identifier,
+            "title": title,
+            "source_url": format!(
+                "https://huggingface.co/datasets/{ds}/viewer/default/train?row={row_offset}",
+                ds = crate::corpora::italian_legal::DATASET,
+            ),
+            "text": text,
+        })));
+    }
+
+    // Branch 3: manifest-adapter live fetch — ephemeral, no persistence.
+    let adapter = state.corpus_adapters.read().unwrap().get(&id).cloned();
+    let Some(adapter) = adapter else {
+        return Err(err(
+            StatusCode::NOT_IMPLEMENTED,
+            &format!(
+                "corpus {id} has no preview path (no DilaBulkXml store, no \
+                 builtin handler, no manifest adapter registered)"
+            ),
+        ));
+    };
+    let lang = q
+        .language
+        .clone()
+        .unwrap_or_else(|| plugin.default_language.clone())
+        .to_ascii_lowercase();
+    let fetched = adapter
+        .fetch(&identifier, Some(&lang), plugin.supports_language_fallback)
+        .await
+        .map_err(|e| err(StatusCode::BAD_GATEWAY, &format!("adapter fetch: {e}")))?;
+    let text = String::from_utf8_lossy(&fetched.bytes).into_owned();
+    Ok(Json(json!({
+        "identifier": fetched.identifier,
+        "title": fetched.title,
+        "source_url": fetched.source_url,
+        "text": text,
     })))
 }
 

@@ -319,7 +319,11 @@
       "importAction": "Importa ora"
     },
     "sourcesAvailable": "Disponibili ora",
-    "sourcesComingSoon": "In preparazione"
+    "sourcesComingSoon": "In preparazione",
+    "previewLoading": "Caricamento testo…",
+    "previewCtrlFHint": "Premi Ctrl+F per cercare dentro al testo.",
+    "openOnSource": "Apri sulla fonte",
+    "viewText": "Visualizza testo"
   },
   "Eurlex": {
     "title": "EUR-Lex",

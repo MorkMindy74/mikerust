@@ -27,7 +27,8 @@
   import { toastStore } from '$lib/stores/toast.svelte'
   import { i18n } from '$lib/stores/i18n.svelte'
   import { openExternal } from '$lib/tauri/commands'
-  import { Trash2, ExternalLink } from 'lucide-svelte'
+  import { Trash2, ExternalLink, Eye } from 'lucide-svelte'
+  import Modal from '$lib/components/ui/Modal.svelte'
 
   let { corpus }: { corpus: CorpusItem } = $props()
 
@@ -121,6 +122,48 @@
   let indexJobs = $state<Record<string, IndexJob>>({})
   let indexQueue: string[] = []
   let queueWorking = false
+
+  // Lightweight text-preview modal driven from the search-hit list.
+  // Browser-native Ctrl+F works because the body lives inside a real
+  // <pre> in the DOM — no JS search bar needed.
+  let preview = $state<{
+    open: boolean
+    loading: boolean
+    title: string
+    text: string
+    sourceUrl: string
+    error: string
+  }>({
+    open: false,
+    loading: false,
+    title: '',
+    text: '',
+    sourceUrl: '',
+    error: '',
+  })
+
+  async function openPreview(hit: Hit) {
+    preview.open = true
+    preview.loading = true
+    preview.title = hit.title
+    preview.text = ''
+    preview.sourceUrl = ''
+    preview.error = ''
+    try {
+      const r = await genericCorpusApi(corpus.id).preview(hit.id)
+      preview.title = r.title || hit.title
+      preview.text = r.text
+      preview.sourceUrl = r.source_url ?? ''
+    } catch (e) {
+      preview.error = (e as Error).message
+    } finally {
+      preview.loading = false
+    }
+  }
+
+  function closePreview() {
+    preview.open = false
+  }
 
   let docs = $state<CorpusDocument[]>([])
   let docsLoading = $state(true)
@@ -539,6 +582,14 @@
                     <p class="mt-1 text-xs text-(--color-danger-500)">{indexJobs[hit.id].error}</p>
                   {/if}
                 </div>
+                <IconButton
+                  size="sm"
+                  variant="ghost"
+                  label={t('Corpora.viewText')}
+                  onclick={() => openPreview(hit)}
+                >
+                  <Eye size={14} />
+                </IconButton>
                 <Button
                   size="sm"
                   variant={indexBtnVariant(hit)}
@@ -588,3 +639,51 @@
     </Card>
   {/if}
 </div>
+
+<!--
+  Plain-text preview of a corpus source. Layout is deliberately
+  minimal: a header carrying the title + an external-link button to the
+  upstream page, and a vertically-scrolling <pre> with the full body.
+  No custom search bar — the user is told to use the browser-native
+  Ctrl+F, which works because the text lives in a real DOM element.
+-->
+<Modal
+  open={preview.open}
+  title={preview.title}
+  size="xl"
+  onclose={closePreview}
+>
+  {#if preview.loading}
+    <div class="flex items-center justify-center gap-2 py-12 text-sm text-(--color-text-secondary)">
+      <Spinner size="sm" />
+      {t('Corpora.previewLoading')}
+    </div>
+  {:else if preview.error}
+    <p class="py-12 text-center text-sm text-(--color-danger-500)">
+      {preview.error}
+    </p>
+  {:else}
+    <!--
+      Modal's body wrapper is already `overflow-y-auto`, so we just
+      drop the prose in a `whitespace-pre-wrap` <pre> and let the
+      browser's native Ctrl+F handle search. No custom search bar.
+    -->
+    <div class="flex items-center justify-between gap-2 mb-3 text-xs text-(--color-text-secondary)">
+      <span>{t('Corpora.previewCtrlFHint')}</span>
+      {#if preview.sourceUrl}
+        <button
+          type="button"
+          class="inline-flex items-center gap-1 hover:text-(--color-text-primary) hover:underline"
+          onclick={() => openExternal(preview.sourceUrl)}
+        >
+          <ExternalLink size={12} />
+          {t('Corpora.openOnSource')}
+        </button>
+      {/if}
+    </div>
+    <pre
+      class="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed
+             text-(--color-text-primary)"
+    >{preview.text}</pre>
+  {/if}
+</Modal>
