@@ -1829,11 +1829,134 @@ fn extract_inline_docid_refs(text: &str) -> Vec<InlineDocIdRef> {
 /// such references (or none resolved). Two references with the same
 /// `(uuid, page)` share a `cN` ref so the `<CITATIONS>` block stays
 /// compact.
+/// Second-shape scanner: the model also writes free-form citations in
+/// parenthesised prose using the Italian convention
+/// `(... doc-N, pag. <N>[-<M>])`, with no surrounding `[doc-id: …]`
+/// brackets and "pag" instead of "page". Observed in the wild on the
+/// `Inventario beni assicurati` workflow's docx-description follow-up.
+///
+/// Only the `doc-N, pag X` substring is captured — the prose context
+/// (e.g. `(Polizza n. 449435502/39,`) stays untouched, so the rewriter
+/// can fold the marker into a `[cN]` pill without eating meaningful
+/// content from the user's view.
+///
+/// Recognises: `doc-N`, optional comma + whitespace, then a page word
+/// (`pag`, `pag.`, `pagina`, `pagine`, `page`, `pages`, `p.`), then
+/// digits with optional `-`/`–` range.
+fn extract_inline_paren_doc_refs(text: &str) -> Vec<InlineDocIdRef> {
+    let mut out = Vec::new();
+    let bytes = text.as_bytes();
+    let lower = text.to_ascii_lowercase();
+    let mut search_from = 0;
+    while let Some(off) = lower[search_from..].find("doc-") {
+        let start = search_from + off;
+        let after_doc = start + 4;
+        // Read the digit suffix: `doc-1`, `doc-12`, …
+        let mut k = after_doc;
+        while k < bytes.len() && bytes[k].is_ascii_digit() {
+            k += 1;
+        }
+        if k == after_doc {
+            search_from = after_doc;
+            continue;
+        }
+        let handle_end = k;
+
+        // Optional `, ` between handle and the page word.
+        let mut j = handle_end;
+        if j < bytes.len() && bytes[j] == b',' {
+            j += 1;
+        }
+        while j < bytes.len() && (bytes[j] as char).is_whitespace() {
+            j += 1;
+        }
+
+        // Page word, case-insensitive. Order matters: longer prefixes
+        // before shorter ones so `pagine` isn't truncated to `pag`.
+        let rest = &lower[j..];
+        let page_word_len = if rest.starts_with("pagine") { 6 }
+            else if rest.starts_with("pagina") { 6 }
+            else if rest.starts_with("pages") { 5 }
+            else if rest.starts_with("pag.") { 4 }
+            else if rest.starts_with("page") { 4 }
+            else if rest.starts_with("pag") { 3 }
+            else if rest.starts_with("p.") { 2 }
+            else { 0 };
+        if page_word_len == 0 {
+            search_from = handle_end;
+            continue;
+        }
+        j += page_word_len;
+        while j < bytes.len() && (bytes[j] as char).is_whitespace() {
+            j += 1;
+        }
+
+        // Digits + optional range `-N` or `–N` (em-dash).
+        let page_digits_start = j;
+        while j < bytes.len() && bytes[j].is_ascii_digit() {
+            j += 1;
+        }
+        if j == page_digits_start {
+            search_from = handle_end;
+            continue;
+        }
+        let mut end = j;
+        if end < bytes.len() {
+            let c = bytes[end] as char;
+            let dash_len = if c == '-' {
+                Some(1usize)
+            } else if text[end..].starts_with('–') {
+                Some('–'.len_utf8())
+            } else {
+                None
+            };
+            if let Some(d) = dash_len {
+                let after_dash = end + d;
+                let mut r = after_dash;
+                while r < bytes.len() && bytes[r].is_ascii_digit() {
+                    r += 1;
+                }
+                if r > after_dash {
+                    end = r;
+                }
+            }
+        }
+
+        out.push(InlineDocIdRef {
+            start,
+            end,
+            handle: text[start..handle_end].to_string(),
+            page: Some(text[page_digits_start..end].to_string()),
+        });
+        search_from = end;
+    }
+    out
+}
+
 fn rewrite_inline_docid_citations<F>(text: &str, mut resolve: F) -> Option<(String, Value)>
 where
     F: FnMut(&str) -> Option<(String, String)>,
 {
-    let refs = extract_inline_docid_refs(text);
+    // Both shapes feed the same rewriter. The bracketed `[doc-id: …]`
+    // form and the parenthesised `... doc-N, pag …` form are gathered
+    // into a single list, then sorted by start offset so substitution
+    // happens in left-to-right document order — and the rewrite loop
+    // applies them in reverse so earlier byte offsets stay valid.
+    let mut refs = extract_inline_docid_refs(text);
+    refs.extend(extract_inline_paren_doc_refs(text));
+    refs.sort_by_key(|r| r.start);
+    // Drop overlapping captures (e.g. an inner paren scan landing on
+    // bytes already inside an outer `[doc-id: …]` bracket capture).
+    let mut deduped: Vec<InlineDocIdRef> = Vec::with_capacity(refs.len());
+    for r in refs {
+        if let Some(prev) = deduped.last() {
+            if r.start < prev.end {
+                continue;
+            }
+        }
+        deduped.push(r);
+    }
+    let refs = deduped;
     if refs.is_empty() {
         return None;
     }
@@ -4378,8 +4501,9 @@ async fn generate_title(
 mod tests {
     use super::{
         canonical_corpus_key, enrich_doc_citations, extract_citations_block,
-        extract_inline_docid_refs, rewrite_inline_docid_citations,
-        sanitise_annotations_quotes, strip_page_markers,
+        extract_inline_docid_refs, extract_inline_paren_doc_refs,
+        rewrite_inline_docid_citations, sanitise_annotations_quotes,
+        strip_page_markers,
     };
     use serde_json::{json, Value};
 
@@ -4539,6 +4663,54 @@ mod tests {
                     Anche [doc-id: ] vuoto e [doc-id: foo, page abc] malformato.";
         let refs = extract_inline_docid_refs(text);
         assert!(refs.is_empty(), "expected no matches, got {refs:?}");
+    }
+
+    #[test]
+    fn extract_inline_paren_doc_refs_picks_up_italian_paren_form() {
+        // The exact shape from the Inventario beni assicurati workflow:
+        // a parenthesised italian reference, no [doc-id:] bracket.
+        let text = "Veicolo coperto (Polizza n. 449435502/39, doc-1, pag. 99-101). \
+                    Cfr. anche doc-0, pag 5 e doc-2, pagina 12.";
+        let refs = extract_inline_paren_doc_refs(text);
+        assert_eq!(refs.len(), 3);
+        assert_eq!((refs[0].handle.as_str(), refs[0].page.as_deref()), ("doc-1", Some("99-101")));
+        assert_eq!((refs[1].handle.as_str(), refs[1].page.as_deref()), ("doc-0", Some("5")));
+        assert_eq!((refs[2].handle.as_str(), refs[2].page.as_deref()), ("doc-2", Some("12")));
+        // The match must NOT consume the closing paren or trailing
+        // prose — only the `doc-N, pag …` substring.
+        let m0 = &text[refs[0].start..refs[0].end];
+        assert_eq!(m0, "doc-1, pag. 99-101");
+    }
+
+    #[test]
+    fn extract_inline_paren_doc_refs_ignores_bare_doc_n_without_page_word() {
+        // `doc-1` on its own is NOT a citation marker — many prompts
+        // mention the label in passing. Must require a page word.
+        let text = "Il file doc-1 contiene la polizza. Cfr. doc-1 per dettagli.";
+        assert!(extract_inline_paren_doc_refs(text).is_empty());
+    }
+
+    #[test]
+    fn rewrite_inline_docid_citations_handles_both_shapes_together() {
+        // Mixed prose: one bracket shape + two paren shapes pointing at
+        // the same doc on different pages. All three must collapse onto
+        // distinct cN refs and rewrite in document order.
+        let text = "Cfr. [doc-id: doc-0, page 1] e poi (Polizza, doc-0, pag. 7) \
+                    nonché doc-1, pag. 3.";
+        let (out, cits) = rewrite_inline_docid_citations(text, |h| match h {
+            "doc-0" => Some(("uuid-A".into(), "polizza.pdf".into())),
+            "doc-1" => Some(("uuid-B".into(), "schedule.pdf".into())),
+            _ => None,
+        })
+        .expect("rewrites");
+        assert_eq!(out, "Cfr. [c1] e poi (Polizza, [c2]) nonché [c3].");
+        let arr = cits.as_array().unwrap();
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr[0]["page"], 1);
+        assert_eq!(arr[1]["page"], 7);
+        assert_eq!(arr[1]["filename"], "polizza.pdf");
+        assert_eq!(arr[2]["page"], 3);
+        assert_eq!(arr[2]["filename"], "schedule.pdf");
     }
 
     #[test]
