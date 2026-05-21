@@ -7,15 +7,14 @@
     · docx     — pulsing, blue (generating a .docx from a template)
     · upload   — pulsing, green (extracting text from an uploaded file)
 
-  Pulse choreography (positions 1-9 row-major: 1 2 3 / 4 5 6 / 7 8 9):
-    phase 1 — cells 5, 6, 8, 9 (bottom-right 2×2 quadrant)
-    phase 2 — cell 9 alone (the corner spark)
-    phase 3 — all nine cells together (the full board)
-    repeat
-
-  Each cell gets a keyframe whose `scale(1.08)` peak lands inside the
-  phases it belongs to and stays at the resting `scale(0.78)` outside,
-  so the three classes interlock seamlessly on the same timeline.
+  Pulse choreography (positions 1-9 row-major: 1 2 3 / 4 5 6 / 7 8 9)
+  rides three concentric waves on the same 3.2s timeline:
+    corner (9)      — outermost wave, shrinks first / restores last
+    quad   (5,6,8)  — middle wave
+    rest   (1-4,7)  — innermost wave, shrinks only at the midpoint
+  so the loop passes through a beat where the full 3×3 is contracted
+  together before unwinding back to its resting size. See app.css
+  (`mike-logo-pulse-*`) for the exact keyframe timings.
   Honours prefers-reduced-motion (no animation).
 -->
 <script lang="ts">

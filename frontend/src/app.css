@@ -227,16 +227,18 @@ body {
   transform-origin: center;
 }
 /*
- * Five-state choreography over a single 2.4s cycle. All transitions
- * are ease-in-out and span ~480ms each — smooth pulse like the
- * original, no flash. The five rest cells (1,2,3,4,7) sit out the
- * dance entirely and stay at their natural scale.
+ * Seven-state choreography over a single 3.2s cycle. All transitions
+ * are ease-in-out and span ~450ms each — smooth pulse, no flash.
+ * The wave now includes the rest cells (1,2,3,4,7) so the loop
+ * passes through a "full 3×3 shrunk" beat at the midpoint.
  *
- *  state 0% — tutti                         all cells full size
- *  state 20% — shrink corner                 only cell 9 shrunk
- *  state 40% — shrink quad                   cells 5,6,8,9 all shrunk
- *  state 60% — restore quad (corner stays)   5,6,8 full again; 9 still small
- *  state 80% — restore corner = back to tutti
+ *  state 0%   — tutti                          all cells full size
+ *  state 14%  — shrink corner                  only cell 9 shrunk
+ *  state 28%  — shrink quad                    cells 5,6,8,9 shrunk
+ *  state 42%  — shrink rest = full 3×3 small   all nine shrunk
+ *  state 56%  — restore rest                   1,2,3,4,7 full; quad+9 still small
+ *  state 70%  — restore quad                   5,6,8 full; 9 still small
+ *  state 84%  — restore corner = back to tutti
  *  state 100% — hold tutti, loop
  *
  * Each keyframe is a stable plateau between transitions; ease-in-out
@@ -245,29 +247,44 @@ body {
 .mike-logo-thinking .mike-logo-tier-corner,
 .mike-logo-docx     .mike-logo-tier-corner,
 .mike-logo-upload   .mike-logo-tier-corner {
-  animation: mike-logo-pulse-corner 2.4s ease-in-out infinite;
+  animation: mike-logo-pulse-corner 3.2s ease-in-out infinite;
 }
 .mike-logo-thinking .mike-logo-tier-quad,
 .mike-logo-docx     .mike-logo-tier-quad,
 .mike-logo-upload   .mike-logo-tier-quad {
-  animation: mike-logo-pulse-quad   2.4s ease-in-out infinite;
+  animation: mike-logo-pulse-quad   3.2s ease-in-out infinite;
 }
-/* Cell 9 (corner) — large → small from 0 to 20%, holds small until
- * 60%, grows back to large by 80%, then holds large to the loop. */
+.mike-logo-thinking .mike-logo-tier-rest,
+.mike-logo-docx     .mike-logo-tier-rest,
+.mike-logo-upload   .mike-logo-tier-rest {
+  animation: mike-logo-pulse-rest   3.2s ease-in-out infinite;
+}
+/* Cell 9 (corner) — leading edge: shrinks first, stays small longest,
+ * restores last. Outside [14% … 84%] it is back at full size. */
 @keyframes mike-logo-pulse-corner {
   0%   { transform: scale(1); }
-  20%  { transform: scale(0.78); }
-  60%  { transform: scale(0.78); }
-  80%  { transform: scale(1); }
+  14%  { transform: scale(0.78); }
+  84%  { transform: scale(0.78); }
   100% { transform: scale(1); }
 }
-/* Cells 5, 6, 8 (quad without corner) — large through 20%, shrink to
- * small at 40%, restore to large by 60%, hold large through the loop. */
+/* Cells 5, 6, 8 (quad without corner) — second wave: small while the
+ * full 3×3 contracts around it, then restored before the corner. */
 @keyframes mike-logo-pulse-quad {
   0%   { transform: scale(1); }
-  20%  { transform: scale(1); }
-  40%  { transform: scale(0.78); }
-  60%  { transform: scale(1); }
+  14%  { transform: scale(1); }
+  28%  { transform: scale(0.78); }
+  70%  { transform: scale(0.78); }
+  84%  { transform: scale(1); }
+  100% { transform: scale(1); }
+}
+/* Cells 1, 2, 3, 4, 7 (rest) — innermost wave: only shrunk at the
+ * midpoint so the full 3×3 reads as a single coordinated pulse. */
+@keyframes mike-logo-pulse-rest {
+  0%   { transform: scale(1); }
+  28%  { transform: scale(1); }
+  42%  { transform: scale(0.78); }
+  56%  { transform: scale(0.78); }
+  70%  { transform: scale(1); }
   100% { transform: scale(1); }
 }
 /* Activity colour: rust (default) → blue (docx) → green (upload). */
