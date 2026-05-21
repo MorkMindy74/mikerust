@@ -227,13 +227,29 @@ function createChatStore() {
         messages = res.messages.map((m) => {
           const isAssistant = m.role === 'assistant'
           const annots = Array.isArray(m.annotations) ? m.annotations : []
+          // Re-hydrate persisted assistant events (today: doc_created)
+          // into the same `steps` shape the live SSE pipeline builds in
+          // `onDocCreated`, so the download card for a generated docx /
+          // xlsx is back where it was when the chat is reopened.
+          const events = Array.isArray(m.events) ? m.events : []
+          const steps = isAssistant
+            ? events
+                .map((e) => e as Record<string, unknown>)
+                .filter((e) => e.type === 'doc_created')
+                .map((e) => ({
+                  kind: 'doc' as const,
+                  filename: String(e.filename ?? ''),
+                  documentId: String(e.document_id ?? ''),
+                  downloadUrl: String(e.download_url ?? ''),
+                }))
+            : []
           return {
             role: isAssistant ? ('assistant' as const) : ('user' as const),
             content: m.content,
-            // Re-hydrate persisted citations so reopened chats keep pills.
             ...(isAssistant && annots.length
               ? { citations: annots.map((a) => toCitation(a as Record<string, unknown>)) }
               : {}),
+            ...(steps.length ? { steps } : {}),
           }
         })
       } catch (e) {

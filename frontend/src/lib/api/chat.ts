@@ -22,6 +22,9 @@ export const chatApi = {
         created_at: string
         /** Persisted citation annotations (assistant turns). */
         annotations?: unknown[]
+        /** Persisted non-text events (doc_created etc.) replayed on
+         *  reload so generated-document cards survive a chat refresh. */
+        events?: unknown[]
       }[]
     }>(`/chat/${encodeURIComponent(id)}/messages`),
 

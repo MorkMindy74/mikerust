@@ -4075,8 +4075,15 @@ async fn get_messages(
     .await
     .unwrap_or_default();
 
-    let rows: Vec<(String, String, Option<String>, String, Option<String>)> = sqlx::query_as(
-        "SELECT id, role, content, created_at, annotations FROM messages \
+    let rows: Vec<(
+        String,         // id
+        String,         // role
+        Option<String>, // content
+        String,         // created_at
+        Option<String>, // annotations
+        Option<String>, // events (assistant — persisted doc_created etc.)
+    )> = sqlx::query_as(
+        "SELECT id, role, content, created_at, annotations, events FROM messages \
          WHERE chat_id = ? ORDER BY created_at ASC",
     )
     .bind(&id)
@@ -4086,18 +4093,23 @@ async fn get_messages(
 
     let with_annot = rows
         .iter()
-        .filter(|(_, role, _, _, ann)| role == "assistant" && ann.is_some())
+        .filter(|(_, role, _, _, ann, _)| role == "assistant" && ann.is_some())
+        .count();
+    let with_events = rows
+        .iter()
+        .filter(|(_, role, _, _, _, ev)| role == "assistant" && ev.is_some())
         .count();
     tracing::info!(
-        "[chat] GET /chat/{}/messages: {} rows total, {} assistant rows with persisted annotations",
+        "[chat] GET /chat/{}/messages: {} rows total, {} w/ annotations, {} w/ events",
         id,
         rows.len(),
         with_annot,
+        with_events,
     );
 
     let messages: Vec<Value> = rows
         .into_iter()
-        .map(|(id, role, content, created_at, annotations)| {
+        .map(|(id, role, content, created_at, annotations, events)| {
             // Hydrate annotations from the stored JSON. When the column
             // is NULL — older turns from before migration 0012, or
             // turns where the live pass dropped the citations (e.g.
@@ -4114,12 +4126,23 @@ async fn get_messages(
                 })
                 .map(|v| enrich_doc_citations(v, &chat_docs))
                 .unwrap_or_else(|| Value::Array(Vec::new()));
+            // Persisted non-text events (today: `doc_created`). Without
+            // hydrating them here the download cards for generated
+            // docx/xlsx vanish on chat reload — they only existed in
+            // the live SSE stream, never in the prose. Returning the
+            // raw array lets the frontend turn them into steps in the
+            // same shape the live `onDocCreated` callback produces.
+            let events_value = events
+                .as_deref()
+                .and_then(|s| serde_json::from_str::<Value>(s).ok())
+                .unwrap_or_else(|| Value::Array(Vec::new()));
             json!({
                 "id": id,
                 "role": role,
                 "content": content,
                 "created_at": created_at,
                 "annotations": annotations_value,
+                "events": events_value,
             })
         })
         .collect();
