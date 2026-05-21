@@ -175,13 +175,16 @@ if (-not (Test-Path $overlayDir)) {
 }
 function New-ResourcesOverlay {
     param([string]$Arch)
-    # Map syntax: "<source-relative-to-repo-root>" -> "<dest-relative-to-resources/>".
-    # WiX MSI installer copies the destinations under <install>/resources/.
-    # The Rust loaders already check `<exe_dir>/resources/libs/...`,
-    # so the dev and install layouts converge.
+    # Map syntax: "<source>" -> "<dest-relative-to-resources/>".
+    # Tauri resolves the SOURCE side relative to the directory of the
+    # config file (i.e. src-tauri/), so we walk one level up with `../`
+    # to reach the repo root where libs/ actually lives. The DEST side
+    # is relative to the install's `resources/` folder — the Rust
+    # loaders look for `<exe_dir>/resources/libs/<lib>/win-<arch>/<dll>`,
+    # which is exactly what we ask the WiX MSI bundler to produce.
     $resources = [ordered]@{
-        ("libs/pdfium/win-$Arch/pdfium.dll")             = "libs/pdfium/win-$Arch/pdfium.dll"
-        ("libs/onnxruntime/win-$Arch/onnxruntime.dll")   = "libs/onnxruntime/win-$Arch/onnxruntime.dll"
+        ("../libs/pdfium/win-$Arch/pdfium.dll")             = "libs/pdfium/win-$Arch/pdfium.dll"
+        ("../libs/onnxruntime/win-$Arch/onnxruntime.dll")   = "libs/onnxruntime/win-$Arch/onnxruntime.dll"
     }
     $obj = @{ bundle = @{ resources = $resources } }
     $path = Join-Path $overlayDir ("tauri-overlay-$Arch.json")
@@ -245,18 +248,22 @@ foreach ($arch in $archesToBuild) {
     if ($msiFiles.Count -eq 0) {
         throw "tauri build for $triple produced no .msi in $msiSrcDir"
     }
-    foreach ($msi in $msiFiles) {
-        # Tauri names MSIs `<Product>_<Version>_<arch>_<locale>.msi`.
-        # Drop the locale tail and stamp our short arch label so x64 and
-        # arm64 artefacts never collide in dist/.
-        $stem  = [IO.Path]::GetFileNameWithoutExtension($msi.Name)
-        $clean = $stem -replace '_[a-z]{2}-[A-Z]{2}$', '' `
-                       -replace '_(x64|arm64|x86|aarch64)$', ''
-        $destName = "${clean}_$arch.msi"
-        $dest = Join-Path $distDir $destName
-        Copy-Item -Path $msi.FullName -Destination $dest -Force
-        Write-Host ("  -> dist\{0}" -f $destName) -ForegroundColor Green
-        $built += $dest
+    # Collect produced artefacts into dist/ with a short arch suffix.
+    # Tauri names MSIs `<Product>_<Version>_<arch>_<locale>.msi`; we
+    # strip the locale tail and replace any pre-existing arch tail with
+    # our short label so x64 and arm64 coexist in dist/ without
+    # colliding. Kept as a plain `foreach` (no pipeline) and using only
+    # explicit string ops so it can't trigger PS parameter-binding
+    # surprises across iterations.
+    foreach ($msi in @($msiFiles)) {
+        $stem  = [System.IO.Path]::GetFileNameWithoutExtension($msi.Name)
+        $cleanA = [regex]::Replace($stem,  '_[a-z]{2}-[A-Z]{2}$', '')
+        $cleanB = [regex]::Replace($cleanA, '_(x64|arm64|x86|aarch64)$', '')
+        $destName = '{0}_{1}.msi' -f $cleanB, $arch
+        $destPath = Join-Path -Path $distDir -ChildPath $destName
+        Copy-Item -LiteralPath $msi.FullName -Destination $destPath -Force
+        Write-Host ('  -> dist\{0}' -f $destName) -ForegroundColor Green
+        $built += $destPath
     }
 }
 
