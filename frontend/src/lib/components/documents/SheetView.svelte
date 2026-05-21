@@ -43,6 +43,14 @@
     }
   }
 
+  // load() ONLY parses + stamps the local state. It must NOT call
+  // renderSheet directly: renderSheet reads `sheetNames`, `activeSheet`,
+  // and `quote`, which would become tracked deps of the outer $effect
+  // that calls load(), and load() then writes back to `sheetNames` /
+  // `activeSheet` in the same run → Svelte 5 detects the
+  // read-then-write loop and bails with effect_update_depth_exceeded.
+  // Instead we let the dedicated render $effect below pick up the new
+  // workbook on the `loading: true → false` transition.
   function load() {
     loading = true
     err = null
@@ -50,7 +58,6 @@
       workbook = read(bytes, { type: 'array' })
       sheetNames = workbook.SheetNames ?? []
       activeSheet = 0
-      renderSheet()
     } catch (e) {
       err = (e as Error).message
     } finally {
@@ -64,6 +71,10 @@
   })
 
   $effect(() => {
+    // Render-only effect: fires whenever the user switches tab, a tab
+    // is re-targeted (revision++), the highlight quote changes, OR
+    // load() finishes (loading → false). Reads the state, never
+    // writes it — no risk of feedback with the load() effect above.
     void activeSheet
     void revision
     void quote
