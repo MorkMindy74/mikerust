@@ -12,6 +12,296 @@ diff. For the upstream-sync audit trail (which fixes were ported from
 
 ---
 
+## 2026-05-21 — Settings reorganised: Domains toggle + hairline-grouped sub-nav
+
+The Settings page accumulated seven sections over the spring (Profile,
+Security, LLM models, MCP servers, Data sources, **Domains** added
+today, Danger zone). A flat alphabetical-ish list stopped scaling:
+unrelated functions sat next to each other and the eye had no
+landmarks. Replaced by a four-group layout with hairline separators —
+no group labels, no extra chrome, just enough visual cadence to make
+"same family / different family" obvious at a glance.
+
+### Added
+
+- **`Settings.domains` UI** — toggle each of the ten professional
+  verticals (`legal`, `medical`, `finance`, `real_estate`, `hr`,
+  `insurance`, `ip`, `compliance`, `pa`, `others`) on or off. Lives at
+  [frontend/src/lib/components/settings/DomainsSection.svelte](frontend/src/lib/components/settings/DomainsSection.svelte).
+  Saves per-toggle (no Save button); the last enabled toggle is
+  locked with a warning toast — at least one domain must remain
+  active.
+- **Backend persistence** — new `enabled_domains TEXT` column on
+  `user_settings` (migration
+  [`0027_user_enabled_domains.sql`](migrations/0027_user_enabled_domains.sql))
+  storing a JSON array of canonical IDs. NULL = no explicit
+  preference = every domain enabled (backwards compatible). New
+  routes `GET / PUT /user/enabled-domains` in
+  [src/routes/user.rs](src/routes/user.rs); the PUT collapses an
+  explicit "all ten enabled" payload back to NULL so a user reset
+  doesn't leave a permanent snapshot of the shipped domain set.
+- **Frontend store + API**: `userStore.enabledDomains`,
+  `userStore.effectiveEnabledDomains` (always a concrete list),
+  `userStore.isDomainEnabled(d)` helper. Hydrated post-unlock alongside
+  locale and default-domain.
+- **5 new i18n keys** across all six locales via
+  [`fill-i18n.mjs`](frontend/scripts/fill-i18n.mjs):
+  `Settings.domains`, `Settings.domainsHint`,
+  `Settings.enabledDomainsSaved`, `Settings.enabledDomainsError`,
+  `Settings.atLeastOneDomain`.
+
+### Changed
+
+- **Settings sub-nav groups + hairline separators** in
+  [frontend/src/routes/Settings.svelte](frontend/src/routes/Settings.svelte).
+  Sections gain a `group: 'account' | 'content' | 'ai' | 'danger'`
+  field; a 1-px divider styled with `bg-(--color-surface-200)`,
+  `my-1.5 mx-3` is drawn whenever two consecutive entries' groups
+  differ. The visual order is now:
+  ```
+  Profilo · Sicurezza
+  ──────────
+  Domini · Fonti dati
+  ──────────
+  Modelli LLM · Server MCP
+  ──────────
+  Zona pericolosa
+  ```
+  Rationale: 1) who you are, 2) what the app shows, 3) how the AI
+  reasons, 4) destructive actions deliberately isolated. No group
+  labels — low visual noise.
+
+### Not changed (deliberate)
+
+- **Downstream filtering is a follow-up.** The toggle persists the
+  preference and the store exposes `isDomainEnabled`, but the
+  default-domain dropdown in Profilo, the domain filters in
+  Workflows / Projects / Templates / Tabular, and the create-modal
+  pickers still show the full ten-domain list. Wiring those is a
+  separate pass — best done after the user has a chance to discover
+  the new toggle.
+
+`pnpm typecheck` → 0 errors / 0 warnings. `cargo check` clean.
+
+---
+
+## 2026-05-21 — Chat reload: generated-doc cards survive, Italian paren citations get pills
+
+Two independent regressions in the chat-history replay path landed in
+the same pass because they share the same loader code.
+
+### Fixed — doc cards no longer disappear on chat reload
+
+A chat with one PDF upload, one generated DOCX and one generated XLSX
+came back from `get_messages` with all three references plain-text:
+the `[c1]` pills resolved, but the green/blue download cards that the
+live stream rendered for `doc_created` events were gone. Cause: the
+backend persisted `messages.events` in 0020 but the SELECT in
+`get_messages` never read the column, so the frontend had nothing to
+replay.
+
+- **[src/routes/chat.rs](src/routes/chat.rs)** — `get_messages` SELECT
+  now pulls `events` alongside `annotations`; the response shape
+  includes a parsed JSON array. Empty / NULL → `[]`.
+- **[frontend/src/lib/api/chat.ts](frontend/src/lib/api/chat.ts)** —
+  `messages.events?: unknown[]` typed.
+- **[frontend/src/lib/stores/chat.svelte.ts](frontend/src/lib/stores/chat.svelte.ts)**
+  — `selectChat` filters `doc_created` events and maps them into the
+  assistant message's `steps[]` as `{ kind: 'doc', filename,
+  documentId, downloadUrl }` so the existing card renderer picks them
+  up unchanged.
+
+### Fixed — Italian parenthesised citations now become pills
+
+Generated reports cite documents as `(doc-3, pag. 12-15)` in
+Italian-language prose, not `[doc-id: …]`. The existing rewriter only
+recognised the bracketed English form, so the Italian pattern stayed
+plain text. Extended the manual scanner in
+[`src/routes/chat.rs`](src/routes/chat.rs)
+(`extract_inline_docid_refs` + sibling Italian variant) to also
+recognise `(doc-N, pag. N[-M])` / `(doc-N, p. N-M)` / variations with
+multiple whitespace, rewriting them into the canonical `[cN]` form
+ahead of the citation block.
+
+### Tests
+
+`cargo test -p mike --lib` — green; new tests cover the paren-form
+extractor and the `events` round-trip through `get_messages`.
+
+---
+
+## 2026-05-21 — Activity-pulse choreography: 7-state wave over the full 3×3 grid
+
+The Mike logo doubles as the "AI thinking" indicator. The animation
+went through three iterations today, ending on a wave that includes
+every cell of the grid.
+
+### Changed
+
+- **Final shape** — seven-state choreography over a 3.2 s cycle in
+  [frontend/src/app.css](frontend/src/app.css):
+  ```
+  state 0%   tutti                        all nine cells full size
+  state 14%  shrink corner                cell 9 small
+  state 28%  shrink quad                  cells 5, 6, 8, 9 small
+  state 42%  shrink rest = full 3×3 small all nine cells small
+  state 56%  restore rest                 1, 2, 3, 4, 7 large; quad+corner still small
+  state 70%  restore quad                 5, 6, 8 large; corner still small
+  state 84%  restore corner               back to tutti
+  state 100% loop
+  ```
+- **New keyframe `mike-logo-pulse-rest`** drives cells 1, 2, 3, 4, 7
+  — previously static. They share the same ease-in-out timing as the
+  corner and quad waves so the three keyframes interlock without
+  beating.
+- **[Logo.svelte](frontend/src/lib/components/ui/Logo.svelte)** —
+  doc comment rewritten to describe the three concentric waves
+  (corner outermost, quad middle, rest innermost) rather than the
+  earlier three-phase model.
+
+### Iteration log
+
+Commits in order (all 2026-05-21):
+
+- `b5da3ea` — three-phase pulse (5689 → 9 → all → loop). User
+  feedback: "looks like a flash, not a pulse".
+- `d183341` — five-state shrink-and-restore with smooth ease-in-out
+  over 2.4 s, no flash.
+- (uncommitted today) — extended to seven states / 3.2 s, full 3×3
+  beat in the middle.
+
+`prefers-reduced-motion` continues to disable the animation entirely.
+
+---
+
+## 2026-05-21 — Spreadsheet viewer: break the read+write effect loop on XLSX open
+
+Opening a generated Excel from the chat sometimes crashed the viewer
+with `effect_update_depth_exceeded`. Cause: the loader effect called
+`renderSheet()` directly inside `load()`, which read `sheetNames` /
+`activeSheet` / `quote` — making them tracked dependencies of the
+outer effect — and then `load()` wrote back to those same fields in
+the same run. Svelte 5 detected the read-then-write loop and bailed.
+
+### Fixed
+
+- **[SheetView.svelte](frontend/src/lib/components/documents/SheetView.svelte)**
+  — `load()` no longer calls `renderSheet` directly; it only parses
+  the workbook and stamps `sheetNames` / `activeSheet`. A dedicated
+  render-only `$effect` reads the workbook on the `loading: true →
+  false` transition and also re-fires on `activeSheet` / `revision` /
+  `quote` changes — read-only, never writes the state it depends on,
+  so the feedback path is broken.
+
+Commit: `ea5ebe5`.
+
+---
+
+## 2026-05-21 — Corpus UX: plain-text preview modal + eye button on indexed docs
+
+Source documents in the global / project corpus were only browsable
+through search hits — there was no way to inspect the full text of a
+document without running a query that happened to match it. Added a
+preview path end-to-end.
+
+### Added
+
+- **`GET /corpora/:id/preview` route** — strategy-dispatched plain-text
+  preview. EUR-Lex returns the cached HTML stripped to text;
+  `dila-bulk-xml` returns the `<content>` payload; `http-fetch-per-id`
+  re-extracts on demand. Cap at ~250 KB so the modal doesn't choke
+  on a 6 000-page omnibus.
+- **`<CorpusPreviewModal>` component** — scrollable monospace body,
+  Ctrl+F native browser search (no custom search widget — Chrome's
+  text-find honours the live DOM). Eye button next to every result in
+  the search hits *and* on every indexed document row.
+- **Four new i18n keys** across all six locales.
+
+### Changed
+
+- **Badge contrast on grey surfaces** — tones bumped from `-50/-700`
+  to `-100/-800` ([Badge.svelte](frontend/src/lib/components/ui/Badge.svelte)).
+  The greens and blues used for the EUR-Lex / DILA badges were
+  illegible against the surface-50 background of the corpus list;
+  the +1 weight on both bg and text restores AA contrast.
+- **Tooltip on truncated corpus titles** — long EU law titles
+  (`"Regulation (EU) 2024/1689 …"` + 200 chars) were ellipsis-truncated
+  with no way to see the full string. `title=` attribute on the row
+  shows the full text on hover.
+
+Commits: `2f83925`, `1b373f3`, `10e9ef4`.
+
+---
+
+## 2026-05-21 — `generate_docx`: self-correct `body=` vs `body_md=` and reset empty-retry on tool use
+
+The DOCX-generation tool kept getting called with `body_md="…"` instead
+of the documented `body="…"` parameter — Gemini 3.5 Flash and Claude
+both invented the alias from context, ignoring the JSON-schema
+parameter name. Server-side returned an empty-body error; the model
+then retried with the *same* wrong key, sometimes looping until the
+chat ran out of patience.
+
+### Fixed
+
+- **[src/llm/builtin_tools.rs](src/llm/builtin_tools.rs) —
+  `exec_generate_docx`** now accepts `body` *or* `body_md` (and a few
+  other obvious variants) as input keys. On the unhappy path — both
+  absent — the error message names the *exact* expected key so the
+  model corrects on the next turn rather than guessing again.
+- **Empty-retry counter resets on a successful tool invocation.**
+  Previously, three earlier rejected calls left the counter near the
+  abort threshold; a successful call later in the same turn could
+  push the *next* (unrelated) empty response over the limit and end
+  the stream early. The counter now resets every time the dispatcher
+  observes a non-empty tool result.
+
+Commit: `9d91f4a`.
+
+---
+
+## 2026-05-21 — Compliance vertical brief: `docs/macchine.md`
+
+Added the operational spec for the **compliance** product vertical —
+validation, analysis, generation and comparison of regulatory
+technical documentation for industrial machinery (autoofficina,
+lifting accessories, connected IoT machinery).
+
+### Added
+
+- **[docs/macchine.md](docs/macchine.md)** (1544 lines, v2.2). Six EU
+  regulations in scope: Dir. 2006/42/CE · Reg. 2023/1230 (in vigore
+  20/01/2027) · CRA 2024/2847 · RED 2014/53 · NIS2 2022/2555 ·
+  D.Lgs. 138/2024. Defines: 4 document levels (L1 scheda · L2 manuale
+  · L3 fascicolo · L4 accessori di sollevamento), 30 workflows
+  (A1-A14 analysis, B1-B8 binary checklists, C1-C8 DOCX generation),
+  11 analysis rules with standardised GAP types, a 4-layer SBOM/CVE
+  pipeline with 10 function-calling tools (NVD + EPSS + CISA KEV),
+  the "Validazione Fascicolo Tecnico" XLSX workbook in 6 sheets, and
+  12 ready prompts (A-L) with the `[RUOLO][CONTESTO][ISTRUZIONI]
+  [VINCOLI][FLAG OPERATIVI][OUTPUT]` skeleton.
+- **First preset of the vertical** — [`macchine-classify-doc.json`](config/workflow-presets/compliance/macchine-classify-doc.json)
+  (Prompt A, L1/L2/L3/L4 classifier; assistant workflow returning
+  pure JSON). It is the prerequisite for every subsequent analysis
+  in the brief.
+
+### Notes
+
+- The brief is **distinct from the roadmap item "compliance-aware
+  model evaluation"**. That item is about scoring LLMs on per-provider
+  compliance metadata (serving region, DPA, EULA). The brief is a
+  product vertical that *uses* MikeRust to validate customer
+  documentation. Different work; don't conflate.
+- Two issues flagged during the analysis on 2026-05-21:
+  "Prompt B0" referenced in §15 but never defined (typo); the archive
+  deadline formula in Sheet 1 (`Data_emissione + 3650`) is inconsistent
+  with Regola 3 ("10 anni dalla *cessazione produzione*", Dir.
+  2006/42/CE Art. 5(3)).
+- The remaining 13 workflows + 3 DOCX templates from the priority-1
+  list of §15 are deferred to the next pass.
+
+---
+
 ## 2026-05-20 — Auto-fetch native DLLs + bundle them into the MSI
 
 End-to-end: a clean checkout can now do `pnpm --dir frontend install`
