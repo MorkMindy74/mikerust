@@ -13,6 +13,7 @@
 
 const MARK_CLASS = 'doc-hl'
 const ALNUM = /[a-zA-Z0-9]/
+const COMBINING = /[̀-ͯ]/g
 
 /** Remove any highlight marks previously added inside `container`. */
 export function clearHighlights(container: HTMLElement): void {
@@ -25,10 +26,22 @@ export function clearHighlights(container: HTMLElement): void {
   }
 }
 
-/** Strip to alphanumerics, lower-cased. */
+/**
+ * Strip every non-ASCII-alphanumeric character, lower-case the rest.
+ * The string is first NFD-normalised so accented letters decompose to
+ * base + combining mark; the combining mark is then dropped. This
+ * makes Italian quotes ("perché", "città", "più") match a document
+ * regardless of whether either side is NFC- or NFD-encoded, and
+ * regardless of whether the source preserves accents at all. CR / LF /
+ * tabs / `\r\n` / non-breaking spaces are stripped uniformly because
+ * none survive the alphanumeric filter — the haystack is the same
+ * sequence whether the document came in with Unix LF, Windows CRLF,
+ * or with the model's quote wrapped across literal newlines.
+ */
 function onlyLetters(s: string): string {
+  const decomposed = s.normalize('NFD').replace(COMBINING, '')
   let out = ''
-  for (const c of s) if (ALNUM.test(c)) out += c.toLowerCase()
+  for (const c of decomposed) if (ALNUM.test(c)) out += c.toLowerCase()
   return out
 }
 
@@ -105,8 +118,13 @@ export function highlightQuote(container: HTMLElement, quote: string): HTMLEleme
   if (needle.length < 4) return null
   const { full, nodes } = collect(container)
 
-  for (const len of [needle.length, 160, 120, 80, 50, 32]) {
-    if (len > needle.length) continue
+  // Try the full quote, then progressively shorter prefixes (model
+  // often paraphrases the tail). Add `min(needle.length, 24)` as a
+  // last-resort cut so single-line references like "Settimane 1-4"
+  // still find a foothold somewhere in the body. 4 is the floor.
+  const lens = [needle.length, 160, 120, 80, 50, 32, 24, 16, 12, 8]
+  for (const len of lens) {
+    if (len > needle.length || len < 4) continue
     const slice = needle.slice(0, len)
     const pos = full.indexOf(slice)
     if (pos >= 0) return wrapRange(nodes, pos, pos + slice.length)

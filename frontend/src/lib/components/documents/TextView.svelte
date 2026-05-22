@@ -35,7 +35,20 @@
       .trim()
   }
 
-  const body = $derived(kind === 'rtf' ? rtfToText(text) : text)
+  /** Normalise line endings: collapse CRLF / lone CR to LF, strip BOM.
+   *  The browser preserves CR characters in <pre> text nodes; visually
+   *  they can render as a double-break and they pollute any text-based
+   *  search that doesn't strip them. `highlightCitation` already
+   *  filters non-alphanumerics, so this is mostly a cosmetic fix — but
+   *  it also keeps the displayed text consistent across Windows-saved
+   *  TXT (CRLF), legacy Mac (CR), and Unix (LF) sources. */
+  function normaliseNewlines(s: string): string {
+    return s.replace(/^﻿/, '').replace(/\r\n?/g, '\n')
+  }
+
+  const body = $derived(
+    kind === 'rtf' ? rtfToText(text) : normaliseNewlines(text),
+  )
   const html = $derived(kind === 'md' ? renderMarkdown(body) : '')
 
   let host = $state<HTMLElement>()
@@ -52,6 +65,17 @@
       if (mark) {
         mark.classList.add('doc-hl-flash')
         mark.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      } else {
+        // No fragment of the quote was located in the rendered text —
+        // most often because the model invented the quote (citing a
+        // section of its own report instead of the source). Make the
+        // failure visible: log a console warning and reset the scroll
+        // so the viewer doesn't sit silently in the middle of the doc.
+        console.warn(
+          '[TextView] citation quote not found in rendered text — opening at the top.',
+          { quoteHead: quote!.slice(0, 80) },
+        )
+        el.scrollTop = 0
       }
     })
   })
