@@ -1581,6 +1581,26 @@ fn build_kb_system_prompt(chunks: &[RetrievedKbEntry]) -> String {
 /// whitespace), then collapse any double-spaces / leading newlines
 /// the removal might leave behind. Quotes that don't contain a marker
 /// pass through unchanged.
+/// Compact a string to its ASCII-alphanumeric, lower-cased projection.
+/// Counterpart of `frontend/src/lib/utils/highlight.ts::onlyLetters`
+/// (the frontend version additionally NFD-normalises to handle the
+/// case where the document on disk and the persisted quote use
+/// different accent encodings; server-side both come from the same
+/// retrieval pipeline so we skip that step). Used by the citation
+/// validator below to decide whether the model's emitted quote is a
+/// substring of the chunk text we actually retrieved — if not, the
+/// quote is a hallucination and we replace it with the chunk's real
+/// opening before persisting the citation.
+fn letters_only(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+        }
+    }
+    out
+}
+
 fn strip_page_markers(quote: &str) -> String {
     let mut out = String::with_capacity(quote.len());
     let bytes = quote.as_bytes();
@@ -3342,6 +3362,39 @@ async fn stream_chat_root(
             }
         }
 
+        // Pre-fetch a `document_id → absolute local storage path` map
+        // for this user's corpus docs. Used below to defensively remap
+        // any KB chunk whose `source_path` is the upstream URL (older
+        // `doc_chunks` rows, or any code path that stored the URL
+        // instead of the cached file path) back to the local file
+        // `/sync/kb-doc` can actually `std::fs::read`. The fix lives at
+        // citation-build time, not as a DB migration, so it covers
+        // both pre-existing rows and future regressions uniformly.
+        let mut corpus_local_path_by_docid: HashMap<String, String> = HashMap::new();
+        {
+            let storage_root = std::path::PathBuf::from(
+                std::env::var("STORAGE_PATH")
+                    .unwrap_or_else(|_| "./data/storage".to_string()),
+            );
+            if let Ok(rows) = sqlx::query_as::<_, (String, Option<String>)>(
+                "SELECT id, storage_path FROM documents \
+                 WHERE user_id = ? AND corpus_id IS NOT NULL AND storage_path IS NOT NULL",
+            )
+            .bind(&auth.user_id)
+            .fetch_all(&state_clone.db)
+            .await
+            {
+                for (doc_uuid, sp_opt) in rows {
+                    if let Some(sp) = sp_opt {
+                        let abs = storage_root
+                            .join(sp.replace('/', std::path::MAIN_SEPARATOR_STR));
+                        corpus_local_path_by_docid
+                            .insert(doc_uuid, abs.to_string_lossy().to_string());
+                    }
+                }
+            }
+        }
+
         // Resolution order: the inline `[doc-id: …]` rewriter wins if it
         // synthesised any citations earlier (the body is already rewritten
         // and has `[cN]` markers); otherwise parse a model-emitted block;
@@ -3544,9 +3597,75 @@ async fn stream_chat_root(
                                 obj.insert("quote".into(), Value::String(cleaned));
                             }
                         }
+                        // Hallucinated-quote safety net: validate the
+                        // model's quote against the chunk text we
+                        // actually retrieved. The frontend's highlight
+                        // is letters-only-and-lower-cased; mirror that
+                        // here. If the projection of the quote isn't a
+                        // substring of the projection of the chunk
+                        // text, the model invented the quote (most
+                        // often by citing one of its own section
+                        // headings instead of the source) — replace
+                        // it with the chunk's real opening so the
+                        // viewer at least lands on the cited passage.
+                        if let Some(q) = obj.get("quote").and_then(|v| v.as_str()) {
+                            let chunk_clean = strip_page_markers(&kb.text);
+                            let needle = letters_only(q);
+                            let haystack = letters_only(&chunk_clean);
+                            if needle.len() >= 4 && !haystack.contains(&needle) {
+                                let trimmed = chunk_clean.trim();
+                                let cap = 200.min(trimmed.len());
+                                let mut end = cap;
+                                while end < trimmed.len()
+                                    && !trimmed.is_char_boundary(end)
+                                {
+                                    end += 1;
+                                }
+                                let fallback = trimmed[..end].to_string();
+                                tracing::warn!(
+                                    "[chat] citation quote not found in chunk for tag {label:?} \
+                                     (doc {:?}, chunk {}): model emitted {:?}; \
+                                     substituting first {} chars of chunk text",
+                                    kb.document_id,
+                                    kb.chunk_index,
+                                    q.chars().take(80).collect::<String>(),
+                                    fallback.len()
+                                );
+                                obj.insert("quote".into(), Value::String(fallback));
+                            }
+                        }
                         obj.insert("source".into(), Value::String("kb".to_string()));
                         obj.insert("scope".into(), Value::String(kb.scope_label.to_string()));
-                        obj.insert("path".into(), Value::String(kb.source_path.clone()));
+                        // Remap URL-shaped source_path back to the local
+                        // cache file. EUR-Lex (and any corpus that stored
+                        // the upstream URL in older indexing runs) needs
+                        // this — /sync/kb-doc does std::fs::read on the
+                        // value and can't take a URL.
+                        let mut path_value = kb.source_path.clone();
+                        if path_value.starts_with("http://")
+                            || path_value.starts_with("https://")
+                        {
+                            if let Some(local) =
+                                corpus_local_path_by_docid.get(&kb.document_id)
+                            {
+                                tracing::info!(
+                                    "[chat] remapping URL source_path → local storage path \
+                                     for doc {:?} (was {:?})",
+                                    kb.document_id,
+                                    path_value
+                                );
+                                path_value = local.clone();
+                            } else {
+                                tracing::warn!(
+                                    "[chat] citation source_path is a URL ({:?}) but no \
+                                     local storage_path is registered under documents \
+                                     for doc_id {:?} — viewer will 404",
+                                    path_value,
+                                    kb.document_id
+                                );
+                            }
+                        }
+                        obj.insert("path".into(), Value::String(path_value));
                         obj.insert("chunk_index".into(), Value::Number(kb.chunk_index.into()));
                         // document_id here points to the synced_files entry,
                         // not the upload-flow `documents` row — same field name
@@ -4004,6 +4123,57 @@ async fn delete_chat(
 /// it stays linked to the chat via `documents.chat_id` — so resolving it
 /// on read makes the viewer work again. `chat_docs` is the chat's
 /// attached documents ordered as `doc-0`, `doc-1`, ….
+/// Rewrite annotations whose `path` is the upstream URL of a corpus
+/// document back to the local cache-file path the viewer can fetch via
+/// `/sync/kb-doc`. Older indexing runs (pre eurlex.rs:462 fix) stored
+/// the EUR-Lex URL as `doc_chunks.source_path`; that URL got persisted
+/// into `messages.annotations[].path`. The hot fix at write time
+/// remaps new citations, but persisted ones from old chats still carry
+/// the URL — so we apply the same remap on read.
+///
+/// `corpus_local_path_by_docid` maps a `document_id` to the absolute
+/// on-disk path of its cached binary (storage root joined with the
+/// row's `storage_path`). Built once per `get_messages` call from
+/// `documents` rows that belong to a corpus.
+fn remap_url_annotation_paths(
+    mut value: Value,
+    corpus_local_path_by_docid: &HashMap<String, String>,
+) -> Value {
+    if corpus_local_path_by_docid.is_empty() {
+        return value;
+    }
+    let cits = if value.is_array() {
+        value.as_array_mut()
+    } else {
+        value.get_mut("citations").and_then(|v| v.as_array_mut())
+    };
+    let Some(cits) = cits else {
+        return value;
+    };
+    for c in cits.iter_mut() {
+        let Some(obj) = c.as_object_mut() else { continue };
+        let path = obj.get("path").and_then(|v| v.as_str()).unwrap_or("");
+        if !(path.starts_with("http://") || path.starts_with("https://")) {
+            continue;
+        }
+        let doc_uuid = obj
+            .get("document_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if doc_uuid.is_empty() {
+            continue;
+        }
+        if let Some(local) = corpus_local_path_by_docid.get(doc_uuid) {
+            tracing::info!(
+                "[chat] get_messages: remapping URL path → local storage path for doc {:?}",
+                doc_uuid
+            );
+            obj.insert("path".to_string(), Value::String(local.clone()));
+        }
+    }
+    value
+}
+
 fn enrich_doc_citations(mut value: Value, chat_docs: &[(String, String)]) -> Value {
     if chat_docs.is_empty() {
         return value;
@@ -4075,6 +4245,34 @@ async fn get_messages(
     .await
     .unwrap_or_default();
 
+    // Mapping `document_id → absolute local path` for the user's corpus
+    // docs. Used to rewrite annotations whose persisted `path` is the
+    // upstream URL — old chats stored those before the eurlex.rs fix.
+    let mut corpus_local_path_by_docid: HashMap<String, String> = HashMap::new();
+    {
+        let storage_root = std::path::PathBuf::from(
+            std::env::var("STORAGE_PATH")
+                .unwrap_or_else(|_| "./data/storage".to_string()),
+        );
+        if let Ok(rows) = sqlx::query_as::<_, (String, Option<String>)>(
+            "SELECT id, storage_path FROM documents \
+             WHERE user_id = ? AND corpus_id IS NOT NULL AND storage_path IS NOT NULL",
+        )
+        .bind(&auth.user_id)
+        .fetch_all(&state.db)
+        .await
+        {
+            for (doc_uuid, sp_opt) in rows {
+                if let Some(sp) = sp_opt {
+                    let abs = storage_root
+                        .join(sp.replace('/', std::path::MAIN_SEPARATOR_STR));
+                    corpus_local_path_by_docid
+                        .insert(doc_uuid, abs.to_string_lossy().to_string());
+                }
+            }
+        }
+    }
+
     let rows: Vec<(
         String,         // id
         String,         // role
@@ -4125,6 +4323,7 @@ async fn get_messages(
                     content.as_deref().and_then(extract_citations_block)
                 })
                 .map(|v| enrich_doc_citations(v, &chat_docs))
+                .map(|v| remap_url_annotation_paths(v, &corpus_local_path_by_docid))
                 .unwrap_or_else(|| Value::Array(Vec::new()));
             // Persisted non-text events (today: `doc_created`). Without
             // hydrating them here the download cards for generated
