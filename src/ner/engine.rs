@@ -18,7 +18,7 @@ use anyhow::{anyhow, Context, Result};
 use std::sync::{Arc, OnceLock};
 use tokio::sync::{Mutex, RwLock};
 
-use gliner2_inference::{mask_pii_text, Gliner2Engine, ModelType, SchemaTask};
+use gliner2_inference::{ExtractedEntity, Gliner2Engine, ModelType, SchemaTask};
 
 use super::labels::default_pii_labels;
 
@@ -55,13 +55,16 @@ fn status_cell() -> &'static RwLock<NerStatus> {
     CELL.get_or_init(|| RwLock::new(NerStatus::Idle))
 }
 
-/// A single PII / named-entity span. `start` / `end` are byte
-/// offsets into the original text (`text[start..end]` is verbatim
-/// equal to `text` below).
+/// A single PII / named-entity span. We expose only `label`, `score`
+/// and the literal extracted `text` because gliner2-rs v0.5.0
+/// `ExtractedEntity` carries **token** offsets (`start_tok` /
+/// `end_tok`), not byte/char offsets — re-aligning tokens to char
+/// positions would require holding the tokenizer alongside the
+/// engine. For PII redaction (the only consumer in Phase 1) the
+/// text is sufficient: we do a global string replace below. A future
+/// char-offset API can come back via a tokenizer alignment pass.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Entity {
-    pub start: usize,
-    pub end: usize,
     pub label: String,
     pub score: f32,
     pub text: String,
@@ -153,31 +156,63 @@ pub async fn mask_pii(
             );
         }
         let tasks = vec![SchemaTask::Entities(owned_labels)];
-        let mut all_entities = Vec::new();
+        let mut all_entities: Vec<ExtractedEntity> = Vec::new();
         for chunk in &chunks {
             let chunk_text = &text_owned[chunk.start..chunk.end];
+            // gliner2-rs `extract` takes (text, tasks, Option<params>).
+            // We pass `None` so the engine uses its default
+            // InferenceParams (threshold 0.5, flat_ner false). Future
+            // work: expose a per-call threshold in the public API.
             let (entities, _r, _c) = engine
-                .extract(chunk_text, &tasks)
+                .extract(chunk_text, &tasks, None)
                 .map_err(|e| anyhow!("gliner2 extract failed on chunk: {e:?}"))?;
-            // gliner2-rs `ExtractedEntity` carries `start_char` /
-            // `end_char` byte offsets into the chunk; shift into
-            // global text coordinates so `mask_pii_text` over the
-            // ORIGINAL text below sees the right spans.
-            for mut e in entities {
-                e.start_char += chunk.start;
-                e.end_char += chunk.start;
-                all_entities.push(e);
-            }
+            all_entities.extend(entities);
         }
-        // Dedupe across overlap regions: same span detected at the
-        // tail of one chunk and the head of the next. `mask_pii_text`
-        // already dedupes by overlap-and-score on its own input, so
-        // we just hand it the union — it picks the highest-score
-        // representative per region.
-        Ok(mask_pii_text(&text_owned, &all_entities))
+        Ok(redact_by_text(&text_owned, &all_entities))
     })
     .await
     .map_err(|e| anyhow!("ner mask task join: {e:?}"))?
+}
+
+/// Globally replace every entity's literal text in `source` with
+/// `[LABEL]` (uppercase). Sort by length descending so a longer
+/// entity ("Mario Rossi") is masked before the shorter prefix
+/// ("Mario") that could otherwise hit the residual leftover. Dedup
+/// `(text, label)` pairs so the same span found in multiple
+/// overlapping chunks doesn't trigger redundant work. This is
+/// safer-by-default than offset-based replacement: if the same
+/// person name appears 5 times in the document and the model tagged
+/// only one occurrence, we still mask all 5 — the alternative
+/// (leaking 4 of them) is the wrong default for a redaction tool.
+///
+/// Limit: substring overmatch is possible (entity "Mar" hitting
+/// "Marathon"). For Phase 1 PII labels — person names, emails,
+/// fiscal codes, IBANs, phone numbers — this is rare. Phase 2 can
+/// add tokenizer-aligned char offsets for stricter span control.
+fn redact_by_text(source: &str, entities: &[ExtractedEntity]) -> String {
+    use std::collections::HashSet;
+    let mut seen = HashSet::<(String, String)>::new();
+    let mut unique: Vec<(&str, &str)> = Vec::new();
+    for e in entities {
+        if e.text.trim().is_empty() {
+            continue;
+        }
+        let key = (e.text.clone(), e.label.clone());
+        if seen.insert(key) {
+            unique.push((e.text.as_str(), e.label.as_str()));
+        }
+    }
+    // Longest-first so "Mario Rossi" gets the mask before "Mario"
+    // would catch it.
+    unique.sort_by_key(|(t, _)| std::cmp::Reverse(t.len()));
+    let mut out = source.to_string();
+    for (text, label) in unique {
+        let placeholder = format!("[{}]", label.to_uppercase());
+        // String::replace is a non-overlapping left-to-right pass;
+        // good enough for our single-pass redaction.
+        out = out.replace(text, &placeholder);
+    }
+    out
 }
 
 /// One chunk window, in **byte** offsets into the source text.
@@ -291,28 +326,26 @@ fn run_pass(
     text: &str,
     labels: Vec<String>,
 ) -> Result<Vec<Entity>> {
+    // Chunk so long inputs don't get silently truncated by the
+    // model's ~2000-char context window. Mirror of the `mask_pii`
+    // codepath above; we just collect entities here instead of
+    // running the text-replace pass.
+    let chunks = chunk_for_window(text, GLINER2_WINDOW_CHARS, GLINER2_OVERLAP_CHARS);
     let tasks = vec![SchemaTask::Entities(labels)];
-    let (entities, _relations, _classifications) = engine
-        .extract(text, &tasks)
-        .map_err(|e| anyhow!("gliner2 extract failed: {e:?}"))?;
-
-    // `gliner2_inference::Entity` carries char offsets + label +
-    // score; we re-emit it with a verbatim `text` slice for
-    // ergonomics on the wire. The crate's field names may evolve;
-    // when v0.6 lands, adjust this mapping and nothing else.
-    let out: Vec<Entity> = entities
-        .into_iter()
-        .map(|e| Entity {
-            start: e.start,
-            end: e.end,
-            label: e.label,
-            score: e.score,
-            text: text
-                .get(e.start..e.end)
-                .map(|s| s.to_string())
-                .unwrap_or_default(),
-        })
-        .collect();
+    let mut out: Vec<Entity> = Vec::new();
+    for chunk in &chunks {
+        let chunk_text = &text[chunk.start..chunk.end];
+        let (entities, _r, _c) = engine
+            .extract(chunk_text, &tasks, None)
+            .map_err(|e| anyhow!("gliner2 extract failed: {e:?}"))?;
+        for e in entities {
+            out.push(Entity {
+                label: e.label,
+                score: e.score,
+                text: e.text,
+            });
+        }
+    }
     Ok(out)
 }
 
