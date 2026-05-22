@@ -436,7 +436,7 @@ See `.env.example` for the full reference.
 | Other DILA fondi (LEGI, JORF, CASS, KALI) as plugins | 🔲 — same strategy, one manifest each |
 | MCP-backend alternative for ingestion (Légifrance / Bundesanzeiger / …) | 🔲 design phase — see "Authoritative legal corpora" |
 | Other corpus ingestors (Retsinformation, BOE, …) | 🔲 planned |
-| **Professional-domain column** across workflows / tabular_reviews / projects / documents (migration 0018) | ✅ 9 canonical domains, validated at API boundary, filter chips in list views |
+| **Professional-domain column** across workflows / tabular_reviews / projects / documents (migration 0018) | ✅ 11 canonical domains (`legal`, `medical`, `finance`, `real_estate`, `hr`, `insurance`, `ip`, `compliance`, `gdpr`, `pa`, `others`), validated at API boundary, filter chips in list views |
 | **Per-user `default_domain`** preference (migration 0019, Account → Generali UI) | ✅ pre-selects in every create / picker modal |
 | **Per-user `enabled_domains`** toggle (migration 0027, Impostazioni → Domini) | ✅ persists subset of visible verticals server-side; NULL = all enabled; downstream filtering of pickers is a follow-up |
 | **JSON-driven workflow & column-preset registries** (`config/workflow-presets/` + `config/column-presets/`) | ✅ in-memory loaders, no DB seed, merged into `/workflow` list; replaces the legacy TS constants |

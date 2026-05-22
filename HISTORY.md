@@ -12,6 +12,161 @@ diff. For the upstream-sync audit trail (which fixes were ported from
 
 ---
 
+## 2026-05-22 — New `gdpr` canonical domain (11 verticals)
+
+Added a dedicated `gdpr` professional vertical, distinct from
+`compliance`. Domain identifiers are English snake_case and travel
+over the wire as-is; UI labels are localised per market acronym
+(`GDPR` it/en, `RGPD` fr/es/pt, `DSGVO` de).
+
+### Added
+
+- `gdpr` in [src/domain.rs](src/domain.rs) `DOMAINS` slice and in
+  [frontend/src/lib/types/domain.ts](frontend/src/lib/types/domain.ts)
+  — placed between `compliance` and `pa` (related but distinct: a
+  workflow on a privacy-impact assessment is GDPR, a workflow on
+  NIS2 incident-notification policy is compliance).
+- `Domains.values.gdpr` key across all six locales.
+
+### Behaviour with existing data
+
+- Users with `enabled_domains = NULL` (no explicit preference) see
+  GDPR enabled automatically — the NULL sentinel means "every shipped
+  domain", and the new one rides along.
+- Users with an explicit subset (e.g. `["legal","compliance"]`) keep
+  their list; GDPR is opt-in via Impostazioni → Domini.
+- No migration required — schema accepts arbitrary string under
+  `domain` columns, validation is at the API boundary against
+  `DOMAINS`. This is the documented add-a-domain procedure in
+  `src/domain.rs`.
+
+The first batch of `gdpr` workflow presets is queued — guidance
+material to follow.
+
+---
+
+## 2026-05-22 — Citation pipeline: corpus URL → local path remap (write + read)
+
+Citation pills pointing to corpus documents (EUR-Lex specifically,
+but applies to any corpus that fetches an upstream URL) opened with
+404 in the document viewer. Cause: the citation's `path` field
+carried the upstream URL (`https://eur-lex.europa.eu/legal-content/...`),
+which `/sync/kb-doc` rejected because it does `std::fs::read(path)`
+and can't take a URL. Older `doc_chunks` rows persisted the URL as
+`source_path`; the fix in
+[`src/routes/eurlex.rs`](src/routes/eurlex.rs)
+(2026-05-20) used the local cache file going forward but didn't
+rewrite existing rows.
+
+### Fixed
+
+- **Write-path (live streaming)** — in
+  [`src/routes/chat.rs`](src/routes/chat.rs) the citation builder
+  now pre-fetches a `document_id → absolute_local_path` map from
+  `documents` (joined with `STORAGE_PATH`) at the start of each
+  turn. When emitting a citation whose `kb.source_path` starts with
+  `http://` or `https://`, the value is substituted with the local
+  cache path. Log: `[chat] remapping URL source_path → local
+  storage path for doc <uuid>`. If no mapping exists (corpus doc
+  never persisted to `documents`), the original URL flows through
+  and the warning `citation source_path is a URL but no local
+  storage_path is registered` makes the diagnosis explicit.
+- **Read-path (chat reload)** — new helper
+  `remap_url_annotation_paths` mirrors the same logic in
+  `get_messages`. Annotations persisted in the old shape (URL in
+  `path`) are rewritten on load, so reopening an old chat shows
+  working citation pills without a destructive migration.
+
+### Not changed (deliberate)
+
+- No schema migration. The on-disk JSON in `messages.annotations`
+  keeps the URL; only the API response substitutes it. Next time
+  citations are generated for the same doc, the write-path remap
+  kicks in and persists the local path — the URL form fades out
+  organically.
+
+---
+
+## 2026-05-22 — Citation viewer: hallucinated-quote safety net + highlight hardening
+
+When the model emits a `<CITATIONS>` block but the `quote` field
+isn't an actual passage of the cited document — most often by citing
+one of its own report's section headings, or by paraphrasing — the
+viewer used to silently sit at the middle of the document with no
+highlight. Two layers of defence shipped today.
+
+### Backend safety net — `src/routes/chat.rs`
+
+Right after `strip_page_markers` on the model's quote, the citation
+builder now validates the quote against the chunk text we actually
+retrieved (`kb.text`):
+
+- Computes the letters-only-and-ASCII-lower-cased projection of
+  both sides via the new `letters_only` helper (mirror of the
+  frontend's `onlyLetters` in `highlight.ts`).
+- If the projection of the quote isn't a substring of the
+  projection of the chunk (`needle.len() >= 4` guard against
+  trivial matches), the model hallucinated — replace the quote
+  with the first 200 chars of the chunk text (trimmed at a UTF-8
+  char boundary). Log: `[chat] citation quote not found in chunk
+  for tag …; substituting first N chars of chunk text`.
+
+The viewer now lands on the actual cited passage instead of an
+invented header. Old chats that already persisted hallucinated
+quotes are not retroactively rewritten — they were generated
+before the validator existed.
+
+### Frontend highlight hardening — `frontend/src/lib/utils/highlight.ts` + `TextView.svelte`
+
+- **`onlyLetters` is now NFD-aware**: `s.normalize('NFD').replace(/[̀-ͯ]/g, '')`
+  before stripping non-alphanumerics. Italian quotes ("perché",
+  "città") no longer fail to match a document whose accents use a
+  different normalisation form than the model's emitted quote.
+- **Fallback prefix lengths extended** to `[…, 24, 16, 12, 8]`.
+  Short references like "Settimane 1-4" used to fall below the
+  previous floor of 32; they now get at least one shot.
+- **TextView normalises line endings on input**: CR / CRLF / lone
+  CR collapse to LF, leading BOM stripped. Visually consistent
+  across Windows-saved TXT (CRLF), legacy Mac (CR), and Unix (LF)
+  sources.
+- **No-match fallback**: when `highlightCitation` returns null the
+  viewer scrolls the container to the top instead of sitting
+  silently in the middle, and logs a console warning with the
+  first 80 chars of the quote — the user sees the document opened
+  cleanly and the developer has a discoverable hook for diagnosing
+  hallucinations from the browser console.
+
+### Tests
+
+`pnpm exec vitest run src/lib/utils/highlight.test.ts` →
+**13/13** green (no regressions from the NFD addition).
+
+`cargo check` clean.
+
+---
+
+## 2026-05-22 — `run.ps1` — debug-mode launcher at the repo root
+
+A convenience entry point at the repo root: `./run.ps1` defaults to
+`RUST_LOG=mike=debug,info` and forwards to
+[`scripts/dev.ps1`](scripts/dev.ps1) — no need to remember the
+`-LogTrace` flag every time, no duplication of the actual launch
+logic.
+
+### Added
+
+- [run.ps1](run.ps1) — three parameters: `-Quiet` skips the
+  RUST_LOG export; `-RustLog <expr>` overrides the level (e.g.
+  `mike=trace,info,hyper=warn`); default invocation runs in debug
+  mode out of the box.
+- Parse-checked via
+  `[System.Management.Automation.Language.Parser]::ParseFile()`.
+  The actual `tauri dev` invocation still lives in
+  `scripts/dev.ps1` — `run.ps1` is purely a wrapper so dev-story
+  changes have a single source of truth.
+
+---
+
 ## 2026-05-21 — Settings reorganised: Domains toggle + hairline-grouped sub-nav
 
 The Settings page accumulated seven sections over the spring (Profile,
