@@ -22,20 +22,27 @@ use gliner2_inference::{ExtractedEntity, Gliner2Engine, ModelType, SchemaTask};
 
 use super::labels::default_pii_labels;
 
-/// Coarse-grained snapshot of where the GLiNER2 engine is in its
-/// lifecycle. The crate's `from_pretrained` is synchronous and
-/// doesn't surface byte-level download progress (the hf-hub client
-/// is buried inside it), so we publish four states instead of a
-/// `downloaded/total` pair — sufficient for the UI to show an
-/// indeterminate "Loading PII model…" stripe and to distinguish
-/// "still busy" from "ready, your inference will be fast".
+/// Snapshot of where the GLiNER2 engine is in its lifecycle. We
+/// route through our own hf-hub-style downloader (`bootstrap.rs`)
+/// so the `Downloading` state can carry real bytes/total — the
+/// gliner2-rs `from_pretrained` is opaque on that front.
 #[derive(Debug, Clone)]
 pub enum NerStatus {
     /// No call has hit `ensure_engine` yet.
     Idle,
-    /// `from_pretrained` is in flight: HF download (first run only)
-    /// + ort session build. May take 30-180 s the very first time,
-    /// ≤1 s on every subsequent process start (HF cache hit).
+    /// Manual HF resolve of the V2 model shards is in flight.
+    /// `total` is `None` when HEAD didn't surface Content-Length
+    /// (rare; the UI falls back to an indeterminate progress bar).
+    /// `file` is the current shard being streamed — `encoder` runs
+    /// for several minutes at 500 Mb/s WAN, every other shard is
+    /// short.
+    Downloading {
+        downloaded: u64,
+        total: Option<u64>,
+        file: String,
+    },
+    /// Files are cached on disk and `Gliner2Engine::new` is
+    /// building the ort sessions. ~1-3 s on CPU.
     Loading,
     /// Engine is in memory; subsequent `mask_pii` calls jump
     /// straight to inference.
@@ -44,6 +51,13 @@ pub enum NerStatus {
     /// `ensure_engine` call resets to Loading and tries again.
     Failed { error: String },
 }
+
+/// Default HF model id for the privacy / PII task. Exported so
+/// `super::bootstrap` can resolve files against the same repo as
+/// `ensure_engine`. Pinned here so a future variant swap is a
+/// one-line change.
+pub(super) const PII_MODEL_ID: &str = "SemplificaAI/gliner2-privacy-filter-PII-multi";
+pub(super) const PII_MODEL_VARIANT: &str = "fp16_v2";
 
 /// Public reader used by the `/sync/ner-status` route.
 pub async fn status() -> NerStatus {
@@ -69,11 +83,6 @@ pub struct Entity {
     pub score: f32,
     pub text: String,
 }
-
-/// Default HF model id for the privacy / PII task. Pinned here so a
-/// future variant swap is a one-line change.
-const PII_MODEL_ID: &str = "SemplificaAI/gliner2-privacy-filter-PII-multi";
-const PII_MODEL_VARIANT: &str = "fp16_v2";
 
 /// Top-level extraction entry point. `labels = None` uses the
 /// canonical PII set in `labels.rs`; `Some(&[...])` lets the caller
@@ -409,18 +418,34 @@ async fn ensure_engine() -> Result<Arc<Gliner2Engine>> {
         PII_MODEL_ID,
         PII_MODEL_VARIANT
     );
+
+    // Phase 1 — download. Our bootstrap publishes bytes/total so
+    // the UI can render a real progress bar (gliner2-rs's own
+    // `from_pretrained` is opaque). On a warm cache this returns
+    // immediately and sets status to Loading.
+    let models_dir = match super::bootstrap::ensure_default_model().await {
+        Ok(d) => d,
+        Err(e) => {
+            let msg = format!("download failed: {e:#}");
+            *status_cell().write().await =
+                NerStatus::Failed { error: msg.clone() };
+            return Err(e);
+        }
+    };
+
+    // Phase 2 — session build. `Gliner2Engine::new` autodetects V1
+    // vs V2 from the file names already on disk in models_dir.
     *status_cell().write().await = NerStatus::Loading;
-    // `from_pretrained` is sync (downloads via hf-hub + builds the
-    // ort session). We hold the mutex for the load — it's a one-time
-    // cost per process; concurrent first-callers naturally serialise
-    // and the second one finds the engine already cached.
-    let result = Gliner2Engine::from_pretrained(
-        PII_MODEL_ID,
-        Some(PII_MODEL_VARIANT),
-        ModelType::HuggingFace,
-    )
-    .with_context(|| {
-        format!("loading GLiNER2 model {PII_MODEL_ID} ({PII_MODEL_VARIANT})")
+    let config = gliner2_inference::Gliner2Config {
+        models_dir: models_dir.to_string_lossy().to_string(),
+        max_width: 8,
+        model_type: ModelType::HuggingFace,
+    };
+    let result = Gliner2Engine::new(config).with_context(|| {
+        format!(
+            "building GLiNER2 sessions from {}",
+            models_dir.display()
+        )
     });
     match result {
         Ok(engine) => {

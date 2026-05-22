@@ -365,6 +365,16 @@ async fn ner_status(
     use crate::ner::NerStatus;
     Ok(Json(match crate::ner::status().await {
         NerStatus::Idle => json!({ "state": "idle" }),
+        NerStatus::Downloading {
+            downloaded,
+            total,
+            file,
+        } => json!({
+            "state": "downloading",
+            "downloaded": downloaded,
+            "total": total,
+            "file": file,
+        }),
         NerStatus::Loading => json!({ "state": "loading" }),
         NerStatus::Ready => json!({ "state": "ready" }),
         NerStatus::Failed { error } => json!({

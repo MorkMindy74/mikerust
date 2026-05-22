@@ -24,6 +24,7 @@
 
 #![cfg(feature = "ner-pii")]
 
+pub mod bootstrap;
 pub mod engine;
 pub mod labels;
 
