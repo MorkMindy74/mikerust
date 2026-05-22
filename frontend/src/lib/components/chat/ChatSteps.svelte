@@ -110,6 +110,26 @@
         <Workflow size={13} class="text-(--color-success-500) shrink-0" />
         <span>{i18n.t('Assistant.stepWorkflowApplied', { title: step.title })}</span>
       </div>
+    {:else if step.kind === 'pii_redact'}
+      <div class="flex items-center gap-2 text-xs text-(--color-text-secondary)">
+        {#if step.done}
+          <Check size={13} class="text-(--color-success-500) shrink-0" />
+          <span>{i18n.t('Assistant.stepPiiRedactDone', { file: step.filename })}</span>
+        {:else}
+          <Spinner size="sm" />
+          <span>
+            {#if step.total > 0}
+              {i18n.t('Assistant.stepPiiRedactProgress', {
+                file: step.filename,
+                current: step.current,
+                total: step.total,
+              })}
+            {:else}
+              {i18n.t('Assistant.stepPiiRedactStarting', { file: step.filename })}
+            {/if}
+          </span>
+        {/if}
+      </div>
     {:else}
       <div
         class="flex items-center gap-2 px-2.5 py-1.5 rounded-(--radius-md)

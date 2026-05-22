@@ -469,7 +469,10 @@
     "reasoning": "Raisonnement",
     "stepDocRead": "Lu {file}",
     "stepDocFind": "Trouvé « {query} » ({count}) dans {file}",
-    "stepWorkflowApplied": "Workflow {title} appliqué"
+    "stepWorkflowApplied": "Workflow {title} appliqué",
+    "stepPiiRedactStarting": "Expurgation PII — {file}",
+    "stepPiiRedactProgress": "Expurgation PII — {file} ({current} / {total})",
+    "stepPiiRedactDone": "PII expurgée — {file}"
   },
   "People": {
     "addByEmail": "Ajouter par e-mail…",

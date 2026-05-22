@@ -54,6 +54,18 @@ export type ChatStep =
   | { kind: 'doc_find'; query: string; filename: string; occurrences: number }
   /** read_workflow finished — a workflow was applied to this turn. */
   | { kind: 'workflow_applied'; title: string }
+  /** GLiNER2 PII redaction in flight on an attachment. `current` /
+   *  `total` count chunks (the 2000-char window splits) so the UI
+   *  can render "Redazione PII — filename (3 / 17)". `done` flips
+   *  true on the `pii_redact_done` event so the step settles into
+   *  its terminal state in the UI. */
+  | {
+      kind: 'pii_redact'
+      filename: string
+      current: number
+      total: number
+      done: boolean
+    }
 
 export interface ChatMessage {
   role: ChatRole

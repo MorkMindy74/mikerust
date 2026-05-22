@@ -457,6 +457,10 @@ const T = {
   'ChatInput.pii.statusLoading': { fr: "Chargement du modèle PII… le premier lancement télécharge ~500 Mo depuis HuggingFace, puis initialise la session ONNX.", de: "PII-Modell wird geladen… der erste Start lädt ~500 MB von HuggingFace herunter und initialisiert dann die ONNX-Sitzung.", es: "Cargando modelo PII… el primer arranque descarga ~500 MB de HuggingFace y luego inicializa la sesión ONNX.", pt: "A carregar o modelo PII… na primeira execução transfere ~500 MB do HuggingFace e depois inicializa a sessão ONNX." },
   'ChatInput.pii.statusFailed': { fr: "Impossible de charger le modèle PII", de: "PII-Modell konnte nicht geladen werden", es: "No se ha podido cargar el modelo PII", pt: "Não foi possível carregar o modelo PII" },
   'ChatInput.pii.statusUnavailable': { fr: "Protection PII demandée mais cette version de MikeRust a été compilée sans la fonction ner-pii — le document sera envoyé sans expurgation.", de: "PII-Schutz angefordert, aber dieser MikeRust-Build wurde ohne das ner-pii-Feature kompiliert — das Dokument wird unredigiert gesendet.", es: "Protección PII solicitada pero esta versión de MikeRust se ha compilado sin la función ner-pii — el documento se enviará sin redactar.", pt: "Proteção PII pedida, mas esta versão do MikeRust foi compilada sem a funcionalidade ner-pii — o documento será enviado sem redação." },
+
+  'Assistant.stepPiiRedactStarting': { fr: "Expurgation PII — {file}", de: "PII-Redaktion — {file}", es: "Redacción PII — {file}", pt: "Redação PII — {file}" },
+  'Assistant.stepPiiRedactProgress': { fr: "Expurgation PII — {file} ({current} / {total})", de: "PII-Redaktion — {file} ({current} / {total})", es: "Redacción PII — {file} ({current} / {total})", pt: "Redação PII — {file} ({current} / {total})" },
+  'Assistant.stepPiiRedactDone': { fr: "PII expurgée — {file}", de: "PII redigiert — {file}", es: "PII redactada — {file}", pt: "PII redatada — {file}" },
 }
 
 function flat(o, p = '') {

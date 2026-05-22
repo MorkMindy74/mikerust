@@ -469,7 +469,10 @@
     "reasoning": "Ragionamento",
     "stepDocRead": "Letto {file}",
     "stepDocFind": "Trovato «{query}» ({count}) in {file}",
-    "stepWorkflowApplied": "Applicato workflow {title}"
+    "stepWorkflowApplied": "Applicato workflow {title}",
+    "stepPiiRedactStarting": "Redazione PII — {file}",
+    "stepPiiRedactProgress": "Redazione PII — {file} ({current} / {total})",
+    "stepPiiRedactDone": "PII redatta — {file}"
   },
   "People": {
     "addByEmail": "Aggiungi via email…",

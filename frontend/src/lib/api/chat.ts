@@ -66,6 +66,13 @@ export interface ChatStreamCallbacks {
   onDocRead?: (filename: string) => void
   onDocFind?: (query: string, filename: string, occurrences: number) => void
   onWorkflowApplied?: (title: string) => void
+  /** GLiNER2 PII redaction over an attachment started: total = number
+   *  of 2000-char chunks the engine will process. */
+  onPiiRedactStart?: (filename: string, total: number) => void
+  /** Per-chunk progress while redaction is in flight. */
+  onPiiRedactProgress?: (filename: string, current: number, total: number) => void
+  /** Redaction finished (success or graceful fallback). */
+  onPiiRedactDone?: (filename: string) => void
   onError: (message: string) => void
   onDone: () => void
 }
@@ -136,6 +143,19 @@ function dispatchSseChunk(chunk: string, cb: ChatStreamCallbacks): void {
         break
       case 'workflow_applied':
         cb.onWorkflowApplied?.(String(ev.title ?? ''))
+        break
+      case 'pii_redact_start':
+        cb.onPiiRedactStart?.(String(ev.filename ?? ''), Number(ev.total ?? 0))
+        break
+      case 'pii_redact_progress':
+        cb.onPiiRedactProgress?.(
+          String(ev.filename ?? ''),
+          Number(ev.current ?? 0),
+          Number(ev.total ?? 0),
+        )
+        break
+      case 'pii_redact_done':
+        cb.onPiiRedactDone?.(String(ev.filename ?? ''))
         break
       case 'error':
         cb.onError(String(ev.message ?? 'stream error'))

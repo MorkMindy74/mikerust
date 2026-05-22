@@ -426,6 +426,57 @@ function createChatStore() {
               title,
             })
           },
+          onPiiRedactStart: (filename, total) => {
+            const m = assistant()
+            if (!m) return
+            m.steps ??= []
+            m.steps.push({
+              kind: 'pii_redact',
+              filename,
+              current: 0,
+              total,
+              done: false,
+            })
+          },
+          onPiiRedactProgress: (filename, current, total) => {
+            const m = assistant()
+            if (!m) return
+            m.steps ??= []
+            // Find the most-recent unfinished pii_redact step for
+            // this file and bump its counter. A second send during
+            // the same turn (rare but possible) would just push a
+            // new step rather than confusing the existing one.
+            for (let i = m.steps.length - 1; i >= 0; i--) {
+              const s = m.steps[i]
+              if (s.kind === 'pii_redact' && s.filename === filename && !s.done) {
+                s.current = current
+                s.total = total
+                return
+              }
+            }
+            // No start event was seen — synthesise one so the UI
+            // doesn't drop the progress on the floor.
+            m.steps.push({
+              kind: 'pii_redact',
+              filename,
+              current,
+              total,
+              done: false,
+            })
+          },
+          onPiiRedactDone: (filename) => {
+            const m = assistant()
+            if (!m) return
+            m.steps ??= []
+            for (let i = m.steps.length - 1; i >= 0; i--) {
+              const s = m.steps[i]
+              if (s.kind === 'pii_redact' && s.filename === filename && !s.done) {
+                s.done = true
+                if (s.total > 0) s.current = s.total
+                return
+              }
+            }
+          },
           onCitations: (data) => {
             const ev = data as { citations?: unknown[] }
             const list = Array.isArray(ev.citations) ? ev.citations : []
