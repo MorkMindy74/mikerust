@@ -1204,5 +1204,9 @@
       "statusFailed": "No se ha podido cargar el modelo PII",
       "statusUnavailable": "Protección PII solicitada pero esta versión de MikeRust se ha compilado sin la función ner-pii — el documento se enviará sin redactar."
     }
+  },
+  "NerStatus": {
+    "loadingModel": "Cargando modelo PII (GLiNER2) — el primer arranque descarga ~500 MB",
+    "failed": "Modelo PII fallido: {error}"
   }
 }

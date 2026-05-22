@@ -1204,5 +1204,9 @@
       "statusFailed": "PII-Modell konnte nicht geladen werden",
       "statusUnavailable": "PII-Schutz angefordert, aber dieser MikeRust-Build wurde ohne das ner-pii-Feature kompiliert — das Dokument wird unredigiert gesendet."
     }
+  },
+  "NerStatus": {
+    "loadingModel": "PII-Modell (GLiNER2) wird geladen — der erste Start lädt ~500 MB herunter",
+    "failed": "PII-Modell-Fehler: {error}"
   }
 }

@@ -1204,5 +1204,9 @@
       "statusFailed": "Impossible de charger le modèle PII",
       "statusUnavailable": "Protection PII demandée mais cette version de MikeRust a été compilée sans la fonction ner-pii — le document sera envoyé sans expurgation."
     }
+  },
+  "NerStatus": {
+    "loadingModel": "Chargement du modèle PII (GLiNER2) — le premier lancement télécharge ~500 Mo",
+    "failed": "Échec du modèle PII : {error}"
   }
 }

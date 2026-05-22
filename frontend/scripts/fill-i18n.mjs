@@ -461,6 +461,9 @@ const T = {
   'Assistant.stepPiiRedactStarting': { fr: "Expurgation PII — {file}", de: "PII-Redaktion — {file}", es: "Redacción PII — {file}", pt: "Redação PII — {file}" },
   'Assistant.stepPiiRedactProgress': { fr: "Expurgation PII — {file} ({current} / {total})", de: "PII-Redaktion — {file} ({current} / {total})", es: "Redacción PII — {file} ({current} / {total})", pt: "Redação PII — {file} ({current} / {total})" },
   'Assistant.stepPiiRedactDone': { fr: "PII expurgée — {file}", de: "PII redigiert — {file}", es: "PII redactada — {file}", pt: "PII redatada — {file}" },
+
+  'NerStatus.loadingModel': { fr: "Chargement du modèle PII (GLiNER2) — le premier lancement télécharge ~500 Mo", de: "PII-Modell (GLiNER2) wird geladen — der erste Start lädt ~500 MB herunter", es: "Cargando modelo PII (GLiNER2) — el primer arranque descarga ~500 MB", pt: "A carregar o modelo PII (GLiNER2) — na primeira execução transfere ~500 MB" },
+  'NerStatus.failed': { fr: "Échec du modèle PII : {error}", de: "PII-Modell-Fehler: {error}", es: "Modelo PII fallido: {error}", pt: "Falha do modelo PII: {error}" },
 }
 
 function flat(o, p = '') {

@@ -661,6 +661,10 @@
     "embeddingTitle": "Computing embeddings…",
     "failedTitle": "Embedding model failed to load"
   },
+  "NerStatus": {
+    "loadingModel": "Loading PII model (GLiNER2) — first run downloads ~500 MB",
+    "failed": "PII model failed: {error}"
+  },
   "DocxTemplates": {
     "title": "DOCX templates",
     "subtitle": "Professional Italian document templates. Select one from the chat composer to produce a pre-formatted .docx.",

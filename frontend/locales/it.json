@@ -661,6 +661,10 @@
     "embeddingTitle": "Calcolo embeddings…",
     "failedTitle": "Caricamento modello fallito"
   },
+  "NerStatus": {
+    "loadingModel": "Caricamento modello PII (GLiNER2) — al primo utilizzo scarica ~500 MB",
+    "failed": "Modello PII fallito: {error}"
+  },
   "DocxTemplates": {
     "title": "Template DOCX",
     "subtitle": "Modelli di documenti professionali italiani. Selezionane uno dal compositore della chat per produrre un .docx già impaginato.",
