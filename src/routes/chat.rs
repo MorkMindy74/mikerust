@@ -970,6 +970,7 @@ async fn load_attached_docs(
                 let final_text = maybe_redact_pii(
                     text,
                     pii_protected_ids.contains(doc_id),
+                    doc_id,
                     &filename,
                     sse_tx,
                 )
@@ -1127,6 +1128,7 @@ async fn load_attached_docs(
                 maybe_redact_pii(
                     t,
                     pii_protected_ids.contains(doc_id),
+                    doc_id,
                     &filename,
                     sse_tx,
                 )
@@ -1154,22 +1156,77 @@ async fn load_attached_docs(
 /// through and the failure is logged — the user already saw the
 /// blackbox disclaimer; breaking the chat over an inference glitch
 /// would be worse.
+/// Storage key for the cached PII-anonymised text of a document.
+///
+/// PII inference is the most expensive single step in `load_attached_docs`
+/// (22-35 s per 2000-char chunk on CPU; a 9-page PDF is ~3-5 min). Rerunning
+/// it on every chat turn for the same document is wasteful — once a
+/// `[LABEL]`-redacted copy exists, the same masking is byte-for-byte stable
+/// (the labels and threshold are pinned in `crate::ner::default_pii_labels`
+/// / `crate::ner::PII_THRESHOLD`). We persist the redacted text alongside
+/// the raw extracted text and consult it before any inference. The key
+/// space is flat under `cache/pii/` so a future garbage-collection sweep
+/// over deleted documents is a single prefix walk.
+fn pii_cache_key(doc_id: &str) -> String {
+    format!("cache/pii/{doc_id}.txt")
+}
+
 async fn maybe_redact_pii(
     text: String,
     protected: bool,
+    doc_id: &str,
     filename: &str,
     #[allow(unused_variables)] sse_tx: &tokio::sync::mpsc::Sender<
         Result<axum::response::sse::Event, std::convert::Infallible>,
     >,
 ) -> String {
     tracing::info!(
-        "[chat] maybe_redact_pii({filename}) — protected={} ner-pii-built-in={}",
+        "[chat] maybe_redact_pii({filename}, doc_id={doc_id}) — protected={} ner-pii-built-in={}",
         protected,
         cfg!(feature = "ner-pii")
     );
     if !protected {
         return text;
     }
+
+    // Cache fast-path. The redacted output is deterministic for a given
+    // input + fixed labels + fixed threshold, so a previous turn's
+    // result is reusable. We still emit the start/done SSE pair so the
+    // UI stays consistent (and the user sees the "cache hit" is fast).
+    let cache_key = pii_cache_key(doc_id);
+    if let Ok(storage) = crate::storage::make_storage() {
+        if let Ok(bytes) = storage.get(&cache_key).await {
+            let cached = String::from_utf8_lossy(&bytes).into_owned();
+            if !cached.is_empty() {
+                tracing::info!(
+                    "[chat] PII cache hit for {filename} (doc_id={doc_id}): {} chars",
+                    cached.len()
+                );
+                use axum::response::sse::Event;
+                // Two-event burst: start (with total=1 so the UI doesn't
+                // try to render N/N progress) immediately followed by done.
+                // try_send because the events are best-effort; if the
+                // client already disconnected we shouldn't pay anything.
+                let _ = sse_tx.try_send(Ok(Event::default().data(
+                    json!({
+                        "type": "pii_redact_start",
+                        "filename": filename,
+                        "total": 1,
+                    })
+                    .to_string(),
+                )));
+                let _ = sse_tx.try_send(Ok(Event::default().data(
+                    json!({
+                        "type": "pii_redact_done",
+                        "filename": filename,
+                    })
+                    .to_string(),
+                )));
+                return cached;
+            }
+        }
+    }
+
     #[cfg(feature = "ner-pii")]
     {
         use axum::response::sse::Event;
@@ -1246,6 +1303,24 @@ async fn maybe_redact_pii(
                     text.len(),
                     masked.len()
                 );
+                // Persist for the next chat turn that references the
+                // same document. Failure here is non-fatal — the user
+                // still gets a correctly anonymised payload this turn;
+                // only the *next* turn pays the inference cost again.
+                if let Ok(storage) = crate::storage::make_storage() {
+                    if let Err(e) = storage
+                        .put(&cache_key, masked.as_bytes(), "text/plain")
+                        .await
+                    {
+                        tracing::warn!(
+                            "[chat] failed to write PII cache for {filename} ({cache_key}): {e:#}"
+                        );
+                    } else {
+                        tracing::info!(
+                            "[chat] PII cache stored for {filename} → {cache_key}"
+                        );
+                    }
+                }
                 return masked;
             }
             Err(e) => {

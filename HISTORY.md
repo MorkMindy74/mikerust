@@ -13,6 +13,57 @@ diff. For the upstream-sync audit trail (which fixes were ported from
 
 ---
 
+## v0.2.5 — 2026-05-23 (patch)
+
+### Added — persistent PII-redacted text cache
+
+PII inference is the most expensive single step in
+`load_attached_docs` (22-35 s per 2000-char chunk on CPU; a
+9-page PDF is ~3-5 min). The previous release rerun the full
+GLiNER pipeline on every chat turn that referenced a
+PII-protected document, even if the *same* document had
+already been anonymised seconds earlier in a previous turn of
+the same chat. The user observation was textbook: send a
+turn → wait 3 minutes for PII → send a follow-up question on
+the same document → wait 3 minutes for PII *again*.
+
+Because the label set
+(`crate::ner::default_pii_labels`), the threshold
+(`crate::ner::PII_THRESHOLD = 0.2`), and the chunking window
+are all pinned at compile time, the redacted output is
+deterministic for a given input — so the second pass
+guarantees the same bytes as the first. We now persist that
+result and consult it before any inference.
+
+- `routes/chat.rs::pii_cache_key(doc_id)` resolves to
+  `cache/pii/<doc_id>.txt` under the existing
+  `crate::storage::make_storage()` LocalStorage (same root as
+  the raw `extracted_text_path` cache, so a future
+  garbage-collection sweep over deleted documents can prune
+  both with a single prefix walk).
+- `maybe_redact_pii` checks the cache before touching GLiNER.
+  On hit it emits the same `pii_redact_start` / `pii_redact_done`
+  SSE pair (with `total=1`) so the chat UI still shows the
+  step transition consistently — the difference is the user
+  sees it complete in milliseconds instead of minutes.
+- On a successful (miss-then-redact) pass the result is
+  written back via `storage.put()`. Failure to write is
+  non-fatal: the user still gets a correctly anonymised
+  payload this turn, only the *next* turn pays the inference
+  cost again.
+
+The key is `doc_id` alone for now. When the label set
+eventually becomes a per-request input (e.g. a custom
+profile), the key will pick up a labels hash so different
+label combinations don't clash.
+
+### Installer artefacts
+
+- `dist/MikeRust_0.2.5_x64.msi` — Windows x86_64
+- `dist/MikeRust_0.2.5_arm64.msi` — Windows ARM64
+
+---
+
 ## v0.2.4 — 2026-05-23 (patch)
 
 ### Fixed — CORS reject of Windows Tauri WebView origin
