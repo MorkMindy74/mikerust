@@ -1609,10 +1609,42 @@ async fn retrieve_kb_chunks(
     // project_id NULL (global) or a value (project). We can't know the
     // raw project_id from the public RetrievedChunk; instead, we look
     // it up in synced_files via the document_id — cheap and accurate.
+    // We ALSO drop any chunk whose source document is flagged
+    // `pii_protected = 1` (migration 0028). KB chunks come from the
+    // raw indexed text, not the redacted PII cache — leaving them in
+    // would re-expose the very entities the inline-attached path is
+    // careful to mask. The user still gets the document content via
+    // the parallel `load_attached_docs` path, which serves the
+    // anonymised cache from `cache/pii/<doc_id>.txt`. Citations
+    // referencing those passages move with the doc, so the answer
+    // can still ground itself on the redacted version.
     let mut out: Vec<RetrievedKbEntry> = Vec::new();
     let mut g_idx = 0u32;
     let mut p_idx = 0u32;
     for c in chunks.into_iter().filter(|c| c.distance <= KB_DISTANCE_THRESHOLD) {
+        // Per-doc PII-protection lookup. Cheap because the chunk batch
+        // typically points to at most a handful of distinct documents,
+        // and SQLite has a 100 ns hot-cache lookup.
+        let prot: Option<(i64,)> = sqlx::query_as(
+            "SELECT pii_protected FROM documents WHERE id = ?",
+        )
+        .bind(&c.document_id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
+        if prot.map(|(p,)| p != 0).unwrap_or(false) {
+            tracing::info!(
+                "[rag] dropping KB chunk from PII-protected doc_id={} \
+                 (chunk_index={}, source={}) — content available via \
+                 redacted cache instead",
+                c.document_id,
+                c.chunk_index,
+                c.source_path,
+            );
+            continue;
+        }
+
         let row: Option<(Option<String>,)> = sqlx::query_as(
             "SELECT project_id FROM synced_files WHERE document_id = ?",
         )

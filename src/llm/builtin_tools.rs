@@ -217,18 +217,26 @@ pub async fn dispatch(
     }
 }
 
+/// Look up a document by chat-local label (`doc-0`, `doc-1`, …) or
+/// raw UUID and return the metadata the tool exec functions need.
+///
+/// The returned tuple is `(filename, file_type, storage_path, real_id,
+/// pii_protected)`. `pii_protected` is the migration-0028 column —
+/// when truthy, the caller MUST serve content from the redacted cache
+/// (`cache/pii/<real_id>.txt`) rather than the raw `storage_path`.
 async fn resolve_doc(
     state: &AppState,
     user_id: &str,
     doc_label_map: &HashMap<String, String>,
     label_or_id: &str,
-) -> Option<(String, String, Option<String>)> {
+) -> Option<(String, String, Option<String>, String, bool)> {
     let real_id = doc_label_map
         .get(label_or_id)
         .cloned()
         .unwrap_or_else(|| label_or_id.to_string());
-    let row: Option<(String, String, Option<String>)> = sqlx::query_as(
-        "SELECT filename, file_type, storage_path FROM documents WHERE id = ? AND user_id = ?",
+    let row: Option<(String, String, Option<String>, i64)> = sqlx::query_as(
+        "SELECT filename, file_type, storage_path, pii_protected \
+         FROM documents WHERE id = ? AND user_id = ?",
     )
     .bind(&real_id)
     .bind(user_id)
@@ -236,7 +244,65 @@ async fn resolve_doc(
     .await
     .ok()
     .flatten();
-    row
+    row.map(|(f, t, s, p)| (f, t, s, real_id, p != 0))
+}
+
+/// Resolve a document's *effective* text for the LLM-facing tools. For
+/// PII-protected documents this is the on-disk redacted cache produced
+/// by the chat handler's `maybe_redact_pii`; for unprotected ones it's
+/// the freshly-extracted text from the raw storage bytes.
+///
+/// Refusing to operate on a protected document at all would break the
+/// model's `find_in_document` / `read_document` workflow for entirely
+/// legitimate questions ("trova tutte le scadenze nel contratto"). By
+/// substituting the redacted text we preserve those use-cases while
+/// guaranteeing nothing the user opted to mask reaches the LLM.
+///
+/// Cache miss on a protected document — possible if the user calls
+/// `read_document` before the first chat turn has run GLiNER — is
+/// treated as a safety stop: we return `None` so the tool surfaces a
+/// "PII redaction not yet ready" error instead of falling back to the
+/// raw text.
+async fn read_doc_text_for_llm(
+    file_type: &str,
+    filename: &str,
+    storage_path: &str,
+    doc_id: &str,
+    pii_protected: bool,
+) -> Result<String, String> {
+    if pii_protected {
+        let key = format!("cache/pii/{doc_id}.txt");
+        match crate::storage::make_storage() {
+            Ok(storage) => match storage.get(&key).await {
+                Ok(bytes) => {
+                    let s = String::from_utf8_lossy(&bytes).into_owned();
+                    if s.is_empty() {
+                        return Err(format!(
+                            "document {filename} is PII-protected but the redacted cache \
+                             ({key}) is empty — wait for the inline-attached pass to \
+                             finish before calling this tool"
+                        ));
+                    }
+                    Ok(s)
+                }
+                Err(_) => Err(format!(
+                    "document {filename} is PII-protected; the redacted cache ({key}) \
+                     has not been built yet — wait for the inline-attached PII pass \
+                     to finish (it runs once per document) before calling this tool"
+                )),
+            },
+            Err(e) => Err(format!("storage backend unavailable: {e}")),
+        }
+    } else {
+        let bytes = match crate::storage::make_storage() {
+            Ok(s) => match s.get(storage_path).await {
+                Ok(b) => b,
+                Err(e) => return Err(format!("storage read: {e}")),
+            },
+            Err(e) => return Err(format!("storage backend unavailable: {e}")),
+        };
+        Ok(extract_text(file_type, filename, &bytes))
+    }
 }
 
 async fn exec_read_document(
@@ -249,22 +315,23 @@ async fn exec_read_document(
     if doc_label.is_empty() {
         return json!({"error": "doc_id is required"}).to_string();
     }
-    let Some((filename, file_type, Some(storage_path))) =
+    let Some((filename, file_type, Some(storage_path), real_id, pii_protected)) =
         resolve_doc(state, user_id, doc_label_map, doc_label).await
     else {
         return json!({"error": format!("document {doc_label} not found")}).to_string();
     };
-    let bytes = match crate::storage::make_storage()
-        .ok()
-        .and_then(|s| Some(s))
+    let text = match read_doc_text_for_llm(
+        &file_type,
+        &filename,
+        &storage_path,
+        &real_id,
+        pii_protected,
+    )
+    .await
     {
-        Some(s) => match s.get(&storage_path).await {
-            Ok(b) => b,
-            Err(e) => return json!({"error": format!("storage read: {e}")}).to_string(),
-        },
-        None => return json!({"error": "storage backend unavailable"}).to_string(),
+        Ok(t) => t,
+        Err(e) => return json!({"error": e}).to_string(),
     };
-    let text = extract_text(&file_type, &filename, &bytes);
     json!({
         "doc_id": doc_label,
         "filename": filename,
@@ -290,22 +357,23 @@ async fn exec_find_in_document(
     if doc_label.is_empty() || query.is_empty() {
         return json!({"error": "doc_id and query are required"}).to_string();
     }
-    let Some((filename, file_type, Some(storage_path))) =
+    let Some((filename, file_type, Some(storage_path), real_id, pii_protected)) =
         resolve_doc(state, user_id, doc_label_map, doc_label).await
     else {
         return json!({"error": format!("document {doc_label} not found")}).to_string();
     };
-    let bytes = match crate::storage::make_storage()
-        .ok()
-        .and_then(|s| Some(s))
+    let text = match read_doc_text_for_llm(
+        &file_type,
+        &filename,
+        &storage_path,
+        &real_id,
+        pii_protected,
+    )
+    .await
     {
-        Some(s) => match s.get(&storage_path).await {
-            Ok(b) => b,
-            Err(e) => return json!({"error": format!("storage read: {e}")}).to_string(),
-        },
-        None => return json!({"error": "storage backend unavailable"}).to_string(),
+        Ok(t) => t,
+        Err(e) => return json!({"error": e}).to_string(),
     };
-    let text = extract_text(&file_type, &filename, &bytes);
 
     // Case-insensitive, whitespace-tolerant search.
     let needle: String = query.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
@@ -807,13 +875,19 @@ async fn exec_edit_document(
         return json!({"error": "no valid edit entries"}).to_string();
     }
 
-    let Some((filename, file_type, Some(storage_path))) =
+    let Some((filename, file_type, Some(storage_path), _, pii_protected)) =
         resolve_doc(state, user_id, doc_label_map, label).await
     else {
         return json!({"error": format!("document {label} not found")}).to_string();
     };
     if file_type != "docx" {
         return json!({"error": format!("edit_document only supports .docx files (got {file_type})")}).to_string();
+    }
+    if pii_protected {
+        return json!({"error": format!(
+            "document {filename} is PII-protected; edit_document writes to the raw \
+             docx and would re-expose masked entities — refuse instead of leaking"
+        )}).to_string();
     }
 
     let storage = match crate::storage::make_storage() {

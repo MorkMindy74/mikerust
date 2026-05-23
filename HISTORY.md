@@ -13,6 +13,62 @@ diff. For the upstream-sync audit trail (which fixes were ported from
 
 ---
 
+## v0.2.7 — 2026-05-23 (patch — close the remaining PII bypasses)
+
+The v0.2.6 fix closed the inline-attached redaction path for
+follow-up turns but missed two parallel ways the LLM was still
+receiving raw, unredacted document text. Confirmed on disk by
+grepping the v0.2.5 cache file — every original license plate
+**had** been masked to `[LICENSE_PLATE]` by GLiNER, yet the model
+answer quoted all nine plates verbatim. They were leaking
+through the KB-retrieval branch and (potentially) through the
+read_document / find_in_document tools.
+
+### Fixed — KB retrieval bypass
+
+`retrieve_kb_chunks` returns raw indexed chunks of every
+PII-protected document that semantically matched the user's
+query. The inline-attached path was carefully redacting the
+full text while the KB path served the same passages
+unredacted, in parallel, on the same turn.
+
+- `retrieve_kb_chunks` now consults
+  `documents.pii_protected` per chunk and drops every chunk
+  whose source document has the flag set. The user still gets
+  the document content through `load_attached_docs`, which
+  serves the anonymised `cache/pii/<doc_id>.txt`.
+- The drop is logged at info level
+  (`[rag] dropping KB chunk from PII-protected doc_id=…`) so
+  the redacted retrieval is observable from
+  `mike-tauri.log`.
+
+### Fixed — read_document / find_in_document tool bypass
+
+Both built-in tools resolved `documents.storage_path` and
+read the raw bytes — the model could call them on a
+PII-protected `doc-N` label and recover the full text
+sidestepping every redaction layer.
+
+- `resolve_doc` now also returns the real document id and the
+  `pii_protected` column.
+- New helper `read_doc_text_for_llm` substitutes the cached
+  redacted text (`cache/pii/<doc_id>.txt`) for protected
+  documents instead of running fresh extraction on the raw
+  bytes. Cache miss is treated as a safety stop: the tool
+  returns an error ("wait for the inline-attached pass to
+  finish") rather than falling back to the raw text.
+- `edit_document` refuses outright when targeting a
+  PII-protected document — overwriting the raw docx and
+  returning it as a download would re-expose every entity the
+  redacted cache had carefully masked.
+
+### Installer artefacts
+
+- `dist/MikeRust_0.2.7_x64.msi` — Windows x86_64
+- `dist/MikeRust_0.2.7_arm64.msi` — Windows ARM64
+
+---
+
 ## v0.2.6 — 2026-05-23 (patch — PII leak fix)
 
 ### Fixed — PII protection lost on follow-up chat turns (CRITICAL)
