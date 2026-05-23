@@ -267,9 +267,22 @@ pub async fn run_server_with_channels(
                 // New Svelte+Vite dev server (frontend) — Vite default port
                 "http://localhost:5173".to_string(),
                 "http://127.0.0.1:5173".to_string(),
-                // Tauri WebView origins (both dev and prod)
+                // Tauri WebView origins. Tauri 2 ships three observed shapes:
+                //  - `tauri://localhost` is the legacy custom scheme, still
+                //    surfaced on some Linux/macOS WRY versions.
+                //  - `https://tauri.localhost` is the WRY default on macOS
+                //    where the WebView is served over an HTTPS-backed
+                //    intercepted URL scheme.
+                //  - `http://tauri.localhost` is what Windows / WebView2
+                //    actually sends in the `Origin` header in production
+                //    builds (and what tripped the v0.2.3 cold-launch boot
+                //    once the race was fixed and a real fetch went out:
+                //    "blocked by CORS policy: No 'Access-Control-Allow-
+                //    Origin' header is present"). Allow all three so the
+                //    same backend binary works across platforms.
                 "tauri://localhost".to_string(),
                 "https://tauri.localhost".to_string(),
+                "http://tauri.localhost".to_string(),
             ]
         })
         .into_iter()

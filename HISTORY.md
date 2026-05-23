@@ -13,6 +13,41 @@ diff. For the upstream-sync audit trail (which fixes were ported from
 
 ---
 
+## v0.2.4 — 2026-05-23 (patch)
+
+### Fixed — CORS reject of Windows Tauri WebView origin
+
+With the v0.2.3 race-fix landed and the WebView finally reaching the
+real backend URL, the boot fetch surfaced a different stall:
+
+```
+Access to fetch at 'http://127.0.0.1:59834/healthz'
+  from origin 'http://tauri.localhost'
+  has been blocked by CORS policy: No 'Access-Control-Allow-Origin'
+  header is present on the requested resource.
+```
+
+The backend's CORS allowlist already carried `tauri://localhost`
+(legacy custom-scheme variant) and `https://tauri.localhost` (the
+macOS WRY shape) but was missing `http://tauri.localhost` — the
+exact `Origin` header Windows / WebView2 sends in release builds.
+The dev story (`tauri dev`) never hit this because Vite serves the
+frontend at `http://localhost:5173`, an origin that *was* on the
+list, so the regression was invisible until the MSI launch path
+was actually exercised.
+
+- `src/lib.rs` default CORS allowlist now includes
+  `http://tauri.localhost` alongside the two existing Tauri shapes.
+- The `MRUST_ALLOWED_ORIGINS` env override path is unchanged — a
+  deployer who pins the list still gets exactly what they pinned.
+
+### Installer artefacts
+
+- `dist/MikeRust_0.2.4_x64.msi` — Windows x86_64
+- `dist/MikeRust_0.2.4_arm64.msi` — Windows ARM64
+
+---
+
 ## v0.2.3 — 2026-05-23 (patch)
 
 ### Fixed — frontend → backend race on cold MSI launch
