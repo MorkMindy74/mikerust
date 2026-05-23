@@ -14,16 +14,24 @@
 /// Order is preservation-stable so a UI badge list reads predictably
 /// rather than reshuffling between runs.
 pub fn default_pii_labels() -> &'static [&'static str] {
+    // Short, common forms matching GLiNER zero-shot convention. The
+    // gliner2-privacy-filter-PII-multi model is multilingual but
+    // expects natural English labels — `"person"` not
+    // `"person_name"`, `"phone"` not `"phone_number"`. Empirically
+    // (see HISTORY 2026-05-23) the longer compound forms produced
+    // ~0 hits per chunk on Italian medical text; the short forms
+    // surface several entities per paragraph.
     &[
-        "person_name",
+        "person",
         "email",
         "phone",
         "address",
-        "fiscal_code",
-        "vat_number",
+        "location",
+        "organization",
+        "date",
+        "id_number",
         "iban",
         "credit_card",
-        "date_of_birth",
         "ip_address",
         "license_plate",
     ]

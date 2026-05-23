@@ -18,7 +18,16 @@ use anyhow::{anyhow, Context, Result};
 use std::sync::{Arc, OnceLock};
 use tokio::sync::{Mutex, RwLock};
 
-use gliner2_inference::{ExtractedEntity, Gliner2Engine, ModelType, SchemaTask};
+use gliner2_inference::{
+    ExtractedEntity, Gliner2Engine, InferenceParams, ModelType, SchemaTask,
+};
+
+/// Lower-than-default threshold for the GLiNER2 zero-shot scorer.
+/// gliner2-rs ships with 0.5; with multilingual PII labels on
+/// Italian medical text that suppresses most hits. 0.3 is the
+/// "show me everything reasonable, I'll over-mask rather than leak"
+/// trade-off the safer-by-default redaction needs.
+const PII_THRESHOLD: f32 = 0.3;
 
 use super::labels::default_pii_labels;
 
@@ -201,8 +210,23 @@ pub async fn mask_pii(
             // InferenceParams (threshold 0.5, flat_ner false). Future
             // work: expose a per-call threshold in the public API.
             let (entities, _r, _c) = engine
-                .extract(chunk_text, &tasks, None)
+                .extract(
+                    chunk_text,
+                    &tasks,
+                    Some(InferenceParams {
+                        threshold: PII_THRESHOLD,
+                        flat_ner: false,
+                    }),
+                )
                 .map_err(|e| anyhow!("gliner2 extract failed on chunk: {e:?}"))?;
+            for e in &entities {
+                tracing::info!(
+                    "[ner]     · entity label={:?} score={:.3} text={:?}",
+                    e.label,
+                    e.score,
+                    e.text
+                );
+            }
             tracing::info!(
                 "[ner] chunk {}/{} ✓ {} entities in {:?}",
                 i + 1,
@@ -385,7 +409,14 @@ fn run_pass(
     for chunk in &chunks {
         let chunk_text = &text[chunk.start..chunk.end];
         let (entities, _r, _c) = engine
-            .extract(chunk_text, &tasks, None)
+            .extract(
+                chunk_text,
+                &tasks,
+                Some(InferenceParams {
+                    threshold: PII_THRESHOLD,
+                    flat_ner: false,
+                }),
+            )
             .map_err(|e| anyhow!("gliner2 extract failed: {e:?}"))?;
         for e in entities {
             out.push(Entity {
