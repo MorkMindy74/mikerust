@@ -426,6 +426,44 @@ function createChatStore() {
               title,
             })
           },
+          onDocExtractStart: (filename) => {
+            const m = assistant()
+            if (!m) return
+            m.steps ??= []
+            // Only push if there isn't already an in-flight extract
+            // step for this filename — guards against duplicate
+            // start events from the same doc.
+            const open = m.steps.find(
+              (s) => s.kind === 'doc_extract' && s.filename === filename && !s.done,
+            )
+            if (open) return
+            m.steps.push({
+              kind: 'doc_extract',
+              filename,
+              chars: 0,
+              done: false,
+            })
+          },
+          onDocExtractDone: (filename, chars) => {
+            const m = assistant()
+            if (!m) return
+            m.steps ??= []
+            for (let i = m.steps.length - 1; i >= 0; i--) {
+              const s = m.steps[i]
+              if (s.kind === 'doc_extract' && s.filename === filename && !s.done) {
+                s.chars = chars
+                s.done = true
+                return
+              }
+            }
+            // No start event was seen — synthesise a done step.
+            m.steps.push({
+              kind: 'doc_extract',
+              filename,
+              chars,
+              done: true,
+            })
+          },
           onPiiRedactStart: (filename, total) => {
             const m = assistant()
             if (!m) return

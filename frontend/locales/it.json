@@ -470,6 +470,8 @@
     "stepDocRead": "Letto {file}",
     "stepDocFind": "Trovato «{query}» ({count}) in {file}",
     "stepWorkflowApplied": "Applicato workflow {title}",
+    "stepDocExtractStarting": "Estrazione testo — {file}",
+    "stepDocExtractDone": "Testo estratto — {file} ({chars} caratteri)",
     "stepPiiRedactStarting": "Redazione PII — {file}",
     "stepPiiRedactProgress": "Redazione PII — {file} ({current} / {total})",
     "stepPiiRedactDone": "PII redatta — {file}"

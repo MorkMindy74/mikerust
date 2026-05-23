@@ -54,6 +54,17 @@ export type ChatStep =
   | { kind: 'doc_find'; query: string; filename: string; occurrences: number }
   /** read_workflow finished — a workflow was applied to this turn. */
   | { kind: 'workflow_applied'; title: string }
+  /** Text extraction in flight on an attachment — pdfium / docx /
+   *  rtf / xlsx parsing or a cached-text read. `chars` is set when
+   *  the extractor finishes; `done` flips true on the
+   *  `doc_extract_done` event. Without this step a long PDF makes
+   *  the UI look frozen between send and PII start. */
+  | {
+      kind: 'doc_extract'
+      filename: string
+      chars: number
+      done: boolean
+    }
   /** GLiNER2 PII redaction in flight on an attachment. `current` /
    *  `total` count chunks (the 2000-char window splits) so the UI
    *  can render "Redazione PII — filename (3 / 17)". `done` flips

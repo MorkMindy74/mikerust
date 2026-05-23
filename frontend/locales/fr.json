@@ -472,7 +472,9 @@
     "stepWorkflowApplied": "Workflow {title} appliqué",
     "stepPiiRedactStarting": "Expurgation PII — {file}",
     "stepPiiRedactProgress": "Expurgation PII — {file} ({current} / {total})",
-    "stepPiiRedactDone": "PII expurgée — {file}"
+    "stepPiiRedactDone": "PII expurgée — {file}",
+    "stepDocExtractStarting": "Extraction du texte — {file}",
+    "stepDocExtractDone": "Texte extrait — {file} ({chars} car.)"
   },
   "People": {
     "addByEmail": "Ajouter par e-mail…",

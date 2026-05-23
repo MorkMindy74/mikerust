@@ -472,7 +472,9 @@
     "stepWorkflowApplied": "Workflow {title} angewendet",
     "stepPiiRedactStarting": "PII-Redaktion — {file}",
     "stepPiiRedactProgress": "PII-Redaktion — {file} ({current} / {total})",
-    "stepPiiRedactDone": "PII redigiert — {file}"
+    "stepPiiRedactDone": "PII redigiert — {file}",
+    "stepDocExtractStarting": "Textextraktion — {file}",
+    "stepDocExtractDone": "Text extrahiert — {file} ({chars} Zeichen)"
   },
   "People": {
     "addByEmail": "Per E-Mail hinzufügen…",

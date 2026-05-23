@@ -66,6 +66,14 @@ export interface ChatStreamCallbacks {
   onDocRead?: (filename: string) => void
   onDocFind?: (query: string, filename: string, occurrences: number) => void
   onWorkflowApplied?: (title: string) => void
+  /** Text extraction has started on an attachment — pdfium /
+   *  docx / xlsx / rtf, or a cached-text read. Lets the chat UI
+   *  show a step BEFORE the PII pass so a multi-second
+   *  pdfium pass on a long doc doesn't read as a frozen send. */
+  onDocExtractStart?: (filename: string) => void
+  /** Text extraction finished. `chars` is the size of the
+   *  extracted text — surfaced in the step label as a sanity check. */
+  onDocExtractDone?: (filename: string, chars: number) => void
   /** GLiNER2 PII redaction over an attachment started: total = number
    *  of 2000-char chunks the engine will process. */
   onPiiRedactStart?: (filename: string, total: number) => void
@@ -143,6 +151,12 @@ function dispatchSseChunk(chunk: string, cb: ChatStreamCallbacks): void {
         break
       case 'workflow_applied':
         cb.onWorkflowApplied?.(String(ev.title ?? ''))
+        break
+      case 'doc_extract_start':
+        cb.onDocExtractStart?.(String(ev.filename ?? ''))
+        break
+      case 'doc_extract_done':
+        cb.onDocExtractDone?.(String(ev.filename ?? ''), Number(ev.chars ?? 0))
         break
       case 'pii_redact_start':
         cb.onPiiRedactStart?.(String(ev.filename ?? ''), Number(ev.total ?? 0))

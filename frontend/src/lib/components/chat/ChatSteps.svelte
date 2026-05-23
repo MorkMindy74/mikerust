@@ -110,6 +110,16 @@
         <Workflow size={13} class="text-(--color-success-500) shrink-0" />
         <span>{i18n.t('Assistant.stepWorkflowApplied', { title: step.title })}</span>
       </div>
+    {:else if step.kind === 'doc_extract'}
+      <div class="flex items-center gap-2 text-xs text-(--color-text-secondary)">
+        {#if step.done}
+          <Check size={13} class="text-(--color-success-500) shrink-0" />
+          <span>{i18n.t('Assistant.stepDocExtractDone', { file: step.filename, chars: step.chars.toLocaleString() })}</span>
+        {:else}
+          <Spinner size="sm" />
+          <span>{i18n.t('Assistant.stepDocExtractStarting', { file: step.filename })}</span>
+        {/if}
+      </div>
     {:else if step.kind === 'pii_redact'}
       <div class="flex items-center gap-2 text-xs text-(--color-text-secondary)">
         {#if step.done}

@@ -868,6 +868,35 @@ fn pages_to_data_urls(pngs: Vec<Vec<u8>>) -> Vec<String> {
 
 /// Read attached documents from storage and extract their text and/or images.
 /// `vision_ok` lets scanned PDFs fall back to rendered page images.
+/// Emit a `doc_extract_*` SSE event so the chat UI can render a
+/// "Estraendo testo da X" step before the PII pass kicks in. Without
+/// it the user sees a multi-second block on long PDFs with no
+/// feedback. `start = true` for the leading event, `false` for the
+/// terminal one (carries `chars` so the UI can report doc size).
+fn emit_doc_extract(
+    tx: &tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>,
+    filename: &str,
+    chars: Option<usize>,
+    done: bool,
+) {
+    use axum::response::sse::Event;
+    let payload = if done {
+        serde_json::json!({
+            "type": "doc_extract_done",
+            "filename": filename,
+            "chars": chars.unwrap_or(0),
+        })
+    } else {
+        serde_json::json!({
+            "type": "doc_extract_start",
+            "filename": filename,
+        })
+    };
+    // try_send: a stuck client mustn't block the loader. Dropping a
+    // progress tick is acceptable; the chat continues regardless.
+    let _ = tx.try_send(Ok(Event::default().data(payload.to_string())));
+}
+
 async fn load_attached_docs(
     state: &AppState,
     user_id: &str,
@@ -893,6 +922,13 @@ async fn load_attached_docs(
         else {
             continue;
         };
+
+        // Emit the leading step event so the UI shows "Estraendo
+        // testo — file" the moment we start touching the file —
+        // before any storage read, before PII. Closes via
+        // `doc_extract_done` either in the cached fast path or
+        // after the per-format extractor runs.
+        emit_doc_extract(sse_tx, &filename, None, false);
 
         let storage = match make_storage() {
             Ok(s) => s,
@@ -925,10 +961,12 @@ async fn load_attached_docs(
         }
         if let Some(text) = cached_text.take() {
             if file_type != "pdf" || !text.trim().is_empty() {
+                let chars = text.len();
                 tracing::info!(
                     "[chat] using cached text for {filename}: {} chars",
-                    text.len()
+                    chars
                 );
+                emit_doc_extract(sse_tx, &filename, Some(chars), true);
                 let final_text = maybe_redact_pii(
                     text,
                     pii_protected_ids.contains(doc_id),
@@ -1073,6 +1111,14 @@ async fn load_attached_docs(
                 tracing::warn!("[chat] unsupported file_type={file_type} for {filename}");
             }
         }
+
+        // Close the doc_extract step with the raw character count
+        // BEFORE we apply PII redaction. The UI then transitions
+        // into the pii_redact step (if protected) — two distinct
+        // visual phases instead of one undifferentiated wait.
+        let pre_redact_chars =
+            payload.text.as_deref().map(|t| t.len()).unwrap_or(0);
+        emit_doc_extract(sse_tx, &filename, Some(pre_redact_chars), true);
 
         // Apply PII redaction before the chars count log so the
         // log line reflects what actually goes to the LLM.
