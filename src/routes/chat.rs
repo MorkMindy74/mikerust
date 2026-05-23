@@ -2674,199 +2674,19 @@ async fn stream_chat_root(
         .unwrap_or_default();
     let kb_top_k = if doc_ids.is_empty() { 8 } else { 6 };
 
-    // SSE channel hoisted up so PII redaction inside load_attached_docs
-    // can emit per-chunk progress events on the same stream the rest
-    // of the chat turn will use. The spawn block below also owns a
-    // clone (rendered text deltas, citations, tool calls). Buffered
-    // capacity 64 covers both pre- and post-spawn writes — events
-    // queue up until the client connects to the SSE response.
+    // SSE channel + spawn the whole pipeline as a background task so the
+    // HTTP response can start streaming immediately. Before this change
+    // load_attached_docs (PDF text extraction + PII redaction) and the
+    // history summarizer call ran INSIDE the handler — `Sse::new` only
+    // returned after all that finished, so the browser saw no body bytes
+    // for the multi-minute window during which doc_extract / pii_redact
+    // events were being emitted. They just buffered in the channel and
+    // flushed all at once when the response finally went out. Moving the
+    // setup work inside the spawn lets the client connect as soon as
+    // the handler returns and observe each event the moment it fires.
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(64);
-    let tx_for_redact = tx.clone();
-
-    // Discover MCP, load attached docs, retrieve KB chunks, and pull
-    // a library inventory in parallel. The inventory is what tells the
-    // model "the user has the GDPR and AI Act in their indexed library"
-    // even when the user's question doesn't surface those documents
-    // via semantic match — without it, the model defaults to "I don't
-    // have access to your synced documents."
-    let (attached_docs, mcp_servers, kb_chunks, library_inventory) = tokio::join!(
-        load_attached_docs(
-            &state,
-            &auth.user_id,
-            &doc_ids,
-            vision_ok,
-            &pii_protected_ids,
-            &tx_for_redact,
-        ),
-        discover_mcp_for_user(&state, &auth.user_id),
-        retrieve_kb_chunks(&state, &auth.user_id, &chat_id, &last_user_query, kb_top_k),
-        list_indexed_corpus_docs(&state, &auth.user_id),
-    );
-
-    // Compose: Mike base + library inventory + KB excerpts + attached
-    // full-text + MCP. Library inventory comes near the top so the
-    // model orients itself before the semantic-retrieval block —
-    // which may have missed documents the user has but didn't trigger.
-    let inventory_prompt = build_library_inventory_prompt(&library_inventory);
-    let mcp_prompt = build_mcp_system_prompt(&mcp_servers);
-    let docs_prompt = build_doc_system_prompt(&attached_docs);
-    let kb_prompt = build_kb_system_prompt(&kb_chunks);
-    // Stable prefix — identical across the turns of a chat. Sent as a
-    // cacheable block (see StreamParams::system_prompt). The per-query
-    // KB retrieval is deliberately NOT joined here: it changes every
-    // turn and would invalidate the cache, so it travels separately as
-    // the volatile tail.
-    let mut sections: Vec<String> = vec![MRUST_SYSTEM_PROMPT.trim().to_string()];
-    if !inventory_prompt.is_empty() {
-        sections.push(inventory_prompt);
-    }
-    if !docs_prompt.is_empty() {
-        sections.push(docs_prompt);
-    }
-    if let Some((pname, pdomain)) = &project_meta {
-        sections.push(build_project_context_prompt(pname, pdomain));
-    }
-    let project_docs_prompt =
-        build_project_docs_prompt(doc_ids.len(), &project_documents);
-    if !project_docs_prompt.is_empty() {
-        sections.push(project_docs_prompt);
-    }
-    if !mcp_prompt.is_empty() {
-        sections.push(mcp_prompt);
-    }
-    let system_prompt = sections.join("\n\n---\n\n");
-    // Volatile tail — knowledge-base hits for *this* query.
-    let system_volatile = kb_prompt;
-    let images = if vision_ok { collect_images(&attached_docs) } else { Vec::new() };
-
-    let mut messages = messages;
-    if !images.is_empty() {
-        // Attach the rendered page images to the *last* user message, which is
-        // the one the model is replying to. Falls through silently if there is
-        // no user message in the history.
-        if let Some(last_user) = messages.iter_mut().rev().find(|m| matches!(m.role, Role::User)) {
-            last_user.images = images.clone();
-        }
-    }
-
-    tracing::info!(
-        "[chat] stream_chat_root: chat_id={chat_id}, model={raw_model}, vision_ok={vision_ok}, local_config_present={}, docs={}, mcp_servers={}, kb_chunks={} (sys_prompt={} chars cacheable + {} volatile, images={})",
-        local_config.is_some(),
-        attached_docs.len(),
-        mcp_servers.len(),
-        kb_chunks.len(),
-        system_prompt.len(),
-        system_volatile.len(),
-        images.len()
-    );
-
-    // ─── Tools available to the model ────────────────────────────────
-    // Builtin Mike tools first (read_document, find_in_document,
-    // read_workflow, generate_docx stub, edit_document stub).
-    let mut all_tools: Vec<ToolSchema> = builtin_tools::schemas();
-
-    // MCP tools: injected ONLY for models that handle large tool
-    // schemas reliably (see `llm::supports_mcp_tools` for the gate).
-    // Smaller local models keep the previous behaviour — the MCP
-    // servers stay visible via the system-prompt summary
-    // (`build_mcp_system_prompt`) but their tool schemas don't go
-    // into the schema list. The system prompt structure is unchanged
-    // either way; the only thing this gate decides is whether the
-    // model receives the additional `tools` schemas at the wire
-    // protocol level.
-    let mcp_tools_enabled = llm::supports_mcp_tools(&raw_model);
-    let mcp_tool_count: usize = mcp_servers
-        .iter()
-        .map(|s| s.tool_schemas.len())
-        .sum();
-    if mcp_tools_enabled {
-        for srv in &mcp_servers {
-            all_tools.extend(srv.tool_schemas.iter().cloned());
-        }
-    }
-
-    // Map chat-local labels (`doc-0`, `doc-1`, …) to real document UUIDs so
-    // builtin tools (read_document, find_in_document) can resolve them.
-    let mut doc_label_map: HashMap<String, String> = HashMap::new();
-    for (idx, doc_id) in doc_ids.iter().enumerate() {
-        doc_label_map.insert(format!("doc-{idx}"), doc_id.clone());
-    }
-    // Project documents continue the label sequence after the inline
-    // attachments so read_document / find_in_document resolve them too.
-    for (i, (id, _)) in project_documents.iter().enumerate() {
-        doc_label_map.insert(format!("doc-{}", doc_ids.len() + i), id.clone());
-    }
-
-    tracing::info!(
-        "[chat] tool-use: {} total tools (builtin + {} MCP, mcp_enabled={}), labels={:?}",
-        all_tools.len(),
-        mcp_tool_count,
-        mcp_tools_enabled,
-        doc_label_map.keys().collect::<Vec<_>>()
-    );
-    // Verbose dump of the MCP tool names actually being shipped in the
-    // request — invaluable when a user reports "the model never calls
-    // my MCP tool". If this log shows the tool name, the schema is on
-    // the wire; if not, either the gate dropped it (model-not-supported)
-    // or discovery never returned it (server-side handshake failure).
-    if mcp_tools_enabled && mcp_tool_count > 0 {
-        let mcp_tool_names: Vec<&str> = mcp_servers
-            .iter()
-            .flat_map(|s| s.tool_schemas.iter().map(|t| t.function.name.as_str()))
-            .collect();
-        tracing::info!(
-            "[chat] MCP tools shipped to model: {:?}",
-            mcp_tool_names
-        );
-    } else if mcp_tool_count > 0 {
-        let server_names: Vec<&str> = mcp_servers
-            .iter()
-            .map(|s| s.config_name.as_str())
-            .collect();
-        tracing::info!(
-            "[chat] MCP servers discovered ({} tools total) but NOT shipped — model {:?} not in supports_mcp_tools allowlist. Servers: {:?}. Set MRUST_FORCE_MCP_TOOLS=1 to override.",
-            mcp_tool_count,
-            raw_model,
-            server_names
-        );
-    }
-
-    let claude_key = user_settings.as_ref().and_then(|s| s.claude_api_key.clone());
-    let gemini_key = user_settings.as_ref().and_then(|s| s.gemini_api_key.clone());
-    let gemini_region = user_settings.as_ref().and_then(|s| s.gemini_region.clone());
-
-    // Compress older turns once the whole prompt — system prefix
-    // (instructions + attached-document text), the volatile KB block and
-    // the conversation history — fills past 80% of the model's context
-    // window. The system prefix is measured here and passed in, because
-    // in a document-heavy chat it dwarfs the turns and a history-only
-    // trigger would never fire. Failing-open: if the summarizer LLM call
-    // errors, the original messages are returned unchanged.
-    let summarizer_creds = llm::summarize::SummarizerCreds {
-        local_config: local_config.clone(),
-        claude_api_key: claude_key.clone(),
-        gemini_api_key: gemini_key.clone(),
-        gemini_region: gemini_region.clone(),
-    };
-    let system_overhead = llm::summarize::estimate_tokens(&system_prompt)
-        + llm::summarize::estimate_tokens(&system_volatile);
-    let messages = llm::summarize::maybe_compress_history(
-        messages,
-        &raw_model,
-        &summarizer_creds,
-        system_overhead,
-    )
-    .await;
-
-    // tx, rx were created above (before tokio::join!) so PII
-    // redaction could emit progress events. Re-use them here for the
-    // streaming task.
     let state_clone = state.clone();
     let chat_id_clone = chat_id.clone();
-    // Move retrieved KB chunks into the spawned task so the post-stream
-    // citation parser can map model-emitted [g1]/[p1] tags back to the
-    // source path + chunk index.
-    let kb_chunks_for_citations = kb_chunks.clone();
 
     tokio::spawn(async move {
         if is_new_chat {
@@ -2875,6 +2695,191 @@ async fn stream_chat_root(
                 .send(Ok(Event::default().data(chat_id_event.to_string())))
                 .await;
         }
+
+        // PII redaction inside load_attached_docs emits per-chunk
+        // progress events on the same channel that carries the rest
+        // of the stream (rendered text deltas, citations, tool calls).
+        let tx_for_redact = tx.clone();
+
+        // Discover MCP, load attached docs, retrieve KB chunks, and pull
+        // a library inventory in parallel. The inventory is what tells the
+        // model "the user has the GDPR and AI Act in their indexed library"
+        // even when the user's question doesn't surface those documents
+        // via semantic match — without it, the model defaults to "I don't
+        // have access to your synced documents."
+        let (attached_docs, mcp_servers, kb_chunks, library_inventory) = tokio::join!(
+            load_attached_docs(
+                &state_clone,
+                &auth.user_id,
+                &doc_ids,
+                vision_ok,
+                &pii_protected_ids,
+                &tx_for_redact,
+            ),
+            discover_mcp_for_user(&state_clone, &auth.user_id),
+            retrieve_kb_chunks(&state_clone, &auth.user_id, &chat_id_clone, &last_user_query, kb_top_k),
+            list_indexed_corpus_docs(&state_clone, &auth.user_id),
+        );
+
+        // Compose: Mike base + library inventory + KB excerpts + attached
+        // full-text + MCP. Library inventory comes near the top so the
+        // model orients itself before the semantic-retrieval block —
+        // which may have missed documents the user has but didn't trigger.
+        let inventory_prompt = build_library_inventory_prompt(&library_inventory);
+        let mcp_prompt = build_mcp_system_prompt(&mcp_servers);
+        let docs_prompt = build_doc_system_prompt(&attached_docs);
+        let kb_prompt = build_kb_system_prompt(&kb_chunks);
+        // Stable prefix — identical across the turns of a chat. Sent as a
+        // cacheable block (see StreamParams::system_prompt). The per-query
+        // KB retrieval is deliberately NOT joined here: it changes every
+        // turn and would invalidate the cache, so it travels separately as
+        // the volatile tail.
+        let mut sections: Vec<String> = vec![MRUST_SYSTEM_PROMPT.trim().to_string()];
+        if !inventory_prompt.is_empty() {
+            sections.push(inventory_prompt);
+        }
+        if !docs_prompt.is_empty() {
+            sections.push(docs_prompt);
+        }
+        if let Some((pname, pdomain)) = &project_meta {
+            sections.push(build_project_context_prompt(pname, pdomain));
+        }
+        let project_docs_prompt =
+            build_project_docs_prompt(doc_ids.len(), &project_documents);
+        if !project_docs_prompt.is_empty() {
+            sections.push(project_docs_prompt);
+        }
+        if !mcp_prompt.is_empty() {
+            sections.push(mcp_prompt);
+        }
+        let system_prompt = sections.join("\n\n---\n\n");
+        // Volatile tail — knowledge-base hits for *this* query.
+        let system_volatile = kb_prompt;
+        let images = if vision_ok { collect_images(&attached_docs) } else { Vec::new() };
+
+        let mut messages = messages;
+        if !images.is_empty() {
+            // Attach the rendered page images to the *last* user message, which is
+            // the one the model is replying to. Falls through silently if there is
+            // no user message in the history.
+            if let Some(last_user) = messages.iter_mut().rev().find(|m| matches!(m.role, Role::User)) {
+                last_user.images = images.clone();
+            }
+        }
+
+        tracing::info!(
+            "[chat] stream_chat_root: chat_id={chat_id_clone}, model={raw_model}, vision_ok={vision_ok}, local_config_present={}, docs={}, mcp_servers={}, kb_chunks={} (sys_prompt={} chars cacheable + {} volatile, images={})",
+            local_config.is_some(),
+            attached_docs.len(),
+            mcp_servers.len(),
+            kb_chunks.len(),
+            system_prompt.len(),
+            system_volatile.len(),
+            images.len()
+        );
+
+        // ─── Tools available to the model ────────────────────────────────
+        // Builtin Mike tools first (read_document, find_in_document,
+        // read_workflow, generate_docx stub, edit_document stub).
+        let mut all_tools: Vec<ToolSchema> = builtin_tools::schemas();
+
+        // MCP tools: injected ONLY for models that handle large tool
+        // schemas reliably (see `llm::supports_mcp_tools` for the gate).
+        // Smaller local models keep the previous behaviour — the MCP
+        // servers stay visible via the system-prompt summary
+        // (`build_mcp_system_prompt`) but their tool schemas don't go
+        // into the schema list. The system prompt structure is unchanged
+        // either way; the only thing this gate decides is whether the
+        // model receives the additional `tools` schemas at the wire
+        // protocol level.
+        let mcp_tools_enabled = llm::supports_mcp_tools(&raw_model);
+        let mcp_tool_count: usize = mcp_servers
+            .iter()
+            .map(|s| s.tool_schemas.len())
+            .sum();
+        if mcp_tools_enabled {
+            for srv in &mcp_servers {
+                all_tools.extend(srv.tool_schemas.iter().cloned());
+            }
+        }
+
+        // Map chat-local labels (`doc-0`, `doc-1`, …) to real document UUIDs so
+        // builtin tools (read_document, find_in_document) can resolve them.
+        let mut doc_label_map: HashMap<String, String> = HashMap::new();
+        for (idx, doc_id) in doc_ids.iter().enumerate() {
+            doc_label_map.insert(format!("doc-{idx}"), doc_id.clone());
+        }
+        // Project documents continue the label sequence after the inline
+        // attachments so read_document / find_in_document resolve them too.
+        for (i, (id, _)) in project_documents.iter().enumerate() {
+            doc_label_map.insert(format!("doc-{}", doc_ids.len() + i), id.clone());
+        }
+
+        tracing::info!(
+            "[chat] tool-use: {} total tools (builtin + {} MCP, mcp_enabled={}), labels={:?}",
+            all_tools.len(),
+            mcp_tool_count,
+            mcp_tools_enabled,
+            doc_label_map.keys().collect::<Vec<_>>()
+        );
+        // Verbose dump of the MCP tool names actually being shipped in the
+        // request — invaluable when a user reports "the model never calls
+        // my MCP tool". If this log shows the tool name, the schema is on
+        // the wire; if not, either the gate dropped it (model-not-supported)
+        // or discovery never returned it (server-side handshake failure).
+        if mcp_tools_enabled && mcp_tool_count > 0 {
+            let mcp_tool_names: Vec<&str> = mcp_servers
+                .iter()
+                .flat_map(|s| s.tool_schemas.iter().map(|t| t.function.name.as_str()))
+                .collect();
+            tracing::info!(
+                "[chat] MCP tools shipped to model: {:?}",
+                mcp_tool_names
+            );
+        } else if mcp_tool_count > 0 {
+            let server_names: Vec<&str> = mcp_servers
+                .iter()
+                .map(|s| s.config_name.as_str())
+                .collect();
+            tracing::info!(
+                "[chat] MCP servers discovered ({} tools total) but NOT shipped — model {:?} not in supports_mcp_tools allowlist. Servers: {:?}. Set MRUST_FORCE_MCP_TOOLS=1 to override.",
+                mcp_tool_count,
+                raw_model,
+                server_names
+            );
+        }
+
+        let claude_key = user_settings.as_ref().and_then(|s| s.claude_api_key.clone());
+        let gemini_key = user_settings.as_ref().and_then(|s| s.gemini_api_key.clone());
+        let gemini_region = user_settings.as_ref().and_then(|s| s.gemini_region.clone());
+
+        // Compress older turns once the whole prompt — system prefix
+        // (instructions + attached-document text), the volatile KB block and
+        // the conversation history — fills past 80% of the model's context
+        // window. The system prefix is measured here and passed in, because
+        // in a document-heavy chat it dwarfs the turns and a history-only
+        // trigger would never fire. Failing-open: if the summarizer LLM call
+        // errors, the original messages are returned unchanged.
+        let summarizer_creds = llm::summarize::SummarizerCreds {
+            local_config: local_config.clone(),
+            claude_api_key: claude_key.clone(),
+            gemini_api_key: gemini_key.clone(),
+            gemini_region: gemini_region.clone(),
+        };
+        let system_overhead = llm::summarize::estimate_tokens(&system_prompt)
+            + llm::summarize::estimate_tokens(&system_volatile);
+        let messages = llm::summarize::maybe_compress_history(
+            messages,
+            &raw_model,
+            &summarizer_creds,
+            system_overhead,
+        )
+        .await;
+
+        // Move retrieved KB chunks into the post-stream citation parser
+        // so model-emitted [g1]/[p1] tags can be mapped back to the
+        // source path + chunk index.
+        let kb_chunks_for_citations = kb_chunks.clone();
 
         const MAX_TOOL_ITERATIONS: u32 = 5;
         // How many times to nudge the model when it ends a turn with a

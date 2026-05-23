@@ -12,6 +12,94 @@ diff. For the upstream-sync audit trail (which fixes were ported from
 
 ---
 
+## 2026-05-23 — PII pipeline live progress — SSE streams during setup, not after
+
+Closes the "silent wait" UX gap reported on long PDFs: after pressing
+send the composer cleared and the chat sat frozen for the entire PDF
+extraction + PII redaction window (multiple minutes on a 9-page
+DOCX), with no spinner, step row or banner — only after the heavy
+work finished did the assistant turn finally appear with the events
+all collapsed at once. The fix is architectural plus a visible
+text-extraction stage and an Italian terminology correction.
+
+### Fixed — SSE response now starts streaming immediately
+
+- `stream_chat` in `src/routes/chat.rs` previously awaited
+  `load_attached_docs` (PDF text extraction → PII redaction) and
+  `maybe_compress_history` (history summarizer) **before** returning
+  `Sse::new(rx)`. Axum can't begin streaming the HTTP body until the
+  handler returns, so every `doc_extract_*` / `pii_redact_*` event
+  emitted during that window just buffered in the mpsc channel and
+  flushed all at once when the response finally went out. The
+  client's `fetch()` sat with no response start for the duration.
+- The whole pipeline — `load_attached_docs` + join siblings
+  (`discover_mcp_for_user`, `retrieve_kb_chunks`,
+  `list_indexed_corpus_docs`), prompt composition, tool setup,
+  summarizer, the existing LLM streaming loop — now lives inside
+  a single `tokio::spawn(async move { … })`. The handler creates
+  the channel, clones `state` and `chat_id`, dispatches the spawn,
+  and returns `Sse::new(rx).keep_alive(KeepAlive::default())` on the
+  very next line. KeepAlive pings keep the connection live during
+  the heavy setup; every emitted event lands in the browser in real
+  time.
+
+### Added — doc_extract step in the assistant turn
+
+- New `ChatStep` variant `{ kind: 'doc_extract', filename, chars,
+  done }`. Backend emits `doc_extract_start` at the top of every
+  attached-document load and `doc_extract_done` (with `chars`)
+  after either the cached-text fast-path or the fallback
+  `extract_text_dispatch` returns — same shape as `pii_redact_*`.
+- `frontend/src/lib/components/chat/ChatSteps.svelte` renders the
+  step exactly like the PII row: spinner + "Estrazione testo — file"
+  while in flight, green check + "Testo estratto — file (N caratteri)"
+  on completion. The PII step (when enabled) appears immediately
+  after.
+- `frontend/src/lib/stores/chat.svelte.ts` adds
+  `onDocExtractStart` / `onDocExtractDone` callbacks; the start
+  handler is idempotent (won't double-push if the same filename
+  fires twice) and the done handler synthesises a step if no start
+  was seen (defence against out-of-order SSE).
+- `Assistant.stepDocExtractStarting` / `…Done` i18n keys across
+  all 6 locales (en + it canonical, fr/de/es/pt via
+  `scripts/fill-i18n.mjs`).
+
+### Changed — Italian terminology: "Redazione" → "Anonimizzazione"
+
+- In Italian the act of removing personal data from a document is
+  **anonimizzazione**, not *redazione* (which translates closer to
+  "drafting / editing"). Five strings updated in
+  `frontend/locales/it.json`:
+  - `Assistant.stepPiiRedactStarting/Progress/Done` → "Anonimizzazione PII…", "PII anonimizzata —"
+  - `ChatInput.pii.omissisHintPrefix` → "Per un'anonimizzazione di livello produttivo…"
+  - `ChatInput.pii.statusUnavailable` → "…il documento sarà inviato senza anonimizzazione."
+- English / French / German / Spanish / Portuguese left unchanged —
+  *redact / redaction / Schwärzung / redacción / redação* are the
+  correct technical terms in those languages.
+
+### What the user sees now
+
+Pressing send on a chat with `( PII [✓] file.pdf )` produces, in
+order, with each step appearing the moment it starts (no more
+multi-minute silence):
+
+1. (in browser console immediately) `[streamChat] request …`
+2. **⏳ Estrazione testo — file.pdf** — spinner appears within a
+   second of the request leaving the browser.
+3. **✓ Testo estratto — file.pdf (N caratteri)** — green check
+   when the cached or freshly extracted text is ready.
+4. **⏳ Anonimizzazione PII — file.pdf (0 / N)** — counter advances
+   as each 2000-char chunk completes.
+5. **✓ PII anonimizzata — file.pdf** — green check.
+6. (then the LLM begins streaming text deltas)
+
+### Tests
+
+`cargo check --features ner-pii` clean.
+`pnpm typecheck` 0 errors. i18n parity OK at 1095 keys × 6 locales.
+
+---
+
 ## 2026-05-23 — GLiNER2 PII redaction — end-to-end chat-attachment pipeline
 
 Per-file PII protection for chat attachments. When the user toggles
