@@ -110,9 +110,36 @@
   }
 
   function cancelPiiDisclaimer() {
+    // The browser's checkbox click already flipped the DOM state to
+    // "checked" before we intercepted it; if the user backs out, the
+    // checkbox would otherwise stay visually checked while
+    // f.piiProtected stays false → confusing. Force the underlying
+    // state to false on the same file: reassigning `files` triggers
+    // Svelte to re-evaluate `checked={f.piiProtected ?? false}` on
+    // the input and snap it back to unchecked.
+    const f = pendingPiiFile
     pendingPiiFile = null
     piiDisclaimerOpen = false
+    if (f) {
+      applyPiiToggle(f, false)
+    }
   }
+
+  // Enter confirms the disclaimer; Esc cancellation is already wired
+  // through Modal.closeOnEsc + onclose=cancelPiiDisclaimer. We only
+  // attach the listener while the modal is open so it doesn't
+  // intercept Enter in the textarea or send-button paths.
+  $effect(() => {
+    if (!piiDisclaimerOpen) return
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        ackPiiDisclaimer()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })
 
   // PII engine status — polled while any attached file has PII
   // protection on, so the user sees a banner during the multi-
