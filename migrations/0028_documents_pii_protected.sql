@@ -1,0 +1,26 @@
+-- Persist the per-document PII-protection flag.
+--
+-- Before this migration, PII protection was a per-message attribute
+-- carried in `OutgoingMessage.files[].pii_protected` on the chat
+-- request payload. That worked for the first turn that uploaded a
+-- file, but follow-up text-only turns dropped it: the backend
+-- re-attaches every document linked to the chat (see the
+-- `SELECT id FROM documents WHERE chat_id = ?` recovery in
+-- `routes/chat.rs::stream_chat`), and without the per-message flag
+-- those documents were sent to the LLM unredacted — the textbook
+-- PII leak the v0.2.5 user saw when a follow-up question came back
+-- with customer names and license plates intact.
+--
+-- The flag now lives on the `documents` row. The chat handler still
+-- accepts the per-message flag at request time and uses it to flip
+-- this column to 1 — once on. From that point any chat turn that
+-- pulls the document into context will read the column and treat the
+-- text as protected, redact it (via `maybe_redact_pii`), and hit the
+-- on-disk PII cache (`cache/pii/<doc_id>.txt`) introduced in v0.2.5
+-- for sub-millisecond reuse.
+--
+-- SQLite stores booleans as INTEGER (0 / 1). DEFAULT 0 so every
+-- existing document is treated as unprotected by default — only
+-- explicit user opt-in flips the column.
+
+ALTER TABLE documents ADD COLUMN pii_protected INTEGER NOT NULL DEFAULT 0;

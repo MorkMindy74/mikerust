@@ -13,6 +13,56 @@ diff. For the upstream-sync audit trail (which fixes were ported from
 
 ---
 
+## v0.2.6 — 2026-05-23 (patch — PII leak fix)
+
+### Fixed — PII protection lost on follow-up chat turns (CRITICAL)
+
+User report: turn 1 with a PII-protected PDF redacted as expected
+(model answer referenced `[LICENSE_PLATE]` etc.); turn 2 on the
+same document (a plain text follow-up question) came back with the
+*original* customer name and *every* unmasked license plate. The
+leak was real — but it wasn't a GLiNER recall problem. The
+`pii_protected` flag lived only on the message payload, so when the
+follow-up text-only message arrived, the recovery code in
+`stream_chat` re-attached every document linked to the chat (see
+the `SELECT id FROM documents WHERE chat_id = ?` block) and
+`load_attached_docs` ran without a flag for those auto-attached
+docs — i.e. without any redaction at all. The full unredacted text
+went to the LLM, which happily quoted it.
+
+- New migration **`0028_documents_pii_protected.sql`** adds an
+  `INTEGER NOT NULL DEFAULT 0` column on `documents`. The flag is
+  now durable: once a user opts-in on a file, it stays protected
+  for every later turn of every chat that references it.
+- `stream_chat` UPSERTs `pii_protected = 1` on every document id
+  the current request payload tagged. The write is one-way — the
+  chat handler never resets the column to 0, only opt-in flips it.
+- `load_attached_docs` extends its `SELECT` to include the new
+  column and OR-merges it with the per-request `pii_protected_ids`
+  set. Either source flips the doc into the redaction branch, so a
+  follow-up text-only turn no longer needs the frontend to repeat
+  the flag.
+- The v0.2.5 `cache/pii/<doc_id>.txt` cache layer is now the
+  steady-state behaviour: turn 1 pays full GLiNER inference and
+  writes the cache; turn N reads the cache in milliseconds.
+
+### Known follow-up — GLiNER recall on Italian PDFs
+
+This release closes the leak from missing follow-up redaction, but
+the same user report exposed a second, separate issue: even on the
+first turn GLiNER missed `SOCIETA' A. TEC. S.R.L.` (an
+`organization`) and most of the `license_plate` instances. That's a
+zero-shot recall gap, not a wiring bug — tracked separately, will
+likely need a lower threshold for Italian text or extra label
+framings (`targa`, `azienda`).
+
+### Installer artefacts
+
+- `dist/MikeRust_0.2.6_x64.msi` — Windows x86_64
+- `dist/MikeRust_0.2.6_arm64.msi` — Windows ARM64
+
+---
+
 ## v0.2.5 — 2026-05-23 (patch)
 
 ### Added — persistent PII-redacted text cache

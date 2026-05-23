@@ -907,8 +907,8 @@ async fn load_attached_docs(
 ) -> Vec<DocPayload> {
     let mut out = Vec::new();
     for doc_id in document_ids {
-        let row: Option<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
-            "SELECT filename, file_type, storage_path, extracted_text_path \
+        let row: Option<(String, String, Option<String>, Option<String>, i64)> = sqlx::query_as(
+            "SELECT filename, file_type, storage_path, extracted_text_path, pii_protected \
              FROM documents WHERE id = ? AND user_id = ?",
         )
         .bind(doc_id)
@@ -918,10 +918,16 @@ async fn load_attached_docs(
         .ok()
         .flatten();
 
-        let Some((filename, file_type, Some(storage_path), extracted_text_path)) = row
+        let Some((filename, file_type, Some(storage_path), extracted_text_path, persisted_pii)) = row
         else {
             continue;
         };
+        // Effective protection = persisted column (set by an earlier
+        // opt-in turn) OR the per-request set (set by this turn). The
+        // OR-logic guarantees a follow-up text-only turn still
+        // redacts a document the user opted-in to earlier, even if
+        // the current payload doesn't repeat the flag.
+        let pii_on = persisted_pii != 0 || pii_protected_ids.contains(doc_id);
 
         // Emit the leading step event so the UI shows "Estraendo
         // testo — file" the moment we start touching the file —
@@ -969,7 +975,7 @@ async fn load_attached_docs(
                 emit_doc_extract(sse_tx, &filename, Some(chars), true);
                 let final_text = maybe_redact_pii(
                     text,
-                    pii_protected_ids.contains(doc_id),
+                    pii_on,
                     doc_id,
                     &filename,
                     sse_tx,
@@ -1127,7 +1133,7 @@ async fn load_attached_docs(
             payload.text = Some(
                 maybe_redact_pii(
                     t,
-                    pii_protected_ids.contains(doc_id),
+                    pii_on,
                     doc_id,
                     &filename,
                     sse_tx,
@@ -2538,6 +2544,23 @@ async fn stream_chat_root(
         pii_protected_ids.len(),
         cfg!(feature = "ner-pii"),
     );
+
+    // Persist the per-document PII-protection flag (migration 0028).
+    // Before this column existed, the flag lived only on the current
+    // request payload — fine for the upload turn, but follow-up
+    // text-only turns re-fetched the document from chat history
+    // without the flag and sent the raw text to the LLM. With the
+    // column, once a user has opted-in on a file it stays protected
+    // for every subsequent turn of every chat that references it.
+    for id in &pii_protected_ids {
+        let _ = sqlx::query(
+            "UPDATE documents SET pii_protected = 1 WHERE id = ? AND user_id = ?",
+        )
+        .bind(id)
+        .bind(&auth.user_id)
+        .execute(&state.db)
+        .await;
+    }
 
     // Stamp this chat onto any newly attached cache documents so
     // chat-deletion can sweep their on-disk files (see migration
