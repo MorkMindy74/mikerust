@@ -27,20 +27,119 @@ impl ApiBaseUrl {
     }
 }
 
+/// Resolve `<home>/mikerust-data/` and ensure it exists. Used for
+/// both the SQLite DB (`mike.db`, owned by the `mike` crate) and the
+/// release-build log file (`mike-tauri.log`, set up below). Returning
+/// `None` is non-fatal — callers fall back to "no extra logging" so a
+/// missing HOME env doesn't bring the shell down.
+fn ensure_data_dir() -> Option<std::path::PathBuf> {
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .ok()?;
+    let dir = std::path::PathBuf::from(home).join("mikerust-data");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
+}
+
+/// Pick a free port in the ephemeral range to bind the embedded axum
+/// server on. Walks up to 20 random picks in `49152..=65535`,
+/// pre-binding each via a synchronous `std::net::TcpListener` (and
+/// immediately dropping the listener) to confirm the port is free
+/// right now. On 20 consecutive collisions — practically unreachable
+/// since the search space is ~16k ports — falls back to `0` so the
+/// OS still gets to pick something rather than killing startup.
+///
+/// Why not just keep `port = 0`: with several Tauri / Electron desktop
+/// apps that all bind axum on localhost, the OS ephemeral pool can
+/// hand us a port that *another* desktop app freed milliseconds ago
+/// and is about to rebind. Choosing our own random port and verifying
+/// it's free decouples our bind from the OS reuse window and makes
+/// "did axum start on a sensible port" easier to debug from the log.
+///
+/// There is still a benign TOCTOU window between this pre-bind check
+/// and the real `tokio::net::TcpListener::bind` inside
+/// `mike::run_server_with_channels`. In the rare collision case the
+/// real bind returns AddrInUse, the spawn logs the error, and the
+/// frontend's invoke handler returns an empty URL — the user can
+/// relaunch the app and a fresh random pick will almost certainly
+/// land on a different free port.
+fn pick_free_random_port() -> u16 {
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
+    use rand::Rng;
+
+    let mut rng = rand::rng();
+    for _ in 0..20 {
+        let port: u16 = rng.random_range(49152..=65535);
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
+        if TcpListener::bind(addr).is_ok() {
+            return port;
+        }
+    }
+    // Vanishingly unlikely 20-in-a-row collision — let the OS pick.
+    0
+}
+
 /// Entry point called by main.rs.
 /// Starts the axum server as a background tokio task, then launches Tauri.
 pub fn run() {
     dotenvy::dotenv().ok();
 
-    // Init tracing once
+    // Init tracing once. Two sinks:
+    //   - stdout/stderr (`fmt::layer()`)  — useful in dev (`tauri dev`,
+    //     `cargo run`); detached in MSI installs because main.rs sets
+    //     `windows_subsystem = "windows"`.
+    //   - file (`tracing-appender::rolling::never`) — writes to
+    //     `<home>/mikerust-data/mike-tauri.log`, always on. This is
+    //     the only sink that survives the windowed release build, so
+    //     "the backend died silently" can finally be triaged by
+    //     opening the log file. We keep the worker guard alive for
+    //     the lifetime of the process so the non-blocking writer
+    //     keeps flushing. The guard *must* outlive every span/event
+    //     it might receive, hence the `Box::leak` — the process ends
+    //     when Tauri ends, so leaking until exit is harmless.
+    let log_dir = ensure_data_dir();
+    let file_appender = log_dir
+        .as_ref()
+        .map(|d| tracing_appender::rolling::never(d, "mike-tauri.log"));
+    let (file_writer, file_guard) = match file_appender {
+        Some(a) => {
+            let (w, g) = tracing_appender::non_blocking(a);
+            (Some(w), Some(g))
+        }
+        None => (None, None),
+    };
+    if let Some(g) = file_guard {
+        Box::leak(Box::new(g));
+    }
+    let file_layer = file_writer.map(|w| {
+        tracing_subscriber::fmt::layer()
+            .with_writer(w)
+            .with_ansi(false)
+            .with_target(true)
+    });
+
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
     let _ = tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::new(
             std::env::var("RUST_LOG")
-                .unwrap_or_else(|_| "mike=debug,tower_http=info".into()),
+                .unwrap_or_else(|_| {
+                    "mike=debug,mike_tauri_lib=debug,tower_http=info".into()
+                }),
         ))
         .with(tracing_subscriber::fmt::layer())
+        .with(file_layer)
         .try_init();
+
+    if let Some(d) = log_dir.as_ref() {
+        tracing::info!(
+            "[tauri] tracing → {}",
+            d.join("mike-tauri.log").display()
+        );
+    } else {
+        tracing::warn!(
+            "[tauri] HOME/USERPROFILE not set — file logging disabled"
+        );
+    }
 
 
     // Biometric channel: axum sends requests, Tauri processes them with HWND
@@ -56,20 +155,45 @@ pub fn run() {
     let api_base = ApiBaseUrl::new();
     let api_base_for_task = api_base.clone();
 
-    // Spawn the axum server on a background tokio runtime
+    // Spawn the axum server on a background tokio runtime. Errors
+    // returned from `run_server_with_channels` were previously logged
+    // and otherwise silently dropped — `port_tx` got freed without
+    // sending, the Tauri shell's `api_base_url` invoke handler stayed
+    // empty forever, and the frontend gave up with "Failed to fetch".
+    // Now we ALSO write the error chain to stderr so a developer
+    // running the installed exe from a console (or in dev) sees the
+    // failure without having to hunt for the log file.
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                eprintln!("[mikerust:fatal] failed to build tokio runtime: {e}");
+                tracing::error!("[tauri] failed to build tokio runtime: {e}");
+                return;
+            }
+        };
         rt.block_on(async {
             let port: u16 = std::env::var("PORT")
                 .ok()
                 .and_then(|s| s.parse().ok())
-                .unwrap_or(0); // 0 = let the OS pick a free high port
+                .unwrap_or_else(pick_free_random_port);
+            tracing::info!("[tauri] embedded axum will bind on 127.0.0.1:{port}");
             if let Err(e) = mike::run_server_with_channels(
                 port,
                 Some(bio_tx),
                 Some(port_tx),
             ).await {
-                tracing::error!("axum server error: {e}");
+                // Walk the error chain so the *root cause* lands in
+                // the log — not just the topmost "axum server error".
+                let mut chain = vec![format!("{e}")];
+                let mut src: Option<&dyn std::error::Error> = e.source();
+                while let Some(inner) = src {
+                    chain.push(format!("{inner}"));
+                    src = inner.source();
+                }
+                let joined = chain.join(" -> ");
+                tracing::error!("[tauri] axum server failed: {joined}");
+                eprintln!("[mikerust:fatal] axum server failed: {joined}");
             }
         });
     });

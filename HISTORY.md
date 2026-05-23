@@ -13,6 +13,77 @@ diff. For the upstream-sync audit trail (which fixes were ported from
 
 ---
 
+## v0.2.2 — 2026-05-23 (patch)
+
+Two patch-level fixes targeted at the installed MSI experience that
+v0.2.1 unintentionally regressed.
+
+### Fixed — silent backend on installed MSI
+
+Symptom: launching the installed `mike-tauri.exe` showed the Svelte
+"Impossibile raggiungere il backend / Network error: Failed to fetch"
+banner with no further diagnostics. Root cause: the release build
+sets `windows_subsystem = "windows"`, which detaches stdout/stderr,
+so every `tracing::error!` from the embedded axum startup chain
+(`AppState::new`, `run_migrations`, `ort::init`, the actual bind…)
+went to a `NUL` device. The user could see *that* the backend was
+down but had no way to know *why*.
+
+- `tracing-appender = "0.2"` added to `mike-tauri`'s deps. The
+  shell now installs an additional non-blocking file layer that
+  writes every event to `<home>/mikerust-data/mike-tauri.log` —
+  same directory as the SQLite DB so we know it's user-writable.
+  The worker guard is `Box::leak`'d at startup so the writer
+  keeps flushing for the lifetime of the process (a few KB of
+  heap, freed at exit). Stdout/stderr layer stays on top for
+  `tauri dev` / `cargo run` where stdout *is* attached.
+- `[tauri] tracing → C:\Users\<name>\mikerust-data\mike-tauri.log`
+  now prints at startup, so a user reporting a problem can paste
+  the log path back without having to know the convention.
+- `axum server error: …` rewritten to walk the full
+  `std::error::Error::source()` chain and emit
+  `axum server failed: <top> -> <middle> -> <root>` — previously
+  only the topmost wrapper was visible, hiding the concrete cause
+  (file-not-found, addr-in-use, sqlite-open-failed…).
+- `eprintln!("[mikerust:fatal] …")` as a last-resort sink for
+  catastrophic startup failures (tokio runtime build, axum
+  bind/serve) — visible to anyone running the installed exe from
+  a console even if the file logger itself failed to open.
+- `ensure_data_dir()` helper creates `<home>/mikerust-data/` up
+  front so the log file open never races the SQLite open.
+
+### Changed — embedded axum picks an explicit random ephemeral port
+
+Symptom: with several Tauri / Electron desktop apps that all bind
+axum on localhost (e.g. the upstream `mike` and MikeRust running
+side by side), there was a non-zero chance that the OS's port-0
+ephemeral pool would hand MikeRust a port another desktop app had
+freed milliseconds ago and was about to rebind.
+
+- `rand = "0.9"` added to `mike-tauri`'s deps.
+- `pick_free_random_port()` now picks a `u16` uniformly in
+  `49152..=65535` (the IANA "dynamic / private ports" range),
+  pre-binds it synchronously via `std::net::TcpListener::bind` to
+  confirm it's free *right now*, and retries up to 20 times on
+  collision. The final fallback is still `port = 0` so a
+  vanishingly-unlikely 20-in-a-row miss doesn't kill startup.
+- `[tauri] embedded axum will bind on 127.0.0.1:<port>` is logged
+  before the actual bind, so the chosen port is visible in the
+  same `mike-tauri.log` introduced above.
+- The `PORT` env var override stays — tests, dev pinning, and the
+  standalone-backend dev story (frontend on `localhost:3000`
+  pointing at a fixed `NEXT_PUBLIC_API_BASE_URL`) keep working.
+
+### Installer artefacts
+
+- `dist/MikeRust_0.2.2_x64.msi` — Windows x86_64
+- `dist/MikeRust_0.2.2_arm64.msi` — Windows ARM64
+
+Same lean ~24 MB shape as v0.2.1 — the gliner2_inference v0.5.1
+slim-ort fix carries over.
+
+---
+
 ## v0.2.1 — 2026-05-23
 
 First semver bump since `v0.1.0`. Twenty-nine commits between the two
