@@ -83,7 +83,7 @@ pub fn schemas() -> Vec<ToolSchema> {
                 "properties": {
                     "doc_id": {
                         "type": "string",
-                        "description": "The document ID to read (e.g. 'doc-0', 'doc-1')"
+                        "description": "The document ID to read (e.g. 'doc-1', 'doc-2')"
                     }
                 },
                 "required": ["doc_id"]
@@ -95,7 +95,7 @@ pub fn schemas() -> Vec<ToolSchema> {
             json!({
                 "type": "object",
                 "properties": {
-                    "doc_id": { "type": "string", "description": "The document ID to search (e.g. 'doc-0')." },
+                    "doc_id": { "type": "string", "description": "The document ID to search (e.g. 'doc-1')." },
                     "query":  { "type": "string", "description": "The string to search for (case-insensitive)." },
                     "max_results": { "type": "integer", "description": "Maximum matches to return (default 20).", "minimum": 1, "maximum": 200 }
                 },
@@ -181,11 +181,11 @@ pub fn schemas() -> Vec<ToolSchema> {
         ),
         fun(
             EDIT_DOCUMENT,
-            "Apply minimal substitutions to an existing .docx document attached to the chat. Pass `doc_id` (e.g. 'doc-0') and an array of `edits`, each with `find` and `replace` strings. The find string MUST appear verbatim in the document.",
+            "Apply minimal substitutions to an existing .docx document attached to the chat. Pass `doc_id` (e.g. 'doc-1') and an array of `edits`, each with `find` and `replace` strings. The find string MUST appear verbatim in the document.",
             json!({
                 "type": "object",
                 "properties": {
-                    "doc_id": { "type": "string", "description": "The document ID to edit (e.g. 'doc-0')." },
+                    "doc_id": { "type": "string", "description": "The document ID to edit (e.g. 'doc-1')." },
                     "edits": {
                         "type": "array",
                         "description": "List of substitutions to apply atomically.",
@@ -205,7 +205,7 @@ pub fn schemas() -> Vec<ToolSchema> {
     ]
 }
 
-/// `doc_label_map` maps the chat-local label (`doc-0`, `doc-1`, …) to the
+/// `doc_label_map` maps the chat-local label (`doc-1`, `doc-2`, …) to the
 /// real `documents.id` UUID stored in SQLite. Built by the chat dispatcher
 /// from the message's attached files.
 ///
@@ -237,7 +237,7 @@ pub async fn dispatch(
     }
 }
 
-/// Look up a document by chat-local label (`doc-0`, `doc-1`, …) or
+/// Look up a document by chat-local label (`doc-1`, `doc-2`, …) or
 /// raw UUID and return the metadata the tool exec functions need.
 ///
 /// The returned tuple is `(filename, file_type, storage_path, real_id,

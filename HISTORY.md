@@ -13,6 +13,82 @@ diff. For the upstream-sync audit trail (which fixes were ported from
 
 ---
 
+## v0.3.6 — 2026-05-24 (generate_docx unblocked on multi-doc anamnesis)
+
+Two related regressions surfaced while attempting the v0.3.5 docx
+generation flow on a 10-cartella-clinica medical-anamnesis workflow
+with Gemini 2.5 Flash:
+
+### Fixed — Gemini `tool_code` leak with triple-quoted multi-line body
+
+When Gemini decides to call `generate_docx` via its
+"code-execution" output mode (a quirk of 2.5 Flash that the
+official SDKs strip but our raw-REST stream doesn't), it emits the
+call as Python prose:
+
+```
+read_document
+tool_code
+print(default_api.generate_docx(body='''# Lettera di Dimissione
+
+Dati Paziente
+Nome: …
+''', metadata={…}, template_id='it/lettera-dimissioni'))
+thought
+The user asked to generate a DOCX…
+```
+
+The existing `try_parse_tool_code_prose` adapter caught the
+single-line / single-quoted variants but blew up on this one
+because (a) the body used Python triple quotes `'''…'''`, (b) the
+prose was preceded by a leftover `read_document\ntool_code\n`
+header from earlier in the turn, (c) the body contained Unicode
+characters like `Undómiel` that a byte-level state machine
+mangled. Net effect: the parser bailed, the prose landed as a
+literal markdown blob in the chat, and the model never produced
+the requested document.
+
+- `try_parse_tool_code_prose` now anchors on the first
+  `default_api.` substring anywhere in the text — every leading
+  envelope shape (`tool_code`, `print(`, code-fence, prefix
+  garbage) is tolerated implicitly.
+- `extract_balanced_paren_contents` handles `'''…'''` and
+  `"""…"""` triple-quoted strings: stays inside the string until
+  three consecutive matching quote chars, ignores parens /
+  brackets / single quotes inside.
+- `split_top_level_commas` rewritten to iterate `chars()` (was
+  walking bytes-as-chars, which corrupted any non-ASCII codepoint
+  inside the body).
+- `python_literal_to_json` recognises `'''…'''` / `"""…"""`
+  before the single-quote branch so triple-quoted values aren't
+  mistaken for a `''` + content + `''` sandwich.
+- New regression test reproduces the full Gemini transcript
+  shape (multi-line body, `read_document` prefix, accented
+  Italian characters in the body, three kwargs including a
+  nested `metadata` dict).
+
+### Fixed — off-by-one between `CARTELLA_TEST_010.pdf` and `doc-10`
+
+With 10 attachments named `CARTELLA_TEST_001..010.pdf` the model
+reasoned about "the tenth document" and called the tools with
+`doc-10`. The chat-local label map was 0-indexed (`doc-0..doc-9`),
+so `read_document(doc_id="doc-10")` returned "document not found"
+and the model apologised instead of finishing the workflow.
+
+- `build_doc_system_prompt` and the `doc_label_map` constructor
+  in `routes/chat.rs` now emit `doc-1..doc-N` labels.
+- Tool schemas in `src/llm/builtin_tools.rs` updated to use
+  `doc-1` / `doc-2` as example labels in the descriptions.
+- The CITATIONS prompt's example block in `routes/chat.rs`
+  updated to match.
+
+### Installer artefacts
+
+- `dist/MikeRust_0.3.6_x64.msi` — Windows x86_64
+- `dist/MikeRust_0.3.6_arm64.msi` — Windows ARM64
+
+---
+
 ## v0.3.5 — 2026-05-24 (docx Accept/Reject decision flow + Open-in-Word)
 
 The DocViewerPanel's three buttons over a generated .docx — historically

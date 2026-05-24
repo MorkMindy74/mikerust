@@ -390,47 +390,24 @@ fn parse_gemini_sse_opt(line: &str, tc_counter: &mut u64) -> Option<StreamEvent>
 ///   - print-wrapped: `print(default_api.NAME(arg='…'))`
 ///   - tool_code:     `tool_code print(default_api.NAME(arg='…'))`
 ///   - code-fenced:   ` ```python\ntool_code print(...)``` `
+///   - triple-quoted body: `print(default_api.generate_docx(body='''line\n\nline'''))`
+///   - prefix garbage:  Gemini sometimes leaks a "read_document\n" or
+///     "thought\n" line before the call; we search forward for the
+///     first `default_api.` anchor so those don't kill the match.
 ///
 /// Returns `None` when the text doesn't match — the caller then falls
 /// back to the normal `ContentDelta` path so regular prose is unaffected.
 fn try_parse_tool_code_prose(text: &str) -> Option<(String, Value)> {
-    let mut s = text.trim();
-
-    // Strip a leading code fence: ```python, ```tool_code, ```
-    if let Some(rest) = s.strip_prefix("```python") {
-        s = rest.trim_start();
-    } else if let Some(rest) = s.strip_prefix("```tool_code") {
-        s = rest.trim_start();
-    } else if let Some(rest) = s.strip_prefix("```") {
-        s = rest.trim_start();
-    }
-    // Strip the trailing fence if any.
-    if let Some(rest) = s.strip_suffix("```") {
-        s = rest.trim_end();
-    }
-    // Strip the `tool_code` keyword line (with optional surrounding whitespace).
-    if let Some(rest) = s.strip_prefix("tool_code") {
-        s = rest.trim_start();
-    }
-    // Strip the `print(` wrapper. The matching trailing `)` is handled by
-    // the balanced-paren extractor below.
-    let had_print = if let Some(rest) = s.strip_prefix("print(") {
-        s = rest.trim_start();
-        true
-    } else {
-        false
-    };
-    // The function call lives under the `default_api.` namespace; some
-    // turns drop the prefix when the print wrapper is absent — accept
-    // both, but require it when there was no print wrapper to avoid
-    // matching arbitrary prose like `Foo(bar='baz')`.
-    let s = if let Some(rest) = s.strip_prefix("default_api.") {
-        rest
-    } else if had_print {
-        s
-    } else {
-        return None;
-    };
+    // Anchor on the first `default_api.` occurrence anywhere in the
+    // text. Gemini sometimes leaks an arbitrary leading line — a
+    // previous step's tool name ("read_document\n"), a "thought\n"
+    // header, code-fence noise — before the actual call. The earlier
+    // strict prefix-stripping rejected those; anchoring on
+    // `default_api.` accepts every wrapper the model can produce.
+    // False-positive risk is small: regular prose almost never types
+    // the literal `default_api.` token.
+    let anchor = text.find("default_api.")?;
+    let s = &text[anchor + "default_api.".len()..];
 
     // Parse "NAME(arg=val, …)".
     let paren = s.find('(')?;
@@ -446,27 +423,63 @@ fn try_parse_tool_code_prose(text: &str) -> Option<(String, Value)> {
 
 /// Given a slice that starts *after* an opening `(`, return the slice up
 /// to its matching `)`. Tracks Python single/double-quoted string literals
-/// and nested brackets so commas/parens inside strings don't fool it.
+/// (including triple-quoted `'''…'''` / `"""…"""` blocks that may span
+/// lines and contain unescaped quotes of the same character) and nested
+/// brackets so commas/parens inside strings don't fool it.
 fn extract_balanced_paren_contents(s: &str) -> Option<&str> {
+    #[derive(Clone, Copy)]
+    enum StrMode {
+        Single(char), // q
+        Triple(char), // q (triple-quoted, only close on q q q)
+    }
+    let bytes = s.as_bytes();
     let mut depth: i32 = 1;
-    let mut in_str: Option<char> = None;
+    let mut in_str: Option<StrMode> = None;
     let mut escaped = false;
-    for (i, c) in s.char_indices() {
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let c = bytes[i];
         if escaped {
             escaped = false;
+            i += 1;
             continue;
         }
         match in_str {
-            Some(q) => match c {
-                '\\' => escaped = true,
-                c2 if c2 == q => in_str = None,
-                _ => {}
-            },
+            Some(StrMode::Triple(q)) => {
+                // Only close on three consecutive q. Inside, `\` still
+                // escapes the next char (Python triple strings honour
+                // common escapes too).
+                if c == b'\\' {
+                    escaped = true;
+                } else if c == q as u8
+                    && i + 2 < bytes.len()
+                    && bytes[i + 1] == q as u8
+                    && bytes[i + 2] == q as u8
+                {
+                    in_str = None;
+                    i += 3;
+                    continue;
+                }
+            }
+            Some(StrMode::Single(q)) => {
+                if c == b'\\' {
+                    escaped = true;
+                } else if c == q as u8 {
+                    in_str = None;
+                }
+            }
             None => match c {
-                '\'' => in_str = Some('\''),
-                '"' => in_str = Some('"'),
-                '(' | '[' | '{' => depth += 1,
-                ')' | ']' | '}' => {
+                b'\'' | b'"' => {
+                    let q = c;
+                    if i + 2 < bytes.len() && bytes[i + 1] == q && bytes[i + 2] == q {
+                        in_str = Some(StrMode::Triple(q as char));
+                        i += 3;
+                        continue;
+                    }
+                    in_str = Some(StrMode::Single(q as char));
+                }
+                b'(' | b'[' | b'{' => depth += 1,
+                b')' | b']' | b'}' => {
                     depth -= 1;
                     if depth == 0 {
                         return Some(&s[..i]);
@@ -475,6 +488,7 @@ fn extract_balanced_paren_contents(s: &str) -> Option<&str> {
                 _ => {}
             },
         }
+        i += 1;
     }
     None
 }
@@ -499,21 +513,55 @@ fn parse_python_kwargs(s: &str) -> Option<Value> {
 }
 
 /// Split a Python args string by commas at the top nesting level,
-/// respecting string quotes and nested brackets.
+/// respecting string quotes (single, double, and triple) and nested
+/// brackets. Triple-quoted strings are crucial for generate_docx
+/// bodies, which Gemini emits as `body='''# Title\n\nbody'''`.
 fn split_top_level_commas(s: &str) -> Vec<String> {
+    #[derive(Clone, Copy)]
+    enum StrMode {
+        Single(char),
+        Triple(char),
+    }
+    // Collect to Vec<char> so the 3-char triple-quote lookahead can
+    // index forward safely on multibyte input (a body containing
+    // accented characters like "Undómiel" was being corrupted when
+    // this loop iterated bytes-as-chars).
+    let chars: Vec<char> = s.chars().collect();
     let mut out = Vec::new();
     let mut current = String::new();
-    let mut in_str: Option<char> = None;
+    let mut in_str: Option<StrMode> = None;
     let mut escaped = false;
     let mut depth: i32 = 0;
-    for c in s.chars() {
+    let mut i = 0usize;
+    while i < chars.len() {
+        let c = chars[i];
         if escaped {
             current.push(c);
             escaped = false;
+            i += 1;
             continue;
         }
         match in_str {
-            Some(q) => {
+            Some(StrMode::Triple(q)) => {
+                if c == '\\' {
+                    current.push(c);
+                    escaped = true;
+                } else if c == q
+                    && i + 2 < chars.len()
+                    && chars[i + 1] == q
+                    && chars[i + 2] == q
+                {
+                    current.push(c);
+                    current.push(c);
+                    current.push(c);
+                    in_str = None;
+                    i += 3;
+                    continue;
+                } else {
+                    current.push(c);
+                }
+            }
+            Some(StrMode::Single(q)) => {
                 if c == '\\' {
                     current.push(c);
                     escaped = true;
@@ -525,12 +573,16 @@ fn split_top_level_commas(s: &str) -> Vec<String> {
                 }
             }
             None => match c {
-                '\'' => {
-                    in_str = Some('\'');
-                    current.push(c);
-                }
-                '"' => {
-                    in_str = Some('"');
+                '\'' | '"' => {
+                    if i + 2 < chars.len() && chars[i + 1] == c && chars[i + 2] == c {
+                        current.push(c);
+                        current.push(c);
+                        current.push(c);
+                        in_str = Some(StrMode::Triple(c));
+                        i += 3;
+                        continue;
+                    }
+                    in_str = Some(StrMode::Single(c));
                     current.push(c);
                 }
                 '(' | '[' | '{' => {
@@ -551,6 +603,7 @@ fn split_top_level_commas(s: &str) -> Vec<String> {
                 _ => current.push(c),
             },
         }
+        i += 1;
     }
     let trimmed = current.trim().to_string();
     if !trimmed.is_empty() {
@@ -581,6 +634,16 @@ fn python_literal_to_json(s: &str) -> Value {
     }
     if let Ok(n) = trimmed.parse::<f64>() {
         return json!(n);
+    }
+    // Triple-quoted string literal: '''…''' or """…""". Must come
+    // before the single-quote check below or `'''x'''` is mistaken
+    // for a single-quoted `''` + `x` + `''` mess.
+    if trimmed.len() >= 6
+        && (trimmed.starts_with("'''") && trimmed.ends_with("'''")
+            || trimmed.starts_with("\"\"\"") && trimmed.ends_with("\"\"\""))
+    {
+        let inner = &trimmed[3..trimmed.len() - 3];
+        return Value::String(decode_python_string_escapes(inner));
     }
     // String literal: ' or ".
     if trimmed.len() >= 2 {
@@ -981,6 +1044,26 @@ mod tests {
         let (name, args) = try_parse_tool_code_prose(prose).expect("should parse");
         assert_eq!(name, "generate_docx");
         assert_eq!(args["body"], "hi");
+    }
+
+    #[test]
+    fn try_parse_tool_code_handles_triple_quoted_multiline_body() {
+        // Regression from the medical-anamnesis transcript: Gemini
+        // emitted a multi-line body inside `'''…'''` with leading
+        // "read_document\n" + "tool_code\n" garbage and a trailing
+        // "thought\n…" rationale. The previous parser rejected this
+        // (prefix garbage + triple-quote unhandled) and the prose
+        // landed as a literal markdown blob in the chat.
+        let prose = "read_document\ntool_code\nprint(default_api.generate_docx(body='''# Lettera di Dimissione\n\nDati Paziente\nNome: Arwen Und\u{00f3}miel\n\n## Diagnosi\nM23.2 \u{2014} Lesione complessa del menisco mediale ginocchio sinistro.\n''', metadata={'FILENAME': 'Lettera_Dimissioni.docx', 'LUOGO': 'Gran Burrone', 'DATA': '29/10/2025'}, template_id='it/lettera-dimissioni'))\nthought\nThe user asked to generate a DOCX document for the discharge letter.";
+        let (name, args) = try_parse_tool_code_prose(prose).expect("should parse");
+        assert_eq!(name, "generate_docx");
+        let body = args["body"].as_str().expect("body is string");
+        assert!(body.starts_with("# Lettera di Dimissione"));
+        assert!(body.contains("Nome: Arwen Und\u{00f3}miel"));
+        assert!(body.contains("M23.2"));
+        assert_eq!(args["template_id"], "it/lettera-dimissioni");
+        assert_eq!(args["metadata"]["FILENAME"], "Lettera_Dimissioni.docx");
+        assert_eq!(args["metadata"]["LUOGO"], "Gran Burrone");
     }
 
     #[test]

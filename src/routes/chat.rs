@@ -1408,8 +1408,8 @@ After your complete response, append a <CITATIONS> block containing a JSON array
 
 <CITATIONS>
 [
-  {"ref": "c1", "doc_id": "doc-0", "page": 3, "quote": "exact verbatim text from the document"},
-  {"ref": "c2", "doc_id": "doc-1", "page": "41-42", "quote": "Section 4.2 describes the procedure [[PAGE_BREAK]] in all material respects."}
+  {"ref": "c1", "doc_id": "doc-1", "page": 3, "quote": "exact verbatim text from the document"},
+  {"ref": "c2", "doc_id": "doc-2", "page": "41-42", "quote": "Section 4.2 describes the procedure [[PAGE_BREAK]] in all material respects."}
 ]
 </CITATIONS>
 
@@ -1417,7 +1417,7 @@ CRITICAL: "ref" MUST be the exact marker text you wrote in prose, without the br
 
 Rules:
 - Only cite text that appears verbatim in the provided documents
-- In every <CITATIONS> entry, "doc_id" MUST be the exact chat-local document label you were given (for example "doc-0"). Never use a filename, document UUID, or any other identifier in "doc_id". "doc_id" is separate from "ref": "ref" is the prose marker ("c1", "c2", ...) and "doc_id" is the document handle ("doc-0", "doc-1", ...) — they are not interchangeable
+- In every <CITATIONS> entry, "doc_id" MUST be the exact chat-local document label you were given (for example "doc-1"). Never use a filename, document UUID, or any other identifier in "doc_id". "doc_id" is separate from "ref": "ref" is the prose marker ("c1", "c2", ...) and "doc_id" is the document handle ("doc-1", "doc-2", ...) — they are not interchangeable
 - Keep quotes short (ideally <= 25 words) and narrowly scoped to the specific claim. Don't reuse one quote to support multiple different claims — give each its own citation
 - "page" refers to the sequential [Page N] marker in the text you were given (1-indexed from the first page). IGNORE any page numbers printed inside the document itself (footers, roman numerals, etc.)
 - For a single-page quote, set "page" to an integer. If a quote is one continuous sentence that spans two pages, set "page" to "N-M" and insert [[PAGE_BREAK]] in the quote at the page break. Otherwise, use separate citations for text on different pages
@@ -1508,6 +1508,12 @@ fn build_doc_system_prompt(docs: &[DocPayload]) -> String {
     if with_text.is_empty() && with_imgs.is_empty() { return String::new(); }
 
     // Use Mike's chat-local doc-N labels so the citation system works.
+    // Labels are 1-indexed (`doc-1`, `doc-2`, …) — the previous 0-indexed
+    // scheme produced an off-by-one bug when filename numbering was
+    // 1-based (e.g. CARTELLA_TEST_001..010): the model would refer to
+    // "the 10th doc" as `doc-10` instead of `doc-9` and `read_document`
+    // returned "not found". 1-indexed labels match human counting and
+    // typical filename conventions.
     let mut s = String::from(
         "The user has attached the following documents. Use them to answer the question. \
          Cite the document name when relevant. The 'doc-N' label is for use in <CITATIONS> JSON only — \
@@ -1516,7 +1522,7 @@ fn build_doc_system_prompt(docs: &[DocPayload]) -> String {
     for (idx, d) in with_text.iter().enumerate() {
         s.push_str(&format!(
             "=== {label} (filename: {fname}) ===\n{body}\n\n",
-            label = format!("doc-{idx}"),
+            label = format!("doc-{}", idx + 1),
             fname = d.filename,
             body = d.text.as_deref().unwrap_or("")
         ));
@@ -1525,7 +1531,7 @@ fn build_doc_system_prompt(docs: &[DocPayload]) -> String {
     for (i, d) in with_imgs.iter().enumerate() {
         s.push_str(&format!(
             "=== {label} (filename: {fname}, rendered as {n} page image(s) attached below) ===\n\n",
-            label = format!("doc-{}", img_offset + i),
+            label = format!("doc-{}", img_offset + i + 1),
             fname = d.filename,
             n = d.images.len()
         ));
@@ -2976,16 +2982,18 @@ async fn stream_chat_root(
             }
         }
 
-        // Map chat-local labels (`doc-0`, `doc-1`, …) to real document UUIDs so
+        // Map chat-local labels (`doc-1`, `doc-2`, …) to real document UUIDs so
         // builtin tools (read_document, find_in_document) can resolve them.
+        // 1-indexed (see build_doc_system_prompt above for the off-by-one
+        // story that motivated the switch).
         let mut doc_label_map: HashMap<String, String> = HashMap::new();
         for (idx, doc_id) in doc_ids.iter().enumerate() {
-            doc_label_map.insert(format!("doc-{idx}"), doc_id.clone());
+            doc_label_map.insert(format!("doc-{}", idx + 1), doc_id.clone());
         }
         // Project documents continue the label sequence after the inline
         // attachments so read_document / find_in_document resolve them too.
         for (i, (id, _)) in project_documents.iter().enumerate() {
-            doc_label_map.insert(format!("doc-{}", doc_ids.len() + i), id.clone());
+            doc_label_map.insert(format!("doc-{}", doc_ids.len() + i + 1), id.clone());
         }
 
         tracing::info!(
