@@ -3011,7 +3011,16 @@ async fn stream_chat_root(
         // source path + chunk index.
         let kb_chunks_for_citations = kb_chunks.clone();
 
-        const MAX_TOOL_ITERATIONS: u32 = 5;
+        // Bumped from 5 in v0.3.2 after a user hit the cap on a
+        // medical-anamnesis workflow with 10 attached PDFs: the model
+        // legitimately needs to `read_document` (or `find_in_document`)
+        // several times to compile a multi-source summary, and each
+        // tool call burns one iteration. 5 was an early-debug ceiling
+        // tuned against single-doc reviews; 20 covers ten-doc-anamnesis
+        // / due-diligence-document-pack flows while still bounding a
+        // truly stuck loop (per-iteration cost is one LLM round-trip,
+        // so 20 caps a runaway at ~20× the per-turn latency budget).
+        const MAX_TOOL_ITERATIONS: u32 = 20;
         // How many times to nudge the model when it ends a turn with a
         // completely empty answer (no text, no tool call) — a flaky
         // behaviour seen mostly with Gemini right after a tool result.

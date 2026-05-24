@@ -65,6 +65,7 @@
   import { modelsStore } from '$lib/stores/models.svelte'
   import { toastStore } from '$lib/stores/toast.svelte'
   import { i18n } from '$lib/stores/i18n.svelte'
+  import { api } from '$lib/api/client'
 
   let form = $state<LlmForm>(toForm({}))
   let initialized = $state(false)
@@ -136,12 +137,24 @@
     localModelsLoading = true
 
     try {
-      const headers: Record<string, string> = {}
-      const key = form.local_api_key.trim()
-      if (key) headers.Authorization = `Bearer ${key}`
-      const res = await fetch(`${base}/models`, { headers })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const payload = (await res.json()) as { data?: Array<{ id?: string }> }
+      // Route the model-list probe through MikeRust's own backend
+      // instead of `fetch` against the Ollama / llama-server URL
+      // directly. The WebView origin is `http://tauri.localhost`, and
+      // external OpenAI-compatible runtimes rarely advertise that
+      // origin in their `Access-Control-Allow-Origin` header, so the
+      // browser used to block the probe with the CORS message users
+      // reported. The backend proxy at `/models/local/probe` does the
+      // server-to-server fetch (no Origin involved) and returns the
+      // same payload shape Ollama / lm-studio / vLLM produce.
+      const payload = await api<{ data?: Array<{ id?: string }> }>(
+        '/models/local/probe',
+        {
+          query: {
+            base,
+            api_key: form.local_api_key.trim() || undefined,
+          },
+        },
+      )
       const ids = (payload.data ?? [])
         .map((x) => (x.id ?? '').trim())
         .filter((x) => x.length > 0)

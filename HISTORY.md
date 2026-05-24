@@ -13,6 +13,69 @@ diff. For the upstream-sync audit trail (which fixes were ported from
 
 ---
 
+## v0.3.2 — 2026-05-24
+
+Three independent fixes batched into one release.
+
+### Fixed — chat stops with "too many tool iterations" on multi-doc workflows
+
+Symptom (Gemini 2.5 Flash, medical anamnesis workflow with 10 attached
+PDFs): the model called `read_document` on a couple of files and then
+the turn aborted with "stopped: too many tool iterations". The
+`MAX_TOOL_ITERATIONS` cap in `src/routes/chat.rs` was 5 — a holdover
+from early single-doc debug runs. A legitimate due-diligence /
+medical-anamnesis flow needs to read 5–15 source documents before
+composing the answer; the cap fired well before the model finished.
+
+- `MAX_TOOL_ITERATIONS` bumped from `5` to `20`. Per-iteration cost is
+  one LLM round-trip, so 20 bounds a runaway loop at ~20× the per-turn
+  latency budget while comfortably covering ten-doc anamnesis flows.
+
+### Fixed — Settings → "Modelli LLM" probe CORS-blocked
+
+Symptom (`mike-tauri.log` + browser console):
+
+```
+Access to fetch at 'http://192.168.196.100:11434/v1/models'
+  from origin 'http://tauri.localhost'
+  has been blocked by CORS policy
+```
+
+The Settings page used to issue `fetch(${base}/models)` directly from
+the WebView origin `http://tauri.localhost`. External Ollama / llama-
+server / vLLM instances rarely advertise that origin in their
+`Access-Control-Allow-Origin` header, so the browser blocked every
+probe and the model dropdown stayed empty.
+
+- New backend endpoint `GET /models/local/probe?base=…&api_key=…` does
+  the server-to-server fetch (no Origin header involved, no CORS) and
+  returns the upstream payload verbatim. Typed error responses
+  (`upstream_status`, `error`) replace the opaque "Failed to fetch".
+- `ModelsSection.svelte`'s `refreshLocalRuntimeModels` now calls the
+  backend proxy instead of fetching the runtime directly.
+- The chat path was never affected — chat-time LLM calls already go
+  through the Rust `reqwest` client.
+
+### Fixed — biometric unlock dialog used a hand-drawn fingerprint
+
+The Windows Hello / Touch ID overlay (`BiometricPrompt.svelte`) drew
+its fingerprint via seven inline SVG paths. The result looked off-
+centre and hairline-thin against the brand-500 background and didn't
+match the rest of the UI's lucide-svelte icon family.
+
+- Swapped the inline SVG for `<Fingerprint size={40}
+  class="text-(--color-brand-500)" />` from `lucide-svelte` (same
+  package used by every other icon in the app). The `currentColor`
+  inheritance preserves the brand-tint behaviour, so no styling
+  change at the call site.
+
+### Installer artefacts
+
+- `dist/MikeRust_0.3.2_x64.msi` — Windows x86_64
+- `dist/MikeRust_0.3.2_arm64.msi` — Windows ARM64
+
+---
+
 ## v0.3.1 — 2026-05-24 (installed-MSI ships config registries)
 
 ### Fixed — empty workflow / column / docx-template picker on installed MSI
