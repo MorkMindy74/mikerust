@@ -13,6 +13,44 @@ diff. For the upstream-sync audit trail (which fixes were ported from
 
 ---
 
+## v0.3.3 — 2026-05-24 (generate_docx — strip chat-citation markers)
+
+### Fixed — exported .docx peppered with unresolvable `[c104]` pills
+
+User report on the medical-anamnesis workflow: the produced .docx
+contained inline citation markers like `[c95]`, `[c104]`, `[c168,
+c169]` mixed into the prose. In the chat UI those are clickable
+pills that jump to the source document; in a Word document opened
+on a different machine they are unresolvable noise — the reader
+sees `[c104]` and has no legend to map it back to a filename. The
+model already lists source filenames in an "Allegati" / appendix
+section the user is happy with; the inline markers were dead weight.
+
+- New private helper inside `src/llm/builtin_tools.rs` strips
+  `[c|g|p N]` and `[c|g|p N, c|g|p M, …]` patterns from the `body`
+  before it reaches the docx renderer (template-driven branch *and*
+  the legacy plain-markdown branch). Two follow-up sweeps clean up
+  the artefacts a removed marker leaves behind: " ." → "." and
+  "word  word" → "word word". Paragraph breaks (`\n`) are
+  preserved intact.
+- Compiled once via `LazyLock<Regex>` so the strip is amortised
+  across all `generate_docx` calls in a process lifetime.
+- The chat-UI flow is untouched: `[cN]` pills still render
+  perfectly inside the assistant message, with their clickable
+  doc-viewer jump behaviour. The strip only fires when the body is
+  about to be baked into a binary docx that will likely outlive
+  the chat session.
+
+### Followups for a future release
+- README update isn't needed (internal change). HISTORY entry +
+  this note is the user-facing documentation.
+
+### Installer artefacts
+- Not built in this commit — accumulated for the next release the
+  user decides to ship.
+
+---
+
 ## v0.3.2 — 2026-05-24
 
 Three independent fixes batched into one release.

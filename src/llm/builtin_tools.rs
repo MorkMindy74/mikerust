@@ -16,8 +16,28 @@
 
 use crate::llm::types::{ToolFunction, ToolSchema};
 use crate::AppState;
+use regex::Regex;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::sync::LazyLock;
+
+// `[c12]` / `[g3]` / `[p4]` plus comma-grouped variants like
+// `[c1, c2, c3]`. Compiled once at first call site via `LazyLock`
+// — the same instance is reused across every `generate_docx` call.
+// `\b` would over-match because the marker is bracket-delimited; we
+// rely on the literal `[` and `]` for anchoring.
+static CITATION_MARKER_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\[(?:[cgp]\d+)(?:\s*,\s*[cgp]\d+)*\]").expect("citation marker regex compiles")
+});
+// "word ." → "word." after a marker drops, including ".,;:?!).
+static SPACE_BEFORE_PUNCT_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r" +([.,;:?!\)\]])").expect("space-before-punct regex compiles")
+});
+// Collapse "word  word" → "word word" left by an inline marker drop.
+// We deliberately don't touch `\n` runs — paragraph structure must
+// survive intact.
+static DOUBLE_SPACE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"  +").expect("double-space regex compiles"));
 
 const READ_DOCUMENT: &str = "read_document";
 const FIND_IN_DOCUMENT: &str = "find_in_document";
@@ -491,11 +511,37 @@ async fn exec_generate_docx(
     // to suggest in the prompt by mistake) or no body field at all.
     // Accept either name and fall back gracefully so a small naming
     // slip doesn't cost a retry.
-    let body = arguments
+    let raw_body = arguments
         .get("body")
         .and_then(|v| v.as_str())
         .or_else(|| arguments.get("body_md").and_then(|v| v.as_str()))
         .unwrap_or("");
+
+    // Strip `[c1]`, `[g2]`, `[p3]` and grouped variants like
+    // `[c1, c2, c3]` from the body before handing it to the docx
+    // renderer. Those markers are the chat-UI citation pills the model
+    // emits in every answer — useful inline when the reader can click
+    // to open the source doc, meaningless when the .docx is exported
+    // and read in Word (a reader stuck with `[c104]` has no legend to
+    // resolve it). The model's Allegati / Appendix section, which
+    // lists the source filenames, remains the canonical traceability
+    // for the exported document.
+    let body_owned: String;
+    let body: &str = {
+        let cleaned = CITATION_MARKER_RE.replace_all(raw_body, "");
+        // Collapse the double spaces / "space-before-punct" artefacts
+        // a removed marker leaves behind (e.g. "…coniuge [c95]." →
+        // "…coniuge ." → "…coniuge.").
+        let s = SPACE_BEFORE_PUNCT_RE.replace_all(&cleaned, "$1");
+        let s = DOUBLE_SPACE_RE.replace_all(&s, " ");
+        if s == raw_body {
+            raw_body
+        } else {
+            body_owned = s.into_owned();
+            &body_owned
+        }
+    };
+
     if body.is_empty() {
         // Self-correcting error: tell the model EXACTLY what's wrong,
         // the right argument shape, and the next step. The agent loop's

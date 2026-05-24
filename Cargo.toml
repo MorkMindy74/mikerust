@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "mike"
-version = "0.3.2"
+version = "0.3.3"
 edition = "2024"
 description = "Mike local — sovereign AI document assistant"
 
@@ -91,6 +91,13 @@ zerocopy = { version = "0.7", optional = true, features = ["derive"] }
 # tree, with `.gitignore`/`.mikesyncignore` honored.
 walkdir = { version = "2", optional = true }
 ignore  = { version = "0.4", optional = true }
+# Citation-marker stripper for `generate_docx`. The model emits `[c1]`
+# / `[g3]` / `[p2, p3]` citation pills that are useful in the chat UI
+# (clickable doc-viewer jump-links) but meaningless once the .docx is
+# exported and read in Word; we strip them server-side before render.
+# Already in the lock file via transitive use; the explicit dep is
+# just to make `use regex::Regex` available in the crate root.
+regex = "1"
 
 # ------------------------------------------------------------------
 # Named-entity recognition / PII detection — GLiNER2 via gliner2-rs.
