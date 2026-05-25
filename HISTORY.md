@@ -17,7 +17,50 @@ diff. For the upstream-sync audit trail (which fixes were ported from
 
 First minor bump since 0.4.0. Two RAG-layer changes that together raise the
 ceiling of what the chat-time retrieval can find without changing the
-on-disk vector index or the embedding model.
+on-disk vector index or the embedding model, plus a security pass on the
+dependency graph and a citation-resolution fix for chats with many
+attachments.
+
+### Security pass
+
+- **vite ≥ 6.4.2 / vitest 4.x** — closes GHSA-67mh-4wv8-2f99 (esbuild
+  dev-server SSRF) and GHSA-4w7w-66w2-5vf9 (vite optimized-deps path
+  traversal). `pnpm audit` clears both moderate advisories.
+- **`cargo update`** — bumped 73 transitive crates to latest compatible
+  versions. `ort 2.0-rc.9` and `fastembed 4.9.1` were pinned with `=`
+  exact-version specs and were not moved (the e5-base / onnxruntime
+  1.20.0 ABI match still holds — touching either would re-trigger the
+  silent `try_new` deadlock documented in v0.3.x).
+- **sqlx `default-features = false`** — explicit feature list
+  (`["runtime-tokio", "sqlite", "migrate", "uuid", "chrono", "macros",
+  "json", "tls-rustls-aws-lc-rs"]`). Drops the implicit `any` driver
+  bundle that pulled `sqlx-mysql` + `sqlx-postgres` into the resolution
+  graph for no runtime use.
+- **xlsx 0.18.5 retained intentionally.** A swap to ExcelJS was tried
+  (commit `2962f1c`) but lost in-app preview for `.xls` / `.xlsb` /
+  `.ods` formats — reverted (`a204647`). The two `xlsx` CVEs (Prototype
+  Pollution + ReDoS) are accepted as known issues; they're triggered
+  only by malicious file content, and the doc-viewer's only input is
+  a file the user has explicitly uploaded.
+- Residual cargo-audit findings (rsa via sqlx-macros-core, 3×
+  rustls-webpki via aws-* under the OFF-by-default `s3-storage`
+  feature) are **not reachable in the shipped MSI** — both code paths
+  are either build-time-only (sqlx-macros expansion of cross-backend
+  query analyzers) or gated behind a feature flag that the default
+  build doesn't enable.
+
+### Citation resolver — filename fallback (chat with many attachments)
+
+When >5 PDFs are attached to a chat, the LLM occasionally lifts the
+filename straight from the inventory block in the system prompt and
+emits it as the citation's `doc_id` instead of the canonical `doc-N`
+handle. Both citation paths in [`src/routes/chat.rs`](src/routes/chat.rs)
+now fall back to a reverse `filename → UUID` lookup over the chat's
+attached docs before giving up — so the viewer no longer 404s on
+`GET /document/<filename>/display`, and the inline `[doc-id: filename,
+page N]` shape produces the right `[cN]` marker. Pre-existing bug,
+not introduced by v0.5.0 — just easier to trip when more files share
+one chat.
 
 ### HyDE — Hypothetical Document Embeddings (opt-in)
 

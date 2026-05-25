@@ -3805,11 +3805,23 @@ async fn stream_chat_root(
                         }
                     }
                 }
+                // Reverse map filename → UUID so an inline
+                // `[doc-id: CARTELLA_TEST_010.pdf, page 3]` (the
+                // model lifted a filename from the inventory rather
+                // than the canonical `doc-N` handle) still resolves
+                // to the right document instead of producing a dead
+                // citation marker. Mirrors the same fallback applied
+                // in the trailing-CITATIONS-block resolver below.
+                let filename_to_uuid: HashMap<String, String> = filename_by_uuid
+                    .iter()
+                    .map(|(uuid, fname)| (fname.clone(), uuid.clone()))
+                    .collect();
                 let mut handle_to_doc: HashMap<String, (String, String)> = HashMap::new();
                 for h in &handles {
                     let real_uuid = doc_label_map
                         .get(h)
                         .cloned()
+                        .or_else(|| filename_to_uuid.get(h).cloned())
                         .unwrap_or_else(|| h.clone());
                     if let Some(filename) = filename_by_uuid.get(&real_uuid) {
                         handle_to_doc.insert(
