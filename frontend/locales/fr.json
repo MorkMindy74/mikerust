@@ -1257,6 +1257,8 @@
     "empty": "Aucun document n'a encore été joint ou généré dans cette discussion.",
     "hydrating": "Chargement de l'état de décision…",
     "originUploaded": "Téléversé",
-    "originGenerated": "Généré"
+    "originGenerated": "Généré",
+    "originProject": "Projet",
+    "originReferenced": "Cité"
   }
 }

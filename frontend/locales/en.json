@@ -1257,6 +1257,8 @@
     "empty": "No documents have been attached to or generated in this chat yet.",
     "hydrating": "Loading decision state…",
     "originUploaded": "Uploaded",
-    "originGenerated": "Generated"
+    "originGenerated": "Generated",
+    "originProject": "Project",
+    "originReferenced": "Cited"
   }
 }

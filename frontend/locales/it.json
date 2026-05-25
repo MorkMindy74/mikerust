@@ -1257,6 +1257,8 @@
     "empty": "Nessun documento è ancora stato caricato o generato in questa chat.",
     "hydrating": "Caricamento stato decisione…",
     "originUploaded": "Caricato",
-    "originGenerated": "Generato"
+    "originGenerated": "Generato",
+    "originProject": "Progetto",
+    "originReferenced": "Citato"
   }
 }

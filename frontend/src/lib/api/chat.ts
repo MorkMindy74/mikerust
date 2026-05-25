@@ -28,10 +28,16 @@ export const chatApi = {
       }[]
     }>(`/chat/${encodeURIComponent(id)}/messages`),
 
-  /** Every document linked to a chat — uploaded attachments plus
-   *  tool-generated docs. Returns the current decision state per
-   *  document so the chat-files popover can paint rejected rows
-   *  without an N+1 fan-out. */
+  /** Every document a chat has interacted with, across five
+   *  categories the chat archive is expected to retain:
+   *  - origin='uploaded'    — composer attachment
+   *  - origin='generated'   — tool output (e.g. generate_docx)
+   *  - origin='project'     — inherited from the chat's project
+   *  - origin='referenced'  — KB / corpora doc cited by the assistant
+   *  Rejected docs surface in their original origin with
+   *  decision='rejected'; the row is preserved across re-accept so the
+   *  audit trail is intact. Server-side precedence: chat-linked
+   *  (uploaded/generated) > project > referenced. */
   documents: (id: string) =>
     api<{
       documents: {
@@ -41,6 +47,7 @@ export const chatApi = {
         decision: 'accepted' | 'rejected'
         decision_reason: string | null
         decision_summary: string | null
+        origin: 'uploaded' | 'generated' | 'project' | 'referenced'
       }[]
     }>(`/chat/${encodeURIComponent(id)}/documents`),
 

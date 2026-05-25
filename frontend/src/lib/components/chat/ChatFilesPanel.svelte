@@ -9,17 +9,12 @@
   to a document they vetoed. Click a row to open it in the existing
   doc-viewer side panel (same as the ChatSteps doc card).
 
-  Source of truth: `GET /chat/:id/documents`. Both the composer upload
-  flow and the `generate_docx` tool set `documents.chat_id`, so a single
-  backend query enumerates everything the chat has ever touched, with
-  decision state in the same row (no N+1). Walking the in-memory
-  `chatStore.messages` array is not enough — `messages.files` is not
-  echoed back by GET /chat/:id/messages, so uploads disappear on chat
-  reload.
-
-  The "uploaded vs generated" distinction is still derived locally by
-  intersecting docIds with assistant `steps` of kind 'doc' (the rehydrated
-  doc_created events). Anything not in that set is treated as uploaded.
+  Source of truth: `GET /chat/:id/documents`. The backend enumerates
+  every doc the chat has touched across five categories — uploaded
+  attachments, tool-generated docs, rejected docs (origin preserved),
+  project-inherited docs and KB/corpora docs cited by the assistant —
+  and returns the origin tag + decision state on each row so the
+  popover paints without a per-doc fan-out.
 -->
 <script lang="ts">
   import { docViewer } from '$lib/stores/doc-viewer.svelte'
@@ -37,7 +32,7 @@
 
   let { open = $bindable(false), onclose }: Props = $props()
 
-  type Origin = 'uploaded' | 'generated'
+  type Origin = 'uploaded' | 'generated' | 'project' | 'referenced'
   type Decision = 'accepted' | 'rejected'
 
   interface Row {
@@ -50,24 +45,11 @@
   let rows = $state<Row[]>([])
   let loading = $state(false)
 
-  /** docIds known to be tool-generated (assistant doc_created steps).
-   *  Anything else returned by the backend chat-documents endpoint is
-   *  classified as an uploaded attachment. */
-  function generatedDocIds(): Set<string> {
-    const out = new Set<string>()
-    for (const m of chatStore.messages) {
-      if (m.role !== 'assistant' || !m.steps) continue
-      for (const s of m.steps) {
-        if (s.kind === 'doc' && s.documentId) out.add(s.documentId)
-      }
-    }
-    return out
-  }
-
-  // Re-fetch the chat's documents every time the panel opens. Both
-  // the set (a new generate or upload) and the decision state (a fresh
-  // reject) can change between opens, and the call is a single SQL
-  // SELECT on the backend — cheap enough to re-run without caching.
+  // Re-fetch the chat's documents every time the panel opens. The set
+  // (new generate / upload / project doc), the citations referenced
+  // (new turn cites a different KB doc) and the decision state can all
+  // change between opens, and the backend bundles everything in one
+  // SELECT — cheap enough to re-run without caching.
   $effect(() => {
     if (!open) return
     const chatId = chatStore.activeId
@@ -77,7 +59,6 @@
       return
     }
     loading = true
-    const generated = generatedDocIds()
     chatApi
       .documents(chatId)
       .then((res) => {
@@ -85,7 +66,7 @@
         rows = res.documents.map((d) => ({
           docId: d.id,
           filename: d.filename,
-          origin: generated.has(d.id) ? 'generated' : 'uploaded',
+          origin: d.origin,
           decision: d.decision,
         }))
       })
@@ -108,9 +89,33 @@
   }
 
   function originLabel(o: Origin): string {
-    return o === 'uploaded'
-      ? i18n.t('ChatFiles.originUploaded')
-      : i18n.t('ChatFiles.originGenerated')
+    switch (o) {
+      case 'uploaded':
+        return i18n.t('ChatFiles.originUploaded')
+      case 'generated':
+        return i18n.t('ChatFiles.originGenerated')
+      case 'project':
+        return i18n.t('ChatFiles.originProject')
+      case 'referenced':
+        return i18n.t('ChatFiles.originReferenced')
+    }
+  }
+
+  /** Tag chip palette per origin. Generated keeps the brand accent it
+   *  had in v0.4.3; uploaded stays neutral; project gets a calm
+   *  secondary tint; referenced uses the info colour so cited KB docs
+   *  feel distinct from owned uploads. */
+  function originChip(o: Origin): string {
+    switch (o) {
+      case 'generated':
+        return 'bg-(--color-brand-50) text-(--color-brand-700)'
+      case 'project':
+        return 'bg-(--color-success-50) text-(--color-success-700)'
+      case 'referenced':
+        return 'bg-(--color-info-50) text-(--color-info-700)'
+      default:
+        return 'bg-(--color-surface-100) text-(--color-text-secondary)'
+    }
   }
 </script>
 
@@ -174,10 +179,9 @@
                   {r.filename}
                 </span>
                 <span
-                  class="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded-(--radius-sm)
-                         {r.origin === 'generated'
-                           ? 'bg-(--color-brand-50) text-(--color-brand-700)'
-                           : 'bg-(--color-surface-100) text-(--color-text-secondary)'}"
+                  class="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded-(--radius-sm) {originChip(
+                    r.origin,
+                  )}"
                 >
                   {originLabel(r.origin)}
                 </span>

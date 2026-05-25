@@ -1257,6 +1257,8 @@
     "empty": "Ainda não foi anexado nem gerado nenhum documento nesta conversa.",
     "hydrating": "A carregar estado de decisão…",
     "originUploaded": "Carregado",
-    "originGenerated": "Gerado"
+    "originGenerated": "Gerado",
+    "originProject": "Projeto",
+    "originReferenced": "Citado"
   }
 }

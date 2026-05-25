@@ -4817,48 +4817,112 @@ async fn get_messages(
 // ---------------------------------------------------------------------------
 // GET /chat/:id/documents
 // ---------------------------------------------------------------------------
-/// Enumerate every document linked to this chat — uploads the user
-/// attached through the composer plus docs synthesised by tools
-/// (today: `generate_docx`). Both flows set `documents.chat_id` at
-/// creation time (migration 0013), so a single query against that
-/// column is the source of truth.
+/// Enumerate **every** document a chat has interacted with, across five
+/// categories the chat archive is expected to retain (per the explicit
+/// "chat must persist its full document list" requirement):
 ///
-/// The chat-files popover in the composer footer (v0.4.3+) relies on
-/// this endpoint instead of walking the in-memory `messages` array,
-/// because `messages.files` is not echoed back by GET /chat/:id/messages
-/// — so on a fresh chat select the frontend would otherwise lose every
-/// upload reference and only see the persisted `doc_created` events
-/// (generated docs).
+/// 1. **Uploaded** — composer attachments. `documents.chat_id = ?` AND
+///    `content_hash IS NOT NULL` (cache-keyed uploads always have a hash).
+/// 2. **Generated** — `generate_docx` outputs. `chat_id = ?` AND
+///    `content_hash IS NULL` (generated docs are not hash-deduped).
+/// 3. **Rejected** — not a separate origin; it's any (1)/(2) row with
+///    `decision='rejected'`. Stored on the same row so re-accept restores
+///    the original document without re-uploading.
+/// 4. **Referenced** — KB / corpora documents cited by the assistant.
+///    Live in `documents` with `chat_id IS NULL` and a `corpus_id`; the
+///    link to the chat is the doc-id buried in `messages.annotations`
+///    (citation JSON). We parse those JSON blobs and look the IDs up.
+/// 5. **Project** — when the chat is in a project (`chats.project_id IS
+///    NOT NULL`), every doc with `documents.project_id = chats.project_id`
+///    is reachable as context regardless of whether a specific message
+///    pulled it in.
 ///
-/// Decision columns ride along so the UI can paint the strikethrough +
-/// `Rifiutato` badge on rejected rows without a per-doc round-trip.
+/// Origin precedence on overlap: chat_id (uploaded/generated) > project >
+/// referenced. A doc that was both uploaded AND cited stays "uploaded";
+/// a project doc that was also cited stays "project". This favours the
+/// most permanent / direct relationship so the UI label matches the
+/// user's mental model.
+///
+/// Decision columns ride along on every row so the popover can paint
+/// strikethrough + `Rifiutato` badge without an N+1 fan-out across
+/// `GET /document/:id`.
 async fn get_chat_documents(
     State(state): State<Arc<AppState>>,
     auth: AuthUser,
     Path(id): Path<String>,
 ) -> ApiResult {
-    // Ownership check up-front so a forged chat id doesn't leak other
-    // users' rows even when the JOIN would have come up empty anyway.
-    let owned: Option<(String,)> =
-        sqlx::query_as("SELECT id FROM chats WHERE id = ? AND user_id = ?")
-            .bind(&id)
-            .bind(&auth.user_id)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
-    if owned.is_none() {
+    // Ownership check + grab the chat's project_id in one round-trip so a
+    // project-scoped chat can pull in inherited docs (category 5).
+    let chat_row: Option<(String, Option<String>)> = sqlx::query_as(
+        "SELECT id, project_id FROM chats WHERE id = ? AND user_id = ?",
+    )
+    .bind(&id)
+    .bind(&auth.user_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    let Some((_, project_id)) = chat_row else {
         return Err(err(StatusCode::NOT_FOUND, "chat not found"));
+    };
+
+    // Walk every assistant message's persisted annotations JSON and
+    // collect any `document_id` that points outside the chat's own docs.
+    // These are the KB / corpus citations the user saw rendered as
+    // `[gN]` / `[pN]` pills — the chat must remember them even though
+    // they live elsewhere in the table.
+    let annot_rows: Vec<(Option<String>,)> = sqlx::query_as(
+        "SELECT annotations FROM messages \
+         WHERE chat_id = ? AND role = 'assistant' AND annotations IS NOT NULL",
+    )
+    .bind(&id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    let mut referenced_ids: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    for (raw,) in annot_rows {
+        let Some(json_str) = raw else { continue };
+        let Ok(val) = serde_json::from_str::<Value>(&json_str) else {
+            continue;
+        };
+        // Annotations are persisted either as a bare array or an object
+        // with a `citations` array — match `enrich_doc_citations` above.
+        let cits = if val.is_array() {
+            val.as_array().cloned().unwrap_or_default()
+        } else {
+            val.get("citations")
+                .and_then(|v| v.as_array().cloned())
+                .unwrap_or_default()
+        };
+        for c in cits {
+            if let Some(doc_id) = c.get("document_id").and_then(|v| v.as_str()) {
+                if !doc_id.is_empty() {
+                    referenced_ids.insert(doc_id.to_string());
+                }
+            }
+        }
     }
 
-    let rows: Vec<(
+    // Insertion-ordered accumulator: chat_id rows first (creation order),
+    // then project, then referenced. Skips any duplicate id so the
+    // precedence rule above is enforced by first-write-wins.
+    let mut out: Vec<Value> = Vec::new();
+    let mut seen: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+
+    // (1) + (2) + (3) — chat-linked rows. `content_hash` discriminates
+    // uploaded (Some) from generated (None); decision is on the same row.
+    let chat_rows: Vec<(
         String,         // id
         String,         // filename
         String,         // file_type
-        String,         // decision ('accepted' | 'rejected')
+        String,         // decision
         Option<String>, // decision_reason
         Option<String>, // decision_summary
+        Option<String>, // content_hash
     )> = sqlx::query_as(
-        "SELECT id, filename, file_type, decision, decision_reason, decision_summary \
+        "SELECT id, filename, file_type, decision, decision_reason, decision_summary, content_hash \
          FROM documents \
          WHERE chat_id = ? AND user_id = ? \
          ORDER BY created_at ASC",
@@ -4869,23 +4933,116 @@ async fn get_chat_documents(
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
-    let documents: Vec<Value> = rows
-        .into_iter()
-        .map(
-            |(doc_id, filename, file_type, decision, decision_reason, decision_summary)| {
-                json!({
-                    "id": doc_id,
-                    "filename": filename,
-                    "file_type": file_type,
-                    "decision": decision,
-                    "decision_reason": decision_reason,
-                    "decision_summary": decision_summary,
-                })
-            },
-        )
-        .collect();
+    for (doc_id, filename, file_type, decision, reason, summary, content_hash) in chat_rows {
+        let origin = if content_hash.is_some() { "uploaded" } else { "generated" };
+        seen.insert(doc_id.clone());
+        out.push(json!({
+            "id": doc_id,
+            "filename": filename,
+            "file_type": file_type,
+            "decision": decision,
+            "decision_reason": reason,
+            "decision_summary": summary,
+            "origin": origin,
+        }));
+    }
 
-    Ok(Json(json!({ "documents": documents })))
+    // (5) — project-inherited. Only when the chat lives in a project.
+    if let Some(pid) = project_id.as_deref() {
+        let proj_rows: Vec<(
+            String,
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+        )> = sqlx::query_as(
+            "SELECT id, filename, file_type, decision, decision_reason, decision_summary \
+             FROM documents \
+             WHERE project_id = ? AND user_id = ? \
+             ORDER BY created_at ASC",
+        )
+        .bind(pid)
+        .bind(&auth.user_id)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+        for (doc_id, filename, file_type, decision, reason, summary) in proj_rows {
+            if seen.contains(&doc_id) {
+                continue; // already in as uploaded/generated
+            }
+            seen.insert(doc_id.clone());
+            out.push(json!({
+                "id": doc_id,
+                "filename": filename,
+                "file_type": file_type,
+                "decision": decision,
+                "decision_reason": reason,
+                "decision_summary": summary,
+                "origin": "project",
+            }));
+        }
+    }
+
+    // (4) — KB / corpora references gleaned from annotations. We bind
+    // each id individually because sqlx::query_as doesn't expand a Vec
+    // into placeholders, and SQLite's IN-list size is fine for any
+    // realistic chat (chats with >999 distinct citations don't exist).
+    let unseen_refs: Vec<String> = referenced_ids
+        .into_iter()
+        .filter(|i| !seen.contains(i))
+        .collect();
+    if !unseen_refs.is_empty() {
+        let placeholders = unseen_refs.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT id, filename, file_type, decision, decision_reason, decision_summary \
+             FROM documents \
+             WHERE user_id = ? AND id IN ({placeholders})",
+        );
+        let mut q = sqlx::query_as::<_, (
+            String,
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+        )>(&sql)
+        .bind(&auth.user_id);
+        for rid in &unseen_refs {
+            q = q.bind(rid);
+        }
+        let ref_rows = q
+            .fetch_all(&state.db)
+            .await
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+        for (doc_id, filename, file_type, decision, reason, summary) in ref_rows {
+            seen.insert(doc_id.clone());
+            out.push(json!({
+                "id": doc_id,
+                "filename": filename,
+                "file_type": file_type,
+                "decision": decision,
+                "decision_reason": reason,
+                "decision_summary": summary,
+                "origin": "referenced",
+            }));
+        }
+    }
+
+    tracing::info!(
+        "[chat] GET /chat/{}/documents: {} rows ({} chat-linked, project={}, refs={})",
+        id,
+        out.len(),
+        seen.len(),
+        project_id.is_some(),
+        out.iter()
+            .filter(|d| d.get("origin").and_then(|v| v.as_str()) == Some("referenced"))
+            .count(),
+    );
+
+    Ok(Json(json!({ "documents": out })))
 }
 
 // ---------------------------------------------------------------------------

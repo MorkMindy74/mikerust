@@ -13,6 +13,46 @@ diff. For the upstream-sync audit trail (which fixes were ported from
 
 ---
 
+## v0.4.5 — 2026-05-25 (chat-files popover — all five doc categories)
+
+Closes the chat-document audit. The popover now enumerates **every**
+document the chat has ever interacted with, not just the
+chat-linked ones — matching the explicit "the chat archive must
+retain its full document list" requirement:
+
+1. **Uploaded** — composer attachments (`chat_id = ?` AND `content_hash IS NOT NULL`)
+2. **Generated** — tool outputs like `generate_docx` (`chat_id = ?` AND `content_hash IS NULL`)
+3. **Rejected** — preserved on the original row with `decision='rejected'`; surfaces with the original origin tag plus the existing strikethrough + red badge
+4. **Project** — inherited from `chats.project_id` → `documents.project_id = ?`
+5. **Referenced** — KB/corpora documents cited by the assistant, extracted from each assistant message's `annotations` JSON (`document_id` field) and looked up against `documents`
+
+Backend precedence on doc-id overlap: chat-linked > project > referenced. A doc that's both uploaded AND cited stays "uploaded" so the most direct relationship wins.
+
+### UI additions
+
+New origin chips in [`ChatFilesPanel.svelte`](frontend/src/lib/components/chat/ChatFilesPanel.svelte):
+
+- `Caricato` — neutral surface
+- `Generato` — brand-50 tint
+- `Progetto` — success-50 tint (calm green)
+- `Citato` — info-50 tint (subtle blue)
+
+Two new i18n keys (`ChatFiles.originProject`, `ChatFiles.originReferenced`) — all six locale bundles now carry 1132 keys.
+
+### Backend
+
+[`get_chat_documents`](src/routes/chat.rs) rewritten to:
+- Fetch chat row + `project_id` in one round-trip
+- Walk every assistant message's annotations JSON to collect cited document IDs
+- UNION-style accumulation with insertion-ordered dedup (precedence enforced by first-write-wins)
+- Single tracing log line summarising how many rows came from each branch
+
+### Limitation noted
+
+KB documents that exist only in `corpus_documents` (not mirrored into `documents` with a `corpus_id`) are not enumerable yet — those need a separate JOIN against `corpus_documents` once the mirror coverage is universal. Not a regression; the v0.4.4 popover didn't see them either.
+
+---
+
 ## v0.4.4 — 2026-05-25 (chat-files popover — backend-sourced, survives reload)
 
 v0.4.3 missed uploaded attachments after a chat reload, a chat

@@ -1257,6 +1257,8 @@
     "empty": "In diesem Chat wurden noch keine Dokumente angehängt oder erzeugt.",
     "hydrating": "Entscheidungsstatus wird geladen…",
     "originUploaded": "Hochgeladen",
-    "originGenerated": "Erzeugt"
+    "originGenerated": "Erzeugt",
+    "originProject": "Projekt",
+    "originReferenced": "Zitiert"
   }
 }
