@@ -215,7 +215,21 @@ function New-ResourcesOverlay {
         # loader in crate::presets::system_prompt walks
         # <install>/config/system-prompts/<locale>/<domain>.md with
         # locale fallback chain (requested → it → en → None).
-        "../config/system-prompts/**/*.md"                  = "config/system-prompts/"
+        #
+        # One glob per locale (instead of a single `**/*.md` mapped to
+        # `config/system-prompts/`) because the WiX bundler flattens a
+        # `**`-glob into the destination directory: every locale's
+        # `pa.md` / `legal.md` / `medical.md` collided in a single dir
+        # and `light.exe` failed with ICE30 ("two different components
+        # install the same target file"). Mapping each locale to its
+        # own destination subdir preserves the `<locale>/<domain>.md`
+        # layout the Rust loader expects.
+        "../config/system-prompts/it/*.md"                  = "config/system-prompts/it/"
+        "../config/system-prompts/en/*.md"                  = "config/system-prompts/en/"
+        "../config/system-prompts/fr/*.md"                  = "config/system-prompts/fr/"
+        "../config/system-prompts/de/*.md"                  = "config/system-prompts/de/"
+        "../config/system-prompts/es/*.md"                  = "config/system-prompts/es/"
+        "../config/system-prompts/pt/*.md"                  = "config/system-prompts/pt/"
     }
     $obj = @{
         build  = @{ beforeBuildCommand = '' }
