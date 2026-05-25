@@ -4379,6 +4379,30 @@ async fn stream_chat_root(
                             .and_then(|u| name_by_id.get(u))
                             .cloned()
                             .unwrap_or_default();
+                        // Filename-as-doc_id fallback: the model
+                        // sometimes lifts an attached file's filename
+                        // straight from the inventory block in the
+                        // system prompt and emits it as the citation's
+                        // `doc_id` instead of the canonical `doc-N`
+                        // handle (most common when many docs are
+                        // attached in the same chat). Resolving that
+                        // back to the right UUID keeps the viewer
+                        // from 404-ing on `/document/<filename>/display`.
+                        if uuid.is_none() {
+                            for (id, fname) in &name_by_id {
+                                if fname == label {
+                                    tracing::info!(
+                                        "[chat] citation doc_id {:?} resolved via attached-filename match (model emitted filename instead of doc-N handle)",
+                                        label
+                                    );
+                                    uuid = Some(id.clone());
+                                    if filename.is_empty() {
+                                        filename = fname.clone();
+                                    }
+                                    break;
+                                }
+                            }
+                        }
                         // Last-resort: canonical-key match against the
                         // user's full corpus library. Catches the model
                         // copying an inventory line verbatim (bracket +
