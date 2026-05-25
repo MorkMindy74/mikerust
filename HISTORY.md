@@ -13,6 +13,47 @@ diff. For the upstream-sync audit trail (which fixes were ported from
 
 ---
 
+## v0.4.3 — 2026-05-25 (chat-files shortcut)
+
+After v0.4.1/v0.4.2 made the rejection summary discoverable, a
+second gap surfaced: once the user closed the reject modal there
+was no quick way back to the document itself — the `generate_docx`
+chip lives in the scrollback, which gets buried as the chat grows.
+
+This release adds a **chat-files popover** anchored to a new Files
+button in the composer footer. It enumerates every document the
+current chat has touched and exposes them in a flat, scannable
+list:
+
+- **Source-origin tags** — `Caricato` for user-attached files,
+  `Generato` for `generate_docx` (and any future generator) outputs.
+- **Per-format icon colour** — Excel green, Word blue, PDF red,
+  PowerPoint orange, Markdown text-primary, anything else brand
+  accent. The mapping was extracted from `ChatSteps.svelte` into
+  the new [`fileIconColor`](frontend/src/lib/utils/file-icon.ts)
+  utility so chat steps and the shortcut paint identically; one
+  source of truth for the file palette.
+- **Strikethrough + red `Rifiutato` badge** on rejected rows. The
+  decision is fetched on open via `documentsApi.get` in parallel
+  for every row, so the list reflects current state without needing
+  the user to have opened each doc in the viewer first.
+- **Click → opens in the existing doc-viewer side panel**, where
+  Accept / Reject / Vedi riassunto / Apri in Word all already work.
+
+### Files touched
+
+- [`frontend/src/lib/utils/file-icon.ts`](frontend/src/lib/utils/file-icon.ts) — new shared helper.
+- [`frontend/src/lib/components/chat/ChatFilesPanel.svelte`](frontend/src/lib/components/chat/ChatFilesPanel.svelte) — new popover.
+- [`frontend/src/lib/components/chat/ChatInput.svelte`](frontend/src/lib/components/chat/ChatInput.svelte) — Files button + popover mount.
+- [`frontend/src/lib/components/chat/ChatSteps.svelte`](frontend/src/lib/components/chat/ChatSteps.svelte) — now imports `fileIconColor` instead of inlining the switch.
+- [`frontend/scripts/fill-i18n.mjs`](frontend/scripts/fill-i18n.mjs) — six new `ChatFiles.*` strings re-filled into the six locale bundles (now 1130 keys each).
+
+Backend unchanged: the popover reads exclusively from the
+already-streamed `chat.messages` array (user `files` + assistant
+`steps`) plus per-doc `GET /document/:id` for decision state.
+
+---
+
 ## v0.4.2 — 2026-05-25 (reject modal — step 2 transition fix)
 
 Hotfix for v0.4.1. After a user clicked **Genera riassunto e rifiuta**

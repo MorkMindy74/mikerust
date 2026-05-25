@@ -27,11 +27,13 @@
   import { chatStore } from '$lib/stores/chat.svelte'
   import type { SendAttachments } from '$lib/stores/chat.svelte'
   import type { FileRef, TemplateRef, WorkflowRef } from '$lib/types/chat'
+  import ChatFilesPanel from './ChatFilesPanel.svelte'
   import {
     Paperclip,
     FolderKanban,
     Workflow as WorkflowIcon,
     FileType2,
+    Files,
     X,
     Upload,
     FolderSearch,
@@ -231,6 +233,7 @@
 
   // ── document upload ─────────────────────────────────────────────────
   let attachMenuOpen = $state(false)
+  let filesPanelOpen = $state(false)
   let uploading = $state(false)
   let fileInput = $state<HTMLInputElement>()
 
@@ -570,6 +573,24 @@
       class="inline-flex h-8 w-8 items-center justify-center rounded-(--radius-md) text-(--color-text-secondary) hover:bg-(--color-hover-bg) hover:text-(--color-text-primary)">
       <FileType2 size={16} />
     </button>
+
+    <!-- "All chat files" shortcut. Anchors a popover above the
+         button via ChatFilesPanel's absolute positioning + this
+         wrapper's `relative`. -->
+    <div class="relative">
+      <button
+        type="button"
+        title={t('ChatFiles.tooltip')}
+        aria-label={t('ChatFiles.title')}
+        onclick={() => (filesPanelOpen = !filesPanelOpen)}
+        class="inline-flex h-8 w-8 items-center justify-center rounded-(--radius-md)
+               text-(--color-text-secondary) hover:bg-(--color-hover-bg)
+               hover:text-(--color-text-primary)"
+      >
+        <Files size={16} />
+      </button>
+      <ChatFilesPanel bind:open={filesPanelOpen} />
+    </div>
 
     <div class="flex-1"></div>
 

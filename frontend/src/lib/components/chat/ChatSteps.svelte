@@ -10,6 +10,7 @@
   import { docViewer } from '$lib/stores/doc-viewer.svelte'
   import { documentsApi } from '$lib/api/documents'
   import { Check, FileText, Download, Eye, Search, Workflow } from 'lucide-svelte'
+  import { fileIconColor as iconColor } from '$lib/utils/file-icon'
 
   let { steps }: { steps: ChatStep[] } = $props()
 
@@ -18,38 +19,6 @@
 
   function openDoc(documentId: string, filename: string) {
     docViewer.openDocument(documentId, filename)
-  }
-
-  /**
-   * Tint the generated-document card icon by file type. Word is blue and
-   * Excel is green today; Markdown (black), PDF (red) and PowerPoint
-   * (orange) are pre-mapped so they are already correct once generators
-   * for those formats land. Anything else keeps the brand colour.
-   */
-  function iconColor(filename: string): string {
-    const ext = /\.([a-z0-9]+)$/i.exec(filename.trim())?.[1]?.toLowerCase() ?? ''
-    switch (ext) {
-      case 'xlsx':
-      case 'xls':
-      case 'xlsb':
-      case 'ods':
-      case 'csv':
-        return 'text-(--color-success-500)' // Excel — green
-      case 'docx':
-      case 'doc':
-      case 'rtf':
-        return 'text-(--color-info-500)' // Word — blue
-      case 'md':
-      case 'markdown':
-        return 'text-(--color-text-primary)' // Markdown — black
-      case 'pdf':
-        return 'text-(--color-danger-500)' // PDF — red
-      case 'pptx':
-      case 'ppt':
-        return 'text-(--color-warning-500)' // PowerPoint — orange
-      default:
-        return 'text-(--color-brand-600)'
-    }
   }
 
   async function download(documentId: string, filename: string) {

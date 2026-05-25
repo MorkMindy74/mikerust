@@ -1250,5 +1250,13 @@
     "loadingModel": "PII-Modell (GLiNER2) wird geladen — der erste Start lädt ~500 MB herunter",
     "failed": "PII-Modell-Fehler: {error}",
     "downloading": "PII-Modell wird heruntergeladen — {file}"
+  },
+  "ChatFiles": {
+    "title": "Dateien in diesem Chat",
+    "tooltip": "Alle in diesem Chat angehängten oder erzeugten Dokumente anzeigen",
+    "empty": "In diesem Chat wurden noch keine Dokumente angehängt oder erzeugt.",
+    "hydrating": "Entscheidungsstatus wird geladen…",
+    "originUploaded": "Hochgeladen",
+    "originGenerated": "Erzeugt"
   }
 }

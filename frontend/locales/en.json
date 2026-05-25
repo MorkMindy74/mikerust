@@ -1250,5 +1250,13 @@
     "done": "Translation complete",
     "error": "Translation failed",
     "progress": "Translating… {done}/{total}"
+  },
+  "ChatFiles": {
+    "title": "Files in this chat",
+    "tooltip": "Show every document attached to or generated in this chat",
+    "empty": "No documents have been attached to or generated in this chat yet.",
+    "hydrating": "Loading decision state…",
+    "originUploaded": "Uploaded",
+    "originGenerated": "Generated"
   }
 }

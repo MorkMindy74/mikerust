@@ -1250,5 +1250,13 @@
     "loadingModel": "Chargement du modèle PII (GLiNER2) — le premier lancement télécharge ~500 Mo",
     "failed": "Échec du modèle PII : {error}",
     "downloading": "Téléchargement du modèle PII — {file}"
+  },
+  "ChatFiles": {
+    "title": "Fichiers de cette discussion",
+    "tooltip": "Afficher tous les documents joints ou générés dans cette discussion",
+    "empty": "Aucun document n'a encore été joint ou généré dans cette discussion.",
+    "hydrating": "Chargement de l'état de décision…",
+    "originUploaded": "Téléversé",
+    "originGenerated": "Généré"
   }
 }

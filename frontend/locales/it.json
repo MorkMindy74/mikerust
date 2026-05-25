@@ -1250,5 +1250,13 @@
     "done": "Traduzione completata",
     "error": "Traduzione non riuscita",
     "progress": "Traduzione… {done}/{total}"
+  },
+  "ChatFiles": {
+    "title": "File in questa chat",
+    "tooltip": "Mostra tutti i documenti caricati o generati in questa chat",
+    "empty": "Nessun documento è ancora stato caricato o generato in questa chat.",
+    "hydrating": "Caricamento stato decisione…",
+    "originUploaded": "Caricato",
+    "originGenerated": "Generato"
   }
 }

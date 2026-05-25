@@ -1250,5 +1250,13 @@
     "loadingModel": "Cargando modelo PII (GLiNER2) — el primer arranque descarga ~500 MB",
     "failed": "Modelo PII fallido: {error}",
     "downloading": "Descargando modelo PII — {file}"
+  },
+  "ChatFiles": {
+    "title": "Archivos en este chat",
+    "tooltip": "Mostrar todos los documentos adjuntados o generados en este chat",
+    "empty": "Aún no se ha adjuntado ni generado ningún documento en este chat.",
+    "hydrating": "Cargando estado de decisión…",
+    "originUploaded": "Subido",
+    "originGenerated": "Generado"
   }
 }
