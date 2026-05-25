@@ -549,7 +549,9 @@
       "reject": "Ablehnen",
       "acceptTooltip": "Dieses Dokument im Chat-Kontext behalten",
       "rejectTooltip": "Diese Version ablehnen: wird durch Zusammenfassung + Begründung ersetzt",
-      "rejectedBadge": "Abgelehnt"
+      "rejectedBadge": "Abgelehnt",
+      "viewSummary": "Zusammenfassung anzeigen",
+      "viewSummaryTooltip": "Begründung und Zusammenfassung erneut lesen, die dieses Dokument im Chat-Kontext ersetzt hat"
     },
     "openExternal": {
       "label": "In Word öffnen",
@@ -572,6 +574,13 @@
       "summaryExplain": "Diese Zusammenfassung + Ihr Grund werden in den nachfolgenden Runden anstelle des vollständigen Dokuments verwendet.",
       "done": "Schließen",
       "error": "Ablehnung fehlgeschlagen: {err}"
+    },
+    "summaryModal": {
+      "title": "Ablehnungs-Zusammenfassung — «{file}»",
+      "intro": "Das sieht das Modell in den nachfolgenden Chat-Runden anstelle des abgelehnten Dokuments.",
+      "explain": "Um das Originaldokument wiederherzustellen, setzen Sie die Entscheidung wieder auf Akzeptieren — die Zusammenfassung bleibt für eine erneute Ablehnung archiviert.",
+      "noReason": "(Grund nicht erfasst)",
+      "noSummary": "Für diese Ablehnung ist keine Zusammenfassung archiviert. Die Begründung des Nutzers wird trotzdem in den Chat-Kontext eingefügt, jedoch ohne KI-generierte Kurzfassung."
     }
   },
   "DocumentSupport": {

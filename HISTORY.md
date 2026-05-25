@@ -13,6 +13,64 @@ diff. For the upstream-sync audit trail (which fixes were ported from
 
 ---
 
+## v0.4.1 — 2026-05-25 (rejection summary — persistent view)
+
+Closes the UX gap exposed by v0.3.5's Accept/Reject flow: once
+the user typed a motive and the backend generated an LLM summary,
+the summary was visible only inside the modal that authored it.
+Closing the modal lost the read surface, even though the summary
+remained the *active* document substitute in every subsequent
+chat turn (per [`chat::load_attached_docs`](src/routes/chat.rs)).
+
+### What changed
+
+- New **"Vedi riassunto"** button in the doc-viewer toolbar,
+  visible exactly when `tab.decision === 'rejected'`. It opens a
+  read-only modal showing both the user's reason and the
+  archived summary — the same two strings the model sees in
+  place of the rejected document.
+- The new modal is purely a preview surface: no LLM call, no
+  mutation, just a window on what the store already has after
+  `hydrateDecision` or a freshly-confirmed reject.
+- i18n: seven new keys across all six locales
+  (`DocViewer.decision.viewSummary`, the matching tooltip, and
+  five `DocViewer.summaryModal.*` strings).
+
+### The canonical 8-step lifecycle, now fully observable
+
+1. MikeRust generates a docx from a template.
+2. The user can reject it and write a motive (≥10 chars).
+3. Backend pulls the cached extracted text, runs a one-shot LLM
+   summary anchored on the motive, and persists
+   `decision='rejected' + decision_reason + decision_summary`.
+4. From the next turn on, [`load_attached_docs`](src/routes/chat.rs)
+   injects the reason + summary stub **in place of** the docx
+   body.
+5. The original generated docx is no longer sent to the model
+   (the stub fully replaces it; the if-rejected branch returns
+   before any text load).
+6. The user can re-open the doc, click **Vedi riassunto** to
+   re-read what's now active, then click **Accetta** to restore
+   the document.
+7. On re-accept the column flips to `accepted` — the doc goes
+   back into chat context, the summary disappears from the
+   active prompt but stays archived (`decision_reason` and
+   `decision_summary` are intentionally preserved).
+8. On re-reject the new motive + new summary overwrite the
+   archived values via the same `UPDATE` path.
+
+### Files touched
+
+- [`frontend/src/lib/components/documents/ViewSummaryModal.svelte`](frontend/src/lib/components/documents/ViewSummaryModal.svelte) — new read-only modal.
+- [`frontend/src/lib/components/documents/DocViewerPanel.svelte`](frontend/src/lib/components/documents/DocViewerPanel.svelte) — toolbar button + modal mount.
+- [`frontend/scripts/fill-i18n.mjs`](frontend/scripts/fill-i18n.mjs) — seven new translation entries; the script re-fills the six locale bundles to 1124 keys.
+
+No backend changes were necessary — `set_decision` (v0.3.5) and
+`load_attached_docs` already implement steps 3–8 correctly; v0.4.1
+just makes the persisted summary visible to the user.
+
+---
+
 ## v0.4.0 — 2026-05-24 (domain-aware system-prompt prologue)
 
 The chat handler now prepends a **domain-aware prologue** to every

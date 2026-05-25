@@ -549,7 +549,9 @@
       "reject": "Rejeitar",
       "acceptTooltip": "Manter este documento no contexto do chat",
       "rejectTooltip": "Rejeitar esta versão: será substituída por um resumo + motivo",
-      "rejectedBadge": "Rejeitado"
+      "rejectedBadge": "Rejeitado",
+      "viewSummary": "Ver resumo",
+      "viewSummaryTooltip": "Releia o motivo e o resumo que substituiu este documento no contexto do chat"
     },
     "openExternal": {
       "label": "Abrir no Word",
@@ -572,6 +574,13 @@
       "summaryExplain": "Este resumo + o teu motivo entrarão no contexto dos turnos seguintes em vez do documento completo.",
       "done": "Fechar",
       "error": "Falha na rejeição: {err}"
+    },
+    "summaryModal": {
+      "title": "Resumo da rejeição — «{file}»",
+      "intro": "É isto que o modelo vê nos turnos seguintes do chat em vez do documento rejeitado.",
+      "explain": "Para restaurar o documento original, mude a decisão para Aceitar — o resumo permanece arquivado caso volte a rejeitar.",
+      "noReason": "(motivo não registado)",
+      "noSummary": "Não há resumo arquivado para esta rejeição. O motivo do utilizador é mesmo assim injetado no contexto do chat, mas sem um resumo gerado pelo modelo."
     }
   },
   "DocumentSupport": {

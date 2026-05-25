@@ -562,7 +562,9 @@
       "reject": "Reject",
       "acceptTooltip": "Keep this document in the chat context",
       "rejectTooltip": "Reject this version: it will be replaced by a summary + reason",
-      "rejectedBadge": "Rejected"
+      "rejectedBadge": "Rejected",
+      "viewSummary": "View summary",
+      "viewSummaryTooltip": "Re-read the reason and the summary that replaced this document in the chat context"
     },
     "openExternal": {
       "label": "Open in Word",
@@ -585,6 +587,13 @@
       "summaryExplain": "This summary + your reason will enter the context of subsequent turns in place of the full document.",
       "done": "Close",
       "error": "Reject failed: {err}"
+    },
+    "summaryModal": {
+      "title": "Rejection summary — «{file}»",
+      "intro": "This is what the model sees on subsequent chat turns in place of the rejected document.",
+      "explain": "To restore the original document, switch the decision back to Accept — the summary stays archived in case you reject again.",
+      "noReason": "(reason not recorded)",
+      "noSummary": "No summary is archived for this rejection. The user reason is still injected into the chat context, but no LLM-generated digest accompanies it."
     }
   },
   "DocumentSupport": {

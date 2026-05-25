@@ -549,7 +549,9 @@
       "reject": "Rejeter",
       "acceptTooltip": "Conserver ce document dans le contexte du chat",
       "rejectTooltip": "Rejeter cette version : elle sera remplacée par un résumé + un motif",
-      "rejectedBadge": "Rejeté"
+      "rejectedBadge": "Rejeté",
+      "viewSummary": "Voir le résumé",
+      "viewSummaryTooltip": "Relire le motif et le résumé qui a remplacé ce document dans le contexte du chat"
     },
     "openExternal": {
       "label": "Ouvrir dans Word",
@@ -572,6 +574,13 @@
       "summaryExplain": "Ce résumé + votre motif entreront dans le contexte des tours suivants à la place du document complet.",
       "done": "Fermer",
       "error": "Échec du rejet : {err}"
+    },
+    "summaryModal": {
+      "title": "Résumé du rejet — «{file}»",
+      "intro": "Voici ce que le modèle voit dans les tours suivants du chat à la place du document rejeté.",
+      "explain": "Pour restaurer le document original, repassez la décision sur Accepter — le résumé reste archivé en cas de nouveau rejet.",
+      "noReason": "(motif non enregistré)",
+      "noSummary": "Aucun résumé n'est archivé pour ce rejet. Le motif de l'utilisateur est tout de même injecté dans le contexte du chat, mais sans synthèse générée par le modèle."
     }
   },
   "DocumentSupport": {

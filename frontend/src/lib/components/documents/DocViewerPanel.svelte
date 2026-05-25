@@ -13,6 +13,7 @@
   import SheetView from './SheetView.svelte'
   import TextView from './TextView.svelte'
   import RejectReasonModal from './RejectReasonModal.svelte'
+  import ViewSummaryModal from './ViewSummaryModal.svelte'
   import Spinner from '$lib/components/ui/Spinner.svelte'
   import { i18n } from '$lib/stores/i18n.svelte'
   import { toastStore } from '$lib/stores/toast.svelte'
@@ -25,9 +26,11 @@
     PanelRightOpen,
     Check,
     ExternalLink,
+    FileText,
   } from 'lucide-svelte'
 
   let rejectModalOpen = $state(false)
+  let viewSummaryOpen = $state(false)
 
   async function hydrateDecision(tab: ViewerTab) {
     if (tab.source !== 'document') return
@@ -406,6 +409,12 @@
     filename={activeTab.title}
     initialReason={activeTab.decisionReason}
   />
+  <ViewSummaryModal
+    bind:open={viewSummaryOpen}
+    filename={activeTab.title}
+    reason={activeTab.decisionReason}
+    summary={activeTab.decisionSummary}
+  />
 {/if}
 
 {#snippet decisionToolbar(tab: ViewerTab)}
@@ -470,13 +479,26 @@
     >
       <ExternalLink size={12} />{i18n.t('DocViewer.openExternal.label')}
     </button>
-    {#if tab.decision === 'rejected' && tab.decisionReason}
-      <span
-        class="text-[11px] text-(--color-danger-500) truncate max-w-xs"
-        title={tab.decisionReason}
+    {#if tab.decision === 'rejected'}
+      <button
+        type="button"
+        onclick={() => (viewSummaryOpen = true)}
+        title={i18n.t('DocViewer.decision.viewSummaryTooltip')}
+        class="h-7 px-3 text-[11px] font-medium inline-flex items-center gap-1
+               rounded-(--radius-md) border border-(--color-surface-200)
+               text-(--color-text-secondary) hover:bg-(--color-surface-50)
+               hover:text-(--color-text-primary)"
       >
-        {i18n.t('DocViewer.decision.rejectedBadge')}: {tab.decisionReason}
-      </span>
+        <FileText size={12} />{i18n.t('DocViewer.decision.viewSummary')}
+      </button>
+      {#if tab.decisionReason}
+        <span
+          class="text-[11px] text-(--color-danger-500) truncate max-w-xs"
+          title={tab.decisionReason}
+        >
+          {i18n.t('DocViewer.decision.rejectedBadge')}: {tab.decisionReason}
+        </span>
+      {/if}
     {/if}
   </div>
 {/snippet}

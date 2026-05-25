@@ -562,7 +562,9 @@
       "reject": "Rifiuta",
       "acceptTooltip": "Mantieni questo documento nel contesto della chat",
       "rejectTooltip": "Rifiuta questa versione: sarà sostituita da un riassunto + motivo",
-      "rejectedBadge": "Rifiutato"
+      "rejectedBadge": "Rifiutato",
+      "viewSummary": "Vedi riassunto",
+      "viewSummaryTooltip": "Rileggi il motivo e il riassunto che ha sostituito questo documento nel contesto della chat"
     },
     "openExternal": {
       "label": "Apri in Word",
@@ -585,6 +587,13 @@
       "summaryExplain": "Questo riassunto + il tuo motivo entreranno nel contesto dei turni successivi al posto del documento intero.",
       "done": "Chiudi",
       "error": "Rifiuto non andato a buon fine: {err}"
+    },
+    "summaryModal": {
+      "title": "Riassunto del rifiuto — «{file}»",
+      "intro": "Questo è ciò che il modello vede nei turni successivi della chat al posto del documento rifiutato.",
+      "explain": "Per ripristinare il documento originale, riporta la decisione su Accetta — il riassunto resta archiviato per un eventuale futuro rifiuto.",
+      "noReason": "(motivo non registrato)",
+      "noSummary": "Nessun riassunto archiviato per questo rifiuto. Il motivo dell'utente entra comunque nel contesto della chat, ma senza un riepilogo generato dal modello."
     }
   },
   "DocumentSupport": {
