@@ -13,6 +13,64 @@ diff. For the upstream-sync audit trail (which fixes were ported from
 
 ---
 
+## v0.4.2 — 2026-05-25 (reject modal — step 2 transition fix)
+
+Hotfix for v0.4.1. After a user clicked **Genera riassunto e rifiuta**
+the backend correctly persisted the reject and returned the summary,
+but the modal stayed pinned in step 1 (the reason textarea) instead
+of transitioning to the step 2 preview. The user was left guessing
+whether the action had landed.
+
+### Root cause
+
+`RejectReasonModal`'s `$effect` reset block tracked `initialReason`
+reactively:
+
+```svelte
+$effect(() => {
+  if (open) {
+    reason = initialReason ?? ''  // ← tracked dependency
+    summary = null
+    busy = false
+  }
+})
+```
+
+When `generateAndPersist` resolved it called
+`docViewer.setDecision(docId, 'rejected', res.reason, res.summary)`,
+which mutated the store. The parent re-rendered the modal with a
+fresh `initialReason` prop (the archived reason from the just-
+confirmed reject), and the effect re-ran while `open` was still
+true — clobbering `summary` back to `null` immediately after
+`generateAndPersist` had set it. The `{#if summary === null}`
+template branch then drew step 1 again.
+
+### Fix
+
+Read `initialReason` inside `svelte`'s `untrack` so the effect only
+fires on the `open` transition, not when the parent updates the
+archived reason mid-flow:
+
+```svelte
+$effect(() => {
+  if (open) {
+    reason = untrack(() => initialReason ?? '')
+    summary = null
+    busy = false
+  }
+})
+```
+
+Same reset behaviour on each modal open; no re-entry during the
+await. The same race would have hit the very first reject if the
+parent updated the prop while the API call was pending — the new
+guard fixes both paths uniformly.
+
+Single file touched:
+[`frontend/src/lib/components/documents/RejectReasonModal.svelte`](frontend/src/lib/components/documents/RejectReasonModal.svelte).
+
+---
+
 ## v0.4.1 — 2026-05-25 (rejection summary — persistent view)
 
 Closes the UX gap exposed by v0.3.5's Accept/Reject flow: once

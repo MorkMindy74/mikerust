@@ -25,6 +25,7 @@
   import Modal from '$lib/components/ui/Modal.svelte'
   import Button from '$lib/components/ui/Button.svelte'
   import Spinner from '$lib/components/ui/Spinner.svelte'
+  import { untrack } from 'svelte'
   import { documentsApi } from '$lib/api/documents'
   import { docViewer } from '$lib/stores/doc-viewer.svelte'
   import { i18n } from '$lib/stores/i18n.svelte'
@@ -47,9 +48,17 @@
 
   // Re-fill reason from the archived value every time the modal opens,
   // so a re-reject after an earlier accept doesn't lose the prior text.
+  //
+  // `initialReason` is read inside `untrack`: we want this effect to
+  // fire on the open→true transition, not whenever the parent updates
+  // the prop. Without untrack the effect would re-run during
+  // `generateAndPersist` — `docViewer.setDecision` archives the new
+  // reason, the parent re-passes it as `initialReason`, and the
+  // effect would clobber `summary` back to null mid-await, pinning
+  // the modal in step 1 even after the backend returned the summary.
   $effect(() => {
     if (open) {
-      reason = initialReason ?? ''
+      reason = untrack(() => initialReason ?? '')
       summary = null
       busy = false
     }
