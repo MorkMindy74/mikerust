@@ -37,12 +37,7 @@ releasable). Five distinct fix areas land together:
    resolves to the older annotation. Catches the common case of
    models reusing `cN` labels across turns.
 
-3. **Filename → UUID fallback** in the trailing-CITATIONS resolver
-   and the inline `[doc-id: …]` rewriter. When the model lifts a
-   filename from the inventory and emits it as the `doc_id`, the
-   resolver now back-maps to the right attached-document UUID.
-
-4. **Tightened CITATION QUALITY RULES** in `MRUST_SYSTEM_PROMPT`.
+3. **Tightened CITATION QUALITY RULES** in `MRUST_SYSTEM_PROMPT`.
    Five new explicit rules attack the failure modes we measured:
    - Empty / short quotes → omit the citation.
    - Page ranges (`"1-3"`) RESERVED for sentences spanning
