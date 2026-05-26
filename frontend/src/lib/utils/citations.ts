@@ -59,12 +59,36 @@ function makePill(ref: string): HTMLElement {
  * with no matching citation are left as plain text; only `g`/`c`/`p`
  * prefixed markers are ever considered, so bare bracketed numbers
  * (years, amounts, clause numbers) are never treated as citations.
+ *
+ * Cross-message fallback (`priorCitations`): when the current
+ * message's `citations` array doesn't contain a ref but an earlier
+ * assistant turn in the same chat did, the older annotation is used
+ * instead. This catches the common case where the model reuses
+ * `[cN]` labels from a previous turn (typical with Gemini / Claude
+ * on long medical-legal analyses: turn 1 sets up `c1..c119`, turn 2
+ * re-references them but emits a CITATIONS array carrying only the
+ * NEW refs it introduced this turn). The principle is the same as
+ * the backend's `feedback_model_independent_normalization` memory:
+ * never trust a single LLM call to be complete; resolve at render
+ * time against everything the chat has accumulated.
  */
-export function renderMessageHtml(md: string, citations: Citation[] = []): string {
+export function renderMessageHtml(
+  md: string,
+  citations: Citation[] = [],
+  priorCitations: Citation[] = [],
+): string {
   const safeHtml = renderMarkdown(stripCitationsBlock(md))
-  if (citations.length === 0) return safeHtml
+  if (citations.length === 0 && priorCitations.length === 0) return safeHtml
 
-  const known = new Set(citations.map((c) => c.ref))
+  // Build the lookup union. Current-message refs WIN over older ones
+  // when the same ref appears in both, because a model that re-emits
+  // an annotation in the current turn presumably means *that* doc and
+  // not whatever a previous turn meant. priorCitations is a fallback
+  // only for refs absent from the current message.
+  const known = new Set([
+    ...citations.map((c) => c.ref),
+    ...priorCitations.map((c) => c.ref),
+  ])
   const host = document.createElement('div')
   host.innerHTML = safeHtml
 

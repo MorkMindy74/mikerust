@@ -83,4 +83,48 @@ describe('renderMessageHtml', () => {
     expect(html).toContain('data-cite-ref="c1"')
     expect(html).toContain('data-cite-ref="c2"')
   })
+
+  it('falls back to priorCitations when current message lacks a ref', () => {
+    // Real-world case from the 10-PDF medical-legal chat: turn 2 (docx
+    // generation) emits prose mentioning [c1..c30] but its <CITATIONS>
+    // JSON only carries c63..c77 because the model reused turn 1's
+    // labels without re-emitting their annotations. The renderer must
+    // still pill-ify [c1] by looking up turn 1's citations.
+    const turn2Cits = [cite('c63'), cite('c64')]
+    const turn1Cits = [cite('c1'), cite('c2'), cite('c3')]
+    const html = renderMessageHtml(
+      'See [c1, c2, c3] and also [c63].',
+      turn2Cits,
+      turn1Cits,
+    )
+    expect(html).toContain('data-cite-ref="c1"')
+    expect(html).toContain('data-cite-ref="c2"')
+    expect(html).toContain('data-cite-ref="c3"')
+    expect(html).toContain('data-cite-ref="c63"')
+  })
+
+  it('current-message citation wins over priorCitations on duplicate ref', () => {
+    // If the model re-emits an annotation in the current turn, that one
+    // is more specific to the turn's intent and must take precedence.
+    // The test asserts the pill is rendered (presence) — semantic
+    // identity (which underlying doc it points to) is enforced at click
+    // time in ChatMessage.svelte's openCitation, also current-first.
+    const turn2Cits = [cite('c1')]
+    const turn1Cits = [cite('c1')]
+    const html = renderMessageHtml('Look at [c1].', turn2Cits, turn1Cits)
+    // One pill rendered (Set-based dedup in renderMessageHtml prevents
+    // double-counting), so a single data-cite-ref="c1" element is what
+    // the user sees.
+    expect(html.match(/data-cite-ref="c1"/g)?.length).toBe(1)
+  })
+
+  it('leaves a ref alone when neither current nor prior citations match', () => {
+    const html = renderMessageHtml(
+      'Unknown [c99] reference.',
+      [cite('c1')],
+      [cite('c2')],
+    )
+    expect(html).not.toContain('data-cite-ref="c99"')
+    expect(html).toContain('[c99]')
+  })
 })

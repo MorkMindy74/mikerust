@@ -7,13 +7,24 @@
   import { docViewer } from '$lib/stores/doc-viewer.svelte'
   import { i18n } from '$lib/stores/i18n.svelte'
   import type { ChatMessage } from '$lib/types/chat'
+  import type { Citation } from '$lib/types/citation'
   import { FileText, Workflow as WorkflowIcon, FileType2 } from 'lucide-svelte'
 
-  let { message }: { message: ChatMessage } = $props()
+  interface Props {
+    message: ChatMessage
+    /** Citations from earlier assistant turns in the same chat. Used
+     *  as a fallback when this message's prose references `[cN]` whose
+     *  annotation only the previous turn carried — common when the
+     *  model reuses labels across the conversation. The current
+     *  message's `citations` still wins on duplicate refs. */
+    priorCitations?: Citation[]
+  }
+
+  let { message, priorCitations = [] }: Props = $props()
 
   const html = $derived(
     message.role === 'assistant'
-      ? renderMessageHtml(message.content, message.citations ?? [])
+      ? renderMessageHtml(message.content, message.citations ?? [], priorCitations)
       : ''
   )
 
@@ -23,9 +34,13 @@
     message.streaming === true && /<citations>/i.test(message.content)
   )
 
-  /** Open the document behind a clicked citation pill. */
+  /** Open the document behind a clicked citation pill. Resolution
+   *  mirrors `renderMessageHtml`: current message first, prior
+   *  assistant turns as fallback. */
   function openCitation(ref: string) {
-    const c = (message.citations ?? []).find((x) => x.ref === ref)
+    const c =
+      (message.citations ?? []).find((x) => x.ref === ref) ??
+      priorCitations.find((x) => x.ref === ref)
     if (c) docViewer.openCitation(c)
   }
 

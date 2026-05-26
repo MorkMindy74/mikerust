@@ -71,7 +71,13 @@
       {:else}
         <div class="max-w-3xl mx-auto px-6 py-6 flex flex-col gap-4">
           {#each chatStore.messages as msg, i (i)}
-            <ChatMessage message={msg} />
+            <ChatMessage
+              message={msg}
+              priorCitations={chatStore.messages
+                .slice(0, i)
+                .filter((m) => m.role === 'assistant')
+                .flatMap((m) => m.citations ?? [])}
+            />
           {/each}
         </div>
       {/if}
