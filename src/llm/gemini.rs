@@ -184,15 +184,18 @@ fn build_body(params: &StreamParams) -> Value {
         body["tools"] = json!([{ "function_declarations": function_declarations }]);
     }
     body["safetySettings"] = safety_settings_off();
-    // generationConfig holds both the per-model thinking knob and the
-    // cross-provider temperature. 0.5 (v0.5.3+) — tighter sampling
-    // than Gemini's default of 1.0. Less random output across
-    // citations + structured JSON + tool calls.
-    let mut gen_config = json!({ "temperature": 0.5 });
+    // generationConfig is only attached when a per-model thinking knob is
+    // needed. We deliberately do NOT set `temperature` on Gemini: the
+    // cross-provider `0.5` we apply to Claude / local triggers a known
+    // white-out failure mode on `gemini-2.5-flash` over long contexts —
+    // the model gets stuck in a low-entropy whitespace loop and emits
+    // hundreds of thousands of spaces before closing the stream
+    // (observed 2026-05-26 on the medical-timeline workflow). Letting
+    // Gemini fall back to its API default keeps the deterministic
+    // tightening on the other providers without breaking Flash.
     if let Some(thinking) = thinking_config_for_model(&params.model) {
-        gen_config["thinkingConfig"] = thinking;
+        body["generationConfig"] = json!({ "thinkingConfig": thinking });
     }
-    body["generationConfig"] = gen_config;
     body
 }
 
@@ -881,21 +884,24 @@ mod tests {
     }
 
     #[test]
-    fn build_body_omits_thinking_config_on_legacy_families() {
-        // Pre-2.5 models have no thinking knob — sending the field on
-        // those gets a 400 INVALID_ARGUMENT, so we must omit it.
-        // generationConfig is still present from v0.5.3 onwards
-        // because it carries `temperature`, which IS supported on
-        // every Gemini family.
+    fn build_body_omits_generation_config_on_legacy_families() {
+        // Pre-2.5 models have no thinking knob, and we deliberately do
+        // NOT set `temperature` on Gemini either (the cross-provider 0.5
+        // we apply elsewhere triggers a white-out on gemini-2.5-flash
+        // over long contexts — see build_body docstring). With nothing
+        // to attach, generationConfig is omitted altogether on legacy
+        // families.
         let body = build_body(&empty_params("gemini-1.5-pro"));
-        let cfg = body.get("generationConfig").expect("generationConfig present for temperature");
-        assert!(cfg.get("thinkingConfig").is_none(), "thinkingConfig must be absent on legacy");
-        assert!(cfg.get("temperature").is_some(), "temperature must be present");
+        assert!(
+            body.get("generationConfig").is_none(),
+            "generationConfig must be absent on legacy when no thinking knob applies"
+        );
 
         let body = build_body(&empty_params("gemini-2.0-flash"));
-        let cfg = body.get("generationConfig").expect("generationConfig present for temperature");
-        assert!(cfg.get("thinkingConfig").is_none(), "thinkingConfig must be absent on legacy");
-        assert!(cfg.get("temperature").is_some(), "temperature must be present");
+        assert!(
+            body.get("generationConfig").is_none(),
+            "generationConfig must be absent on legacy when no thinking knob applies"
+        );
     }
 
     #[test]

@@ -50,15 +50,20 @@ releasable). Five distinct fix areas land together:
 
 ### Cross-provider determinism + headroom
 
-- **`temperature = 0.5`** on every provider (Claude / Gemini /
-  OpenAI / local-OpenAI-compatible). Defaults were 1.0 across the
-  board — too random for structured-output workloads. Set in
-  [`src/llm/claude.rs`](src/llm/claude.rs),
-  [`src/llm/gemini.rs`](src/llm/gemini.rs) (`generationConfig.temperature`,
-  carried on legacy 1.5 / 2.0 families that don't accept
-  `thinkingConfig`),
+- **`temperature = 0.5`** on Claude / OpenAI / local-OpenAI-compatible.
+  Defaults were 1.0 across the board — too random for
+  structured-output workloads. Set in
+  [`src/llm/claude.rs`](src/llm/claude.rs) and
   [`src/llm/local.rs`](src/llm/local.rs) (`ChatRequest.temperature` +
   streaming + complete paths).
+- **Gemini left at its API default.** Tightening Gemini to 0.5
+  triggered a white-out on `gemini-2.5-flash` over long contexts (the
+  model gets stuck in a low-entropy whitespace loop and emits
+  hundreds of thousands of spaces before closing the stream — first
+  observed on the medical-timeline workflow with 3 PDFs).
+  [`src/llm/gemini.rs`](src/llm/gemini.rs) `build_body` therefore
+  attaches `generationConfig` only to carry `thinkingConfig` on the
+  2.5 family; no `temperature` is set.
 - **`max_tokens` 4096 → 8192** on Claude + local. Doubles the
   headroom for trailing `<CITATIONS>` JSON on long answers. Gemini
   was already on its default (≥8192 on the 2.x family).
