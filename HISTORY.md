@@ -13,6 +13,41 @@ diff. For the upstream-sync audit trail (which fixes were ported from
 
 ---
 
+## v0.5.2 — 2026-05-26 (hotfix: v0.5.1 splitter corrupted CITATIONS JSON)
+
+**Regression introduced by v0.5.1**: the new `split_hybrid_citation_brackets`
+post-processor scanned for the first `]` after each `[`. The trailing
+`<CITATIONS>[…]</CITATIONS>` JSON block contains a `quote` field whose
+value sometimes carries `[N]` brackets the model copied from prose
+(e.g. `"art. 32 [3] del decreto"`). The splitter landed on that nested
+`]`, truncated the JSON array, and `extract_citations_block` silently
+rejected the malformed result — **every chat lost all its citations**,
+regardless of provider, regardless of attachment count. User-reported
+on both `gemini-3.5-flash` and `gemini-2.5-flash`.
+
+### Fix
+
+[`split_hybrid_citation_brackets`](src/routes/chat.rs) now stops processing
+the moment it encounters `<CITATIONS>` (case-insensitive). The segment
+from that marker to end-of-string is passed through byte-for-byte. New
+regression test `split_hybrid_does_not_corrupt_trailing_citations_json_block`
+pins the contract — feeding a body containing `"art. 32 [3]"` inside a
+citation quote produces output whose trailing JSON is byte-identical to
+the input.
+
+Existing 8 splitter tests + 38 chat tests still pass; full lib suite
+still green (398/398). Production-facing behaviour: any chat that
+produced zero pills on v0.5.1 should render correctly again on v0.5.2.
+
+This is exactly the failure mode the project memory
+[`feedback_model_independent_normalization.md`](https://example.invalid)
+warned about — "cover the normaliser with focused unit tests using real
+outputs the user has seen, not synthetic happy-path samples." I had
+synthetic happy-path tests; the production case turned up a JSON-quote-
+brackets edge that none of them covered. Test added retroactively.
+
+---
+
 ## v0.5.1 — 2026-05-26 (hybrid citation bracket splitter + max_tokens bump)
 
 Closes the citation-rendering gap exposed by long answers with many

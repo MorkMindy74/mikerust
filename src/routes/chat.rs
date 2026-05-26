@@ -2426,6 +2426,20 @@ pub fn split_hybrid_citation_brackets(text: &str) -> std::borrow::Cow<'_, str> {
         return std::borrow::Cow::Borrowed(text);
     }
 
+    // CRITICAL: stop processing at `<CITATIONS>`. The trailing JSON
+    // block contains `[…]` arrays whose nested `quote` strings often
+    // include square brackets the model copies verbatim from the
+    // prose (e.g. `"art. 32 [3] del decreto"`). Without this guard
+    // the splitter's first-`]` scan would land inside that quote,
+    // truncate the JSON array, and silently kill every citation —
+    // exactly the v0.5.1 regression that produced "0 entries" SSE
+    // events on otherwise-well-formed model output.
+    let prose_end = {
+        let lower = text.to_ascii_lowercase();
+        lower.find("<citations>").unwrap_or(text.len())
+    };
+    let (prose, tail) = text.split_at(prose_end);
+
     enum Tok<'a> {
         /// `c1`, `g12`, `p3` — pill-renderable on the frontend.
         Ref(&'a str),
@@ -2519,22 +2533,21 @@ pub fn split_hybrid_citation_brackets(text: &str) -> std::borrow::Cow<'_, str> {
     }
 
     let mut out = String::with_capacity(text.len() + text.len() / 8);
-    let bytes = text.as_bytes();
     let mut cursor = 0usize;
-    while cursor < text.len() {
-        let Some(rel_open) = text[cursor..].find('[') else {
-            out.push_str(&text[cursor..]);
+    while cursor < prose.len() {
+        let Some(rel_open) = prose[cursor..].find('[') else {
+            out.push_str(&prose[cursor..]);
             break;
         };
         let open = cursor + rel_open;
-        let Some(rel_close) = text[open + 1..].find(']') else {
+        let Some(rel_close) = prose[open + 1..].find(']') else {
             // No closing bracket — flush the rest verbatim and stop.
-            out.push_str(&text[cursor..]);
+            out.push_str(&prose[cursor..]);
             break;
         };
         let close = open + 1 + rel_close;
-        let inner = &text[open + 1..close];
-        out.push_str(&text[cursor..open]);
+        let inner = &prose[open + 1..close];
+        out.push_str(&prose[cursor..open]);
 
         // Idempotency guard: `[doc-id: <handle>[, page N]]` is the
         // already-canonical inline shape that
@@ -2630,9 +2643,13 @@ pub fn split_hybrid_citation_brackets(text: &str) -> std::borrow::Cow<'_, str> {
             out.push_str(inner);
             out.push(']');
         }
-        let _ = bytes; // suppress unused-binding warning on debug builds
         cursor = close + 1;
     }
+
+    // Re-attach the untouched `<CITATIONS>…</CITATIONS>` segment (and
+    // anything after it) verbatim, so the trailing JSON survives even
+    // when the prose was rewritten.
+    out.push_str(tail);
 
     std::borrow::Cow::Owned(out)
 }
@@ -6299,6 +6316,33 @@ mod tests {
             !s.contains(", c"),
             "split output still contains comma-separated refs: {s}"
         );
+    }
+
+    #[test]
+    fn split_hybrid_does_not_corrupt_trailing_citations_json_block() {
+        // v0.5.1 regression: my splitter looked for the first `]` after
+        // each `[`, and inside the trailing JSON block the model's
+        // citation quotes occasionally contain `[N]` brackets copied
+        // from the prose (e.g. "vedi art. 32 [3]"). The splitter then
+        // landed on the nested `]` and truncated the JSON array,
+        // which `extract_citations_block` silently rejected, killing
+        // every annotation. This test pins the contract: the segment
+        // from `<CITATIONS>` onwards must pass through verbatim.
+        let body = r#"Vedi [c1] e [c2].
+
+<CITATIONS>[{"ref":"c1","doc_id":"doc-0","quote":"art. 32 [3] del decreto","page":1},{"ref":"c2","doc_id":"doc-1","quote":"sez. II","page":4}]</CITATIONS>"#;
+        let out = split_hybrid_citation_brackets(body);
+        // The trailing JSON must be byte-identical.
+        let cit_start = body.find("<CITATIONS>").unwrap();
+        let expected_tail = &body[cit_start..];
+        assert!(
+            out.as_ref().ends_with(expected_tail),
+            "CITATIONS block was corrupted by the splitter.\nGot tail:\n{}\nExpected tail:\n{}",
+            &out.as_ref()[out.as_ref().len().saturating_sub(expected_tail.len())..],
+            expected_tail
+        );
+        // Prose part should still be exact for clean refs.
+        assert!(out.as_ref().contains("Vedi [c1] e [c2]."));
     }
 
     #[test]
