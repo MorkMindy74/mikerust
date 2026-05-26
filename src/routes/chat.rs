@@ -1437,11 +1437,18 @@ CRITICAL: "ref" MUST be the exact marker text you wrote in prose, without the br
 Rules:
 - Only cite text that appears verbatim in the provided documents
 - In every <CITATIONS> entry, "doc_id" MUST be the exact chat-local document label you were given (for example "doc-1"). Never use a filename, document UUID, or any other identifier in "doc_id". "doc_id" is separate from "ref": "ref" is the prose marker ("c1", "c2", ...) and "doc_id" is the document handle ("doc-1", "doc-2", ...) — they are not interchangeable
-- Keep quotes short (ideally <= 25 words) and narrowly scoped to the specific claim. Don't reuse one quote to support multiple different claims — give each its own citation
+- Keep quotes short (15–200 characters, ideally <= 25 words) and narrowly scoped to the specific claim. Don't reuse one quote to support multiple different claims — give each its own citation
 - "page" refers to the sequential [Page N] marker in the text you were given (1-indexed from the first page). IGNORE any page numbers printed inside the document itself (footers, roman numerals, etc.)
 - For a single-page quote, set "page" to an integer. If a quote is one continuous sentence that spans two pages, set "page" to "N-M" and insert [[PAGE_BREAK]] in the quote at the page break. Otherwise, use separate citations for text on different pages
 - Put the <CITATIONS> block at the very end of the response. Omit it entirely if there are no citations
 - DO NOT write free-form references like "[doc-id: <uuid>, page N]", "[doc-id: doc-0, page 1]", "(see doc-0, p. 3)", or any other ad-hoc bracketed format in your prose. The ONLY recognised inline marker is "[cN]" (paired with a "ref": "cN" entry in the <CITATIONS> block). Free-form references render as plain text — the user cannot click them
+
+CITATION QUALITY RULES (every violation produces a useless pill — the user clicks it and lands in the wrong place):
+1. EVERY citation MUST have a non-empty "quote" of at least 15 characters, copied verbatim from the document. If you don't have a specific passage to anchor the claim to, OMIT the citation. A claim with no citation is better than a citation that opens to nothing.
+2. NEVER use a "page" range like "1-3" or "1-7" to mean "the whole document" or "somewhere in this document". Page ranges are RESERVED for the narrow case of a single continuous sentence that physically spans a page break — and you MUST include `[[PAGE_BREAK]]` inside the quote at the break point. If a citation does not contain `[[PAGE_BREAK]]`, the page MUST be a single integer.
+3. Prefer per-passage citations over per-document citations. A 6-page document supporting 5 distinct claims should produce 5 citations with 5 distinct quotes on 5 (possibly different) pages — NOT 1 citation with page "1-6" covering everything. One-citation-per-attached-document is a degenerate pattern; the user can already see the file is attached.
+4. When attached documents (doc-1, doc-2, ...) are available AND cover the claim, cite THEM. Only cite KB documents ([gN] for global library, [pN] for project) when no attached doc covers the claim. Mixing a KB citation into a paragraph that is otherwise grounded in attached documents confuses the user — they expect attached refs to dominate when they attached files explicitly for this turn.
+5. If your prose mentions [cN] you previously used in this conversation, RE-EMIT its <CITATIONS> entry in the current turn's JSON block. Continuing to reference [c5] from turn 1 without re-emitting it in turn 2's CITATIONS leaves the user clicking a dead pill — every [cN] in the current message's prose needs a matching entry in the current message's <CITATIONS>.
 
 DOCX GENERATION:
 If asked to draft or generate a document, use the generate_docx tool to produce a downloadable Word document. Always use this tool rather than just displaying the document content inline when the user asks for a document to be created.
@@ -1712,6 +1719,14 @@ async fn retrieve_kb_chunks(
     let (hyde_enabled, user_locale, user_default_domain) = prefs
         .map(|(h, l, d)| (h != 0, l, d))
         .unwrap_or((false, None, None));
+    tracing::info!(
+        "[rag][cite-diag] retrieve_kb_chunks user={user_id}: \
+         hyde={}, locale={:?}, domain={:?}, top_k_target={top_k_target} — \
+         BASE cosine retrieval ALWAYS runs (whether HyDE is on or off); HyDE only adds a SECOND pass",
+        if hyde_enabled { "ON" } else { "OFF" },
+        user_locale.as_deref().unwrap_or(""),
+        user_default_domain.as_deref().unwrap_or(""),
+    );
 
     use crate::embeddings::service::SearchScope;
     // Resolve scope once. `is_strict_project` is needed because the

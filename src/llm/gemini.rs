@@ -184,9 +184,15 @@ fn build_body(params: &StreamParams) -> Value {
         body["tools"] = json!([{ "function_declarations": function_declarations }]);
     }
     body["safetySettings"] = safety_settings_off();
+    // generationConfig holds both the per-model thinking knob and the
+    // cross-provider temperature. 0.5 (v0.5.3+) — tighter sampling
+    // than Gemini's default of 1.0. Less random output across
+    // citations + structured JSON + tool calls.
+    let mut gen_config = json!({ "temperature": 0.5 });
     if let Some(thinking) = thinking_config_for_model(&params.model) {
-        body["generationConfig"] = json!({ "thinkingConfig": thinking });
+        gen_config["thinkingConfig"] = thinking;
     }
+    body["generationConfig"] = gen_config;
     body
 }
 
@@ -878,10 +884,18 @@ mod tests {
     fn build_body_omits_thinking_config_on_legacy_families() {
         // Pre-2.5 models have no thinking knob — sending the field on
         // those gets a 400 INVALID_ARGUMENT, so we must omit it.
+        // generationConfig is still present from v0.5.3 onwards
+        // because it carries `temperature`, which IS supported on
+        // every Gemini family.
         let body = build_body(&empty_params("gemini-1.5-pro"));
-        assert!(body.get("generationConfig").is_none());
+        let cfg = body.get("generationConfig").expect("generationConfig present for temperature");
+        assert!(cfg.get("thinkingConfig").is_none(), "thinkingConfig must be absent on legacy");
+        assert!(cfg.get("temperature").is_some(), "temperature must be present");
+
         let body = build_body(&empty_params("gemini-2.0-flash"));
-        assert!(body.get("generationConfig").is_none());
+        let cfg = body.get("generationConfig").expect("generationConfig present for temperature");
+        assert!(cfg.get("thinkingConfig").is_none(), "thinkingConfig must be absent on legacy");
+        assert!(cfg.get("temperature").is_some(), "temperature must be present");
     }
 
     #[test]

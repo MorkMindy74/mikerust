@@ -106,6 +106,14 @@ struct ChatRequest {
     think: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
+    /// 0.5 (v0.5.3+) — tighter sampling than the OpenAI / vLLM /
+    /// Ollama default of 1.0. Determinism matters more than
+    /// creativity in this product (citation lists, structured JSON
+    /// blocks, tool calls all benefit from less-random sampling) —
+    /// see the project memory on user preference for deterministic
+    /// output across all providers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
 }
 
 fn to_wire_messages(system: &str, messages: &[Message]) -> Vec<serde_json::Value> {
@@ -200,6 +208,7 @@ pub async fn stream(
         // `<CITATIONS>` block at 4096 and the frontend ends up with
         // gappy pill rendering. See v0.5.1 hotfix.
         max_tokens: Some(8192),
+        temperature: Some(0.5),
     };
 
     let resp = client
@@ -326,6 +335,7 @@ pub async fn complete(params: StreamParams) -> Result<String> {
         "stream": false,
         "think": false,
         "max_tokens": 512,
+        "temperature": 0.5,
     });
 
     let resp = client

@@ -45,6 +45,11 @@ pub async fn stream(params: StreamParams) -> Result<BoxStream> {
         // production — see v0.5.1 hotfix. Every catalogued Claude
         // model in `config/model.json` supports ≥8192 output.
         "max_tokens": 8192,
+        // 0.5 (v0.5.3+) — tighter sampling than Anthropic's default
+        // of 1.0. Citations + structured JSON blocks + tool calls
+        // all benefit from less-random sampling. Project-wide
+        // setting across all providers.
+        "temperature": 0.5,
         "stream": true,
         "messages": wire_messages,
     });
@@ -175,6 +180,7 @@ pub async fn complete(params: StreamParams) -> Result<String> {
     let mut body = json!({
         "model": params.model,
         "max_tokens": 512,
+        "temperature": 0.5,
         "messages": wire_messages,
     });
     let full_system = params.full_system();

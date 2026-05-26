@@ -13,6 +13,72 @@ diff. For the upstream-sync audit trail (which fixes were ported from
 
 ---
 
+## v0.5.3 — 2026-05-26 (deterministic LLM output + tighter citation contract)
+
+After a real-world test of v0.5.2 surfaced two failure modes — Gemini
+emitting one degenerate citation per attached document with `page=1-3`
+instead of per-passage refs, and irrelevant KB documents leaking into
+chats with 10 explicit attachments — this patch tightens the contract
+across all providers.
+
+### Cross-provider `temperature = 0.5`
+
+Every catalogued provider was running on its API default temperature
+(1.0 for Claude / Gemini / OpenAI, model-defined for Ollama). Citation
+lists + structured `<CITATIONS>` JSON + tool calls all benefit from
+less-random sampling. Set explicitly in [`src/llm/claude.rs`](src/llm/claude.rs),
+[`src/llm/gemini.rs`](src/llm/gemini.rs) (`generationConfig.temperature`,
+which now ships even on legacy 1.5 / 2.0 families that don't accept
+`thinkingConfig` — the test
+`build_body_omits_thinking_config_on_legacy_families` was updated to
+match), and [`src/llm/local.rs`](src/llm/local.rs) (`ChatRequest`
+adds `temperature: Option<f32>`, both stream + complete paths set 0.5).
+
+### Citation contract — 5 new "quality rules"
+
+[`MRUST_SYSTEM_PROMPT`](src/routes/chat.rs) now spells out the failure
+modes we measured in production:
+
+1. EVERY citation must have a non-empty `quote` of ≥15 characters — if
+   you can't anchor a claim to a passage, omit the citation entirely.
+2. NEVER use a page range (`"1-3"`) to mean "the whole document". Page
+   ranges are RESERVED for single sentences spanning a `[[PAGE_BREAK]]`.
+   Without the break marker, `page` MUST be an integer.
+3. PREFER per-passage citations over per-document citations. A 6-page
+   doc supporting 5 distinct claims → 5 citations on 5 different pages,
+   not 1 citation with `page="1-6"`.
+4. When attached documents cover the claim, cite THEM (doc-N). Only
+   cite KB documents (gN / pN) when no attached doc covers the claim
+   — KB pollution into an attachment-heavy chat confuses the user.
+5. If your prose mentions a `[cN]` from a previous turn, RE-EMIT its
+   `<CITATIONS>` entry in the current turn's JSON block. Don't leave
+   the user clicking a dead pill that lives in a stale message.
+
+### Retrieval-pipeline diagnostic clarity
+
+The `[rag][cite-diag] retrieve_kb_chunks ...` log now spells out
+`hyde=ON/OFF` and notes that the **base cosine retrieval always runs**
+regardless of HyDE — HyDE only ADDS a second pass. Removes the
+"flag is off in UI but model still seems to do retrieval" confusion.
+
+### Frontend cross-message citation lookup (shipped in d2621f0)
+
+Already on main since yesterday — when a `[cN]` in the current message
+doesn't have a matching annotation but a previous assistant turn in
+the same chat does, the pill resolves to the older annotation. The
+contract rule (5) above tries to make this fallback unnecessary;
+rule + fallback are belt + suspenders.
+
+### Tests
+
+47 chat unit tests still pass; `routes::chat::tests` suite is green.
+A new `tests/medical_citations_e2e.rs` (shipped in 17354f5) lets us
+measure citation quality OUTSIDE the UI on a fixed 10-PDF medical-legal
+corpus — comparison runs across model / HyDE / prompt versions are
+trivial.
+
+---
+
 ## v0.5.2 — 2026-05-26 (hotfix: v0.5.1 splitter corrupted CITATIONS JSON)
 
 **Regression introduced by v0.5.1**: the new `split_hybrid_citation_brackets`
