@@ -574,15 +574,27 @@ async fn upload_document(
 
         (bin_key, Some(hash), Some(txt_key))
     } else {
-        // Legacy (non-cache) layout: per-user, per-doc-id. No hashing,
-        // no text extraction — the existing pipeline handles those
-        // documents on demand.
+        // Legacy (non-cache) layout: per-user, per-doc-id. Text
+        // extraction still happens lazily in load_document_text (with
+        // file-type-driven extension synthesis). We DO compute the
+        // SHA-256 content hash though — `tabular_reviews` needs it to
+        // dedupe re-uploads of the same content within a single
+        // review (UX policy from 2026-06-06: a row for a file that
+        // matches an existing row by (filename, content_hash) inherits
+        // the existing row's extracted cells instead of re-running
+        // the LLM). Hashing 50 MB takes <100ms; the cost is dwarfed
+        // by upload bandwidth.
         let key = format!("documents/{}/{}", auth.user_id, doc_id);
         storage
             .put(&key, &data, "application/octet-stream")
             .await
             .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
-        (key, None, None)
+        let hash = {
+            let mut hasher = Sha256::new();
+            hasher.update(&data);
+            format!("{:x}", hasher.finalize())
+        };
+        (key, Some(hash), None)
     };
 
     // Resolve domain: explicit field wins; otherwise inherit from the

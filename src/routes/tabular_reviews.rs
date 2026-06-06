@@ -528,14 +528,58 @@ async fn patch_tabular_review(
                 continue;
             }
             let row_id = uuid::Uuid::new_v4().to_string();
+
+            // Dedup against earlier rows in THIS review: if the user
+            // re-uploads a file that is byte-identical and same-named
+            // to one that has already been extracted in this review,
+            // inherit the extracted cells instead of asking the LLM to
+            // do the same work twice. The match key is (filename,
+            // content_hash) per the 2026-06-06 UX policy; rows whose
+            // status is still 'pending' (no extraction attempted) are
+            // ignored — there is nothing to copy from those yet.
+            let dedup: Option<(String, String)> = sqlx::query_as(
+                "SELECT trr.cells, trr.status \
+                 FROM tabular_review_rows trr \
+                 JOIN documents existing_doc ON existing_doc.id = trr.document_id \
+                 JOIN documents new_doc ON new_doc.id = ? \
+                 WHERE trr.tabular_review_id = ? \
+                   AND existing_doc.filename = new_doc.filename \
+                   AND existing_doc.content_hash = new_doc.content_hash \
+                   AND new_doc.content_hash IS NOT NULL \
+                   AND trr.status != 'pending' \
+                 ORDER BY trr.row_index ASC \
+                 LIMIT 1",
+            )
+            .bind(doc_id)
+            .bind(&id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten();
+
+            let (cells, row_status): (String, String) = match dedup {
+                Some((cells, status)) => {
+                    tracing::info!(
+                        "[tabular][dedup] review={} new_doc={} inherits cells (status={}) from earlier row with matching (filename, content_hash)",
+                        id,
+                        doc_id,
+                        status
+                    );
+                    (cells, status)
+                }
+                None => ("[]".to_string(), "pending".to_string()),
+            };
+
             let _ = sqlx::query(
                 "INSERT INTO tabular_review_rows (id, tabular_review_id, document_id, row_index, cells, status) \
-                 VALUES (?, ?, ?, ?, '[]', 'pending')",
+                 VALUES (?, ?, ?, ?, ?, ?)",
             )
             .bind(&row_id)
             .bind(&id)
             .bind(doc_id)
             .bind(idx as i64)
+            .bind(&cells)
+            .bind(&row_status)
             .execute(&state.db)
             .await;
         }

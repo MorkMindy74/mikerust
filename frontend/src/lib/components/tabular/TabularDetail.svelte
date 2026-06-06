@@ -249,7 +249,17 @@
 </script>
 
 <div class="h-full flex flex-col">
-  <div class="max-w-6xl w-full mx-auto px-8 pt-8 pb-3 shrink-0 space-y-4">
+  <!--
+    Width policy: header + table fill the parent container so the grid
+    can use whatever width the window gives us. The container shrinks
+    automatically when the resizable / collapsible doc-viewer panel is
+    open on the right (it lives outside this component's tree and
+    consumes part of the viewport via the same flex parent), and
+    expands edge-to-edge with reasonable padding when it isn't. The
+    historical `max-w-6xl` was a hold-over from the chat layout and
+    wasted horizontal space on wide monitors.
+  -->
+  <div class="w-full mx-auto px-8 pt-8 pb-3 shrink-0 space-y-4">
     <button
       type="button"
       onclick={onback}
@@ -306,7 +316,7 @@
           {/snippet}
         </EmptyState>
       {:else}
-        <div class="max-w-6xl mx-auto border border-(--color-surface-200) rounded-(--radius-md) overflow-auto">
+        <div class="w-full mx-auto border border-(--color-surface-200) rounded-(--radius-md) overflow-auto">
           <table class="w-full border-collapse text-sm">
             <thead>
               <tr class="bg-(--color-surface-50)">
