@@ -31,15 +31,95 @@ export function isFeatureRoute(route: Route): route is FeatureRoute {
   return (FEATURE_ROUTES as readonly string[]).includes(route)
 }
 
+/**
+ * Per-route "drill-down" data that a destination screen can read on
+ * mount to restore a nested view — e.g. the Projects screen opening a
+ * specific project's detail page when the user navigates back from a
+ * chat that was launched from inside that project. Free-form because
+ * each route owns its own restoration shape; today the only field is
+ * `projectId` but new screens can add fields without churn.
+ */
+export type NavContext = {
+  projectId?: string
+}
+
+/**
+ * One "back" target on the navigation stack. `label` is what the
+ * destination screen renders next to its back arrow (e.g.
+ * "Torna a 'Studio 2026'"); when omitted callers should fall back
+ * to the generic Common.back string.
+ */
+export type BackEntry = {
+  route: Route
+  context: NavContext
+  label?: string
+}
+
 function createRouter() {
   let current = $state<Route>('boot')
+  let pending = $state<NavContext>({})
+  let backStack = $state<BackEntry[]>([])
 
   return {
     get current() {
       return current
     },
-    go(route: Route) {
+
+    /**
+     * The top-of-stack back entry, or null if there's nothing to go
+     * back to. Destination screens read this to decide whether to
+     * surface a back button and what label to put on it.
+     */
+    get back(): BackEntry | null {
+      return backStack.length > 0 ? backStack[backStack.length - 1] : null
+    },
+
+    /**
+     * Standard navigation. **Clears the back stack** — the user picked
+     * a sidebar entry / a deep-link directly, so they're starting a
+     * fresh context and any leftover "back" target from an earlier
+     * drill-down is no longer meaningful.
+     */
+    go(route: Route, context: NavContext = {}) {
       current = route
+      pending = context
+      backStack = []
+    },
+
+    /**
+     * Drill-down navigation. Pushes a back entry onto the stack so
+     * the destination screen can offer a way back to the originating
+     * context. Used e.g. by ProjectDetail when the user opens a chat:
+     * the chat lands on Assistant, and Assistant shows a
+     * "Torna a {progetto}" arrow that pops the stack.
+     */
+    goWithReturn(target: Route, targetContext: NavContext, entry: BackEntry) {
+      backStack = [...backStack, entry]
+      current = target
+      pending = targetContext
+    },
+
+    /**
+     * Pop the top back entry and navigate to it, restoring any
+     * `context` the entry carried so the destination can rehydrate
+     * its nested view (e.g. re-open the originating project detail).
+     */
+    popBack() {
+      if (backStack.length === 0) return
+      const entry = backStack[backStack.length - 1]
+      backStack = backStack.slice(0, -1)
+      current = entry.route
+      pending = entry.context
+    },
+
+    /**
+     * Routes read this once on mount and consume it (the call clears
+     * the pending context so it isn't applied twice on rerenders).
+     */
+    consumePending(): NavContext {
+      const ctx = pending
+      pending = {}
+      return ctx
     },
   }
 }

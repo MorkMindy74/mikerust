@@ -1085,6 +1085,9 @@
     "edValidationName": "Adicione pelo menos um nome apresentado.",
     "edValidationCategory": "A categoria é obrigatória."
   },
+  "Nav": {
+    "backToProject": "Voltar a \"{name}\""
+  },
   "Boot": {
     "cannotReach": "Não é possível contactar o backend",
     "cannotReachHint": "Certifique-se de que o backend do MikeRust está em execução. Em desenvolvimento, inicie-o a partir da raiz do repositório com",

@@ -17,6 +17,7 @@
   import ProjectDetail from '$lib/components/projects/ProjectDetail.svelte'
   import { projectStore } from '$lib/stores/projects.svelte'
   import { projectsApi } from '$lib/api/projects'
+  import { router } from '$lib/stores/router.svelte'
   import { toastStore } from '$lib/stores/toast.svelte'
   import { i18n } from '$lib/stores/i18n.svelte'
   import { DOMAINS, domainLabel } from '$lib/types/domain'
@@ -90,6 +91,10 @@
 
   $effect(() => {
     void projectStore.refresh()
+    // Restore a drill-down (e.g. project detail) requested by the
+    // previous screen's back action — see router.NavContext.
+    const ctx = router.consumePending()
+    if (ctx.projectId) detailId = ctx.projectId
   })
 
   const domainOptions = $derived([

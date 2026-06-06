@@ -1103,6 +1103,9 @@
     "serverError": "Server error",
     "unauthorized": "Session expired. Please sign in again."
   },
+  "Nav": {
+    "backToProject": "Back to \"{name}\""
+  },
   "Boot": {
     "cannotReach": "Cannot reach the backend",
     "cannotReachHint": "Make sure the MikeRust backend is running. In dev, launch it from the repo root with",

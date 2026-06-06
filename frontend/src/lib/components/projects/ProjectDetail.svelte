@@ -186,7 +186,21 @@
   // ── conversations ────────────────────────────────────────────────
   function openChat(chatId: string) {
     void chatStore.selectChat(chatId)
-    router.go('assistant')
+    // Drill-down: the chat lives on the Assistant screen, but the
+    // user came from THIS project. Push a back entry so the
+    // Assistant header surfaces a "Torna a {project}" arrow that
+    // routes back to this same project detail when clicked. Without
+    // this the back path landed on the global Projects list — see
+    // the 2026-06-06 nav-consistency directive.
+    router.goWithReturn(
+      'assistant',
+      {},
+      {
+        route: 'projects',
+        context: { projectId: id },
+        label: t('Nav.backToProject', { name: project?.name ?? '' }),
+      },
+    )
   }
   async function newChat() {
     try {

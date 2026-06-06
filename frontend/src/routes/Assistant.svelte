@@ -11,7 +11,8 @@
   import { chatStore, type SendAttachments } from '$lib/stores/chat.svelte'
   import { userStore } from '$lib/stores/user.svelte'
   import { i18n } from '$lib/stores/i18n.svelte'
-  import { ArrowDown } from 'lucide-svelte'
+  import { router } from '$lib/stores/router.svelte'
+  import { ArrowDown, ArrowLeft } from 'lucide-svelte'
 
   const t = (k: string, p?: Record<string, string | number>) => i18n.t(k, p)
 
@@ -50,6 +51,24 @@
 </script>
 
 <div class="flex flex-col h-full">
+  {#if router.back}
+    <!-- Drill-down breadcrumb. The previous screen pushed a back entry
+         (e.g. ProjectDetail.openChat) so the user has a single-click
+         path back to the originating context — not the global sidebar
+         flat-list which would lose where they came from. The label is
+         supplied by the caller (e.g. "Torna a 'Studio 2026'"); falls
+         back to the generic Common.back when omitted. -->
+    <div class="border-b border-(--color-surface-200) px-6 py-2">
+      <button
+        type="button"
+        onclick={() => router.popBack()}
+        class="inline-flex items-center gap-1.5 text-sm text-(--color-text-secondary) hover:text-(--color-text-primary)"
+      >
+        <ArrowLeft size={14} />
+        {router.back.label ?? t('Common.back')}
+      </button>
+    </div>
+  {/if}
   <div class="relative flex-1 min-h-0">
     <div
       bind:this={scroller}

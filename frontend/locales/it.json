@@ -1103,6 +1103,9 @@
     "serverError": "Errore del server",
     "unauthorized": "Sessione scaduta. Effettua di nuovo l'accesso."
   },
+  "Nav": {
+    "backToProject": "Torna a \"{name}\""
+  },
   "Boot": {
     "cannotReach": "Impossibile raggiungere il backend",
     "cannotReachHint": "Assicurati che il backend MikeRust sia in esecuzione. In sviluppo, avvialo dalla radice del repository con",
