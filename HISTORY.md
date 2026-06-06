@@ -13,12 +13,12 @@ diff. For the upstream-sync audit trail (which fixes were ported from
 
 ---
 
-## v0.5.4 — 2026-06-05 (tabular-review FK hotfix + four UX upgrades from the same testing session)
+## v0.5.4 — 2026-06-05 (tabular-review FK hotfix + the UX upgrades and follow-up fixes from the same testing session)
 
 The schema hotfix that triggered this release is the FK on
-`tabular_reviews.workflow_id`; the four UI improvements rolled into
-the same build came out of the same hands-on testing session and ship
-together because they touch the same screens.
+`tabular_reviews.workflow_id`; everything else listed below came out
+of the same hands-on testing session and shipped together because
+they touch the same screens.
 
 ### Schema hotfix — tabular_reviews FK to workflows blocked preset usage
 
@@ -106,6 +106,63 @@ was previously reachable only by drag-and-dropping a `.mikeprj` file
 onto the page. The backend `POST /project/import` endpoint and the
 `ProjectImport.*` i18n catalogue were already complete since v0.4.x
 and didn't need any new code.
+
+### Follow-up — tabular cell extraction for legacy-path uploads
+
+The new picker Upload affordance writes through
+[`/document` `cache=false`](src/routes/documents.rs), the legacy
+storage layout that uses a flat `documents/<user>/<doc_id>` key with
+**no file extension**. Two cascading bugs surfaced once the user
+clicked "Esegui":
+
+1. `load_document_text` in
+   [`tabular_reviews.rs`](src/routes/tabular_reviews.rs) was passing
+   the *storage key* (relative, e.g. `documents/<uid>/<doc>`) to
+   `extract_text_dispatch`. The dispatcher's PDF branch re-opens the
+   file via pdfium — which takes a path, not bytes — so pdfium got a
+   relative path and a missing extension, failed silently, and the
+   row surfaced as "Document text unavailable" in the UI. Fix
+   resolves the key to an absolute path under `STORAGE_PATH` /
+   `default_storage_path` before dispatch.
+2. The dispatcher dispatches on file extension. The legacy key has
+   none, so the catch-all branch returned "format not supported"
+   even after the absolute-path fix. The query now also reads
+   `file_type` from the `documents` row and, when the key has no
+   extension, materialises a sibling on disk with the right suffix
+   (`.pdf`, `.docx`, …). Pdfium then opens it directly and the
+   dispatcher's extension match hits the correct branch.
+
+Exhaustive `[tabular][doc-text]` tracing lines were added at every
+branch (sidecar hit / sidecar miss / storage.get / dispatch result)
+so the next surprise surfaces in the log directly.
+
+### Tabular detail — full-width layout
+
+[`TabularDetail.svelte`](frontend/src/lib/components/tabular/TabularDetail.svelte)
+no longer constrains itself to `max-w-6xl` (~1152 px). Header and
+grid now fill the available container width, so wide monitors stop
+wasting 60%+ of horizontal real estate. The side document-viewer
+panel lives in a separate flex parent and resizes/collapses
+independently — the grid shrinks back when that panel is open and
+expands edge-to-edge when it isn't.
+
+### Tabular row dedup on re-upload
+
+Adding a document that is byte-identical to one already extracted
+in the same review (match key: filename + SHA-256 content_hash) now
+inherits the earlier row's cells + status instead of asking the LLM
+to re-extract them. Rows still in `pending` are ignored — there is
+nothing to copy from those yet. The match runs in the row-insert
+loop of `patch_tabular_review` in
+[`tabular_reviews.rs`](src/routes/tabular_reviews.rs); hits are
+logged as `[tabular][dedup] review=… new_doc=… inherits cells …`.
+
+Prereq lit alongside this feature: the legacy (`cache=false`)
+upload path in
+[`documents.rs`](src/routes/documents.rs) now also computes the
+SHA-256 `content_hash`. Without it the dedup join couldn't match
+anything coming through the new picker Upload affordance. Hashing
+50 MB takes <100 ms — dwarfed by the upload bandwidth.
 
 ---
 
