@@ -55,9 +55,17 @@ export type BackEntry = {
   label?: string
 }
 
+// Frozen sentinel so `consumePending()` can clear the signal without
+// minting a fresh object every call. Without it Svelte sees a NEW `{}`
+// reference on every clear and re-triggers any `$effect` that read the
+// signal — Projects.svelte's mount effect blew up with
+// `effect_update_depth_exceeded` on the first open of the screen
+// (2026-06-06).
+const EMPTY_CONTEXT: NavContext = Object.freeze({})
+
 function createRouter() {
   let current = $state<Route>('boot')
-  let pending = $state<NavContext>({})
+  let pending = $state<NavContext>(EMPTY_CONTEXT)
   let backStack = $state<BackEntry[]>([])
 
   return {
@@ -80,10 +88,10 @@ function createRouter() {
      * fresh context and any leftover "back" target from an earlier
      * drill-down is no longer meaningful.
      */
-    go(route: Route, context: NavContext = {}) {
+    go(route: Route, context: NavContext = EMPTY_CONTEXT) {
       current = route
       pending = context
-      backStack = []
+      if (backStack.length > 0) backStack = []
     },
 
     /**
@@ -115,10 +123,15 @@ function createRouter() {
     /**
      * Routes read this once on mount and consume it (the call clears
      * the pending context so it isn't applied twice on rerenders).
+     *
+     * Uses the frozen `EMPTY_CONTEXT` sentinel to clear, so a caller
+     * who keeps re-reading the signal in a `$effect` doesn't loop —
+     * the second read sees the same reference and Svelte's
+     * shallow-equal check skips the re-trigger.
      */
     consumePending(): NavContext {
       const ctx = pending
-      pending = {}
+      if (pending !== EMPTY_CONTEXT) pending = EMPTY_CONTEXT
       return ctx
     },
   }
