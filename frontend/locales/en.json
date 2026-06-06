@@ -92,6 +92,8 @@
     "semplificaTitle": "Open semplifica.ai in your browser",
     "recentChats": "Recent chats",
     "noChats": "No chats",
+    "recentProjects": "Recent projects",
+    "noProjects": "No projects",
     "search": "Search chats",
     "deleteChat": "Delete chat",
     "deleteChatDisabledActive": "Close this chat first to delete it",

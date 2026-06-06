@@ -25,6 +25,7 @@
   import { authStore } from '$lib/stores/auth.svelte'
   import { userStore } from '$lib/stores/user.svelte'
   import { chatStore } from '$lib/stores/chat.svelte'
+  import { projectStore } from '$lib/stores/projects.svelte'
   import { toastStore } from '$lib/stores/toast.svelte'
   import { i18n } from '$lib/stores/i18n.svelte'
   import { APP_VERSION } from '$lib/stores/app-version.svelte'
@@ -77,6 +78,25 @@
   )
 
   let chatsCollapsed = $state(false)
+  let projectsCollapsed = $state(false)
+
+  // "Recently active" surrogate: the top 5 by `updated_at` from the
+  // global project list. The store loads the full list once on
+  // sidebar mount (see $effect below) and reuses it elsewhere, so no
+  // extra round-trip per render.
+  const recentProjects = $derived(
+    [...projectStore.items]
+      .sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1))
+      .slice(0, 5)
+  )
+
+  $effect(() => {
+    // Refresh once on shell mount so the accordion has content even
+    // if the user hasn't visited the Projects screen yet. Cheap call
+    // (single SELECT); the store dedupes if a refresh is already in
+    // flight.
+    void projectStore.refresh()
+  })
   let deleteChatTarget = $state<{ id: string; title: string | null } | null>(null)
   let renamingChatId = $state<string | null>(null)
   let renameValue = $state('')
@@ -215,6 +235,42 @@
             {#snippet icon()}<entry.icon size={16} />{/snippet}
           </SidebarItem>
         {/each}
+      </div>
+
+      <!-- collapsible recent-projects list — top 5 by updated_at -->
+      <div class="shrink-0 flex flex-col mt-2 border-t border-(--color-surface-200)">
+        <button
+          type="button"
+          onclick={() => (projectsCollapsed = !projectsCollapsed)}
+          class="flex items-center gap-1 px-3 h-8 shrink-0 text-xs font-medium uppercase
+                 tracking-wide text-(--color-text-secondary)
+                 hover:text-(--color-text-primary) focus:outline-none"
+        >
+          {#if projectsCollapsed}<ChevronRight size={13} />{:else}<ChevronDown size={13} />{/if}
+          {i18n.t('Sidebar.recentProjects')}
+        </button>
+
+        {#if !projectsCollapsed}
+          <div class="px-2 pb-2 flex flex-col gap-0.5">
+            {#each recentProjects as p (p.id)}
+              <button
+                type="button"
+                onclick={() => router.go('projects', { projectId: p.id })}
+                class="flex items-center gap-2 px-2.5 h-8 rounded-(--radius-md) text-left text-sm
+                       focus:outline-none text-(--color-text-secondary)
+                       hover:bg-(--color-hover-bg) hover:text-(--color-text-primary)"
+              >
+                <FolderKanban size={13} class="shrink-0" />
+                <span class="truncate">{p.name}</span>
+              </button>
+            {/each}
+            {#if recentProjects.length === 0}
+              <p class="text-xs text-(--color-text-disabled) px-2.5 py-2">
+                {i18n.t('Sidebar.noProjects')}
+              </p>
+            {/if}
+          </div>
+        {/if}
       </div>
 
       <!-- collapsible chat list -->
