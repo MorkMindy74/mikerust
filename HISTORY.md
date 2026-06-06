@@ -164,6 +164,89 @@ SHA-256 `content_hash`. Without it the dedup join couldn't match
 anything coming through the new picker Upload affordance. Hashing
 50 MB takes <100 ms — dwarfed by the upload bandwidth.
 
+### "Nuova revisione" inside a project + clickable review rows
+
+Parity with the existing "Nuova chat" button on the Conversazioni
+tab. [`ProjectDetail.svelte`](frontend/src/lib/components/projects/ProjectDetail.svelte)
+gains an inline create-review modal that lists tabular workflows
+scoped to the project's own domain, inherits `project_id` + the
+project's domain on submit, and drills straight into the new
+review's extraction grid via a new `openReviewId` state. Existing
+review rows on the project's *Revisioni tabellari* tab are also
+clickable now and open inline. The standalone Tabular route keeps
+its own `detailId` logic for use from the sidebar; the
+project-originating path is owned by `ProjectDetail` so the back
+button returns to the project, not to the standalone Revisioni
+tabellari screen.
+
+### Scope-correct doc picker in tabular reviews
+
+User-reported on 2026-06-06: the "Aggiungi documenti" modal of a
+tabular review listed every document the user had ever uploaded
+anywhere — including chat attachments from other domains and other
+projects.
+[`TabularDetail`](frontend/src/lib/components/tabular/TabularDetail.svelte)
+now filters its list against the review's own context:
+
+  * `domain == review.domain` — always.
+  * If the review is project-scoped, the project's `isolation_mode`
+    drives the rest:
+      - **rigoroso** (`strict`) → only docs whose `project_id`
+        matches the review's project.
+      - **condiviso** (`shared`) → project docs plus globals
+        (`project_id IS NULL`, i.e. synced-folder uploads and
+        standalone uploads).
+  * Otherwise (no project on the review) → only globals.
+
+Backend `GET /document` now returns each doc's `project_id` so the
+filter can run client-side without an extra round-trip. The
+picker's Upload affordance inherits the review's `project_id` on
+new uploads so a doc added through a strict-scope picker stays
+visible in that same picker afterwards instead of vanishing into
+the global pool.
+
+### Generic router back-stack — drill-downs return to where the user came from
+
+Directive from 2026-06-06: "la coerenza di navigazione deve essere
+applicata a tutti i contesti, chat, workflow, tabular, ecc." Back
+from a drilled-in view must always return to the originating
+screen, not to the destination's natural sidebar parent. The
+TabularDetail-inside-ProjectDetail fix from earlier on the same
+day addressed the tabular-from-project path inline; this generalises
+the mechanism so any caller can add a return target with two lines.
+
+[`router.svelte.ts`](frontend/src/lib/stores/router.svelte.ts) now
+exposes:
+
+  * `NavContext` — free-form per-route restoration data. Today the
+    only field is `projectId`; new screens add fields without churn.
+  * `BackEntry` — `{ route, context, label? }` on a stack.
+  * `goWithReturn(target, ctx, entry)` — drill-down navigation;
+    pushes an entry onto the stack so the destination screen has a
+    way back.
+  * `popBack()` — destination's back arrow calls this.
+  * `consumePending(): NavContext` — destination reads it on mount
+    and the call clears it so it isn't applied twice on rerenders.
+  * `go()` now clears the back stack — sidebar entries (which call
+    `go`) are "switch context", not "drill".
+
+First consumer wired:
+[`ProjectDetail.openChat`](frontend/src/lib/components/projects/ProjectDetail.svelte)
+uses `goWithReturn('assistant', {}, { route: 'projects', context:
+{ projectId: id }, label: t('Nav.backToProject', { name: project.name }) })`
+instead of `router.go('assistant')`.
+[`Assistant.svelte`](frontend/src/routes/Assistant.svelte) renders
+a `← {router.back.label}` arrow at the top whenever `router.back`
+is non-null.
+[`Projects.svelte`](frontend/src/routes/Projects.svelte)'s mount
+`$effect` consumes the pending context and, if it carries a
+`projectId`, opens that project's detail directly — restoring the
+exact place the user was.
+
+New i18n key `Nav.backToProject` localised in all six locales.
+Extending the mechanism to any future drill-down (Workflow editor,
+DOCX template editor, …) is two lines per call-site.
+
 ---
 
 ## v0.5.3 — 2026-06-05 (hotfix — Gemini 3.5 parallel-tool-call accumulator)
