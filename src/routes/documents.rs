@@ -366,7 +366,7 @@ async fn list_documents(
 
     let mut sql = String::from(
         "SELECT id, filename, file_type, size_bytes, status, created_at, domain, \
-                project_folder_id \
+                project_folder_id, project_id \
          FROM documents WHERE user_id = ?",
     );
     if q.project_id.is_some() {
@@ -379,7 +379,17 @@ async fn list_documents(
 
     let mut query = sqlx::query_as::<
         _,
-        (String, String, String, i64, Option<String>, String, String, Option<String>),
+        (
+            String,
+            String,
+            String,
+            i64,
+            Option<String>,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+        ),
     >(&sql)
     .bind(&auth.user_id);
     if let Some(pid) = &q.project_id {
@@ -395,11 +405,12 @@ async fn list_documents(
 
     let docs: Vec<Value> = rows
         .into_iter()
-        .map(|(id, filename, file_type, size, status, created_at, domain, project_folder_id)| {
+        .map(|(id, filename, file_type, size, status, created_at, domain, project_folder_id, project_id)| {
             json!({ "id": id, "filename": filename, "file_type": file_type,
                     "size_bytes": size, "status": status,
                     "domain": domain, "created_at": created_at,
-                    "project_folder_id": project_folder_id })
+                    "project_folder_id": project_folder_id,
+                    "project_id": project_id })
         })
         .collect();
 

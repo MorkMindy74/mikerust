@@ -14,6 +14,7 @@
   import Checkbox from '$lib/components/ui/Checkbox.svelte'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import ProjectFolderTree from './ProjectFolderTree.svelte'
+  import TabularDetail from '$lib/components/tabular/TabularDetail.svelte'
   import { projectsApi } from '$lib/api/projects'
   import { chatApi } from '$lib/api/chat'
   import { tabularApi } from '$lib/api/tabular'
@@ -49,6 +50,12 @@
   let chatsRefreshing = $state(false)
   let reviews = $state<TabularReview[]>([])
   let reviewsLoaded = $state(false)
+  // Reviews drilled in from this project page stay INSIDE the project
+  // shell so the back button returns the user to the project, not to
+  // the standalone Tabular screen (which would lose the project
+  // context they came from). This is the same trick Tabular.svelte
+  // uses with its own `detailId`, just owned here.
+  let openReviewId = $state<string | null>(null)
 
 
   // ── load ─────────────────────────────────────────────────────────
@@ -136,10 +143,10 @@
       toastStore.success(t('TabularReviews.createdToast'))
       createReviewOpen = false
       // Refresh the project-scoped list and drill straight into the
-      // new review on the standalone Tabular screen.
+      // new review WITHOUT leaving the project shell — see
+      // `openReviewId` above for the rationale.
       await loadReviews()
-      tabularStore.selectDetail(created.id)
-      router.go('tabular')
+      openReviewId = created.id
     } catch (e) {
       createReviewError = e instanceof ApiError ? e.detail : (e as Error).message
     } finally {
@@ -219,6 +226,17 @@
 
 </script>
 
+{#if openReviewId}
+  <!-- Tabular review drilled in from this project — owned here so the
+       back arrow returns to the project page instead of the standalone
+       Revisioni tabellari screen. -->
+  <TabularDetail id={openReviewId} onback={() => {
+    openReviewId = null
+    // The detail screen may have mutated row counts / cells; refetch
+    // so the project's review list reflects them on return.
+    void loadReviews()
+  }} />
+{:else}
 <div class="max-w-4xl mx-auto p-8 space-y-5">
   <button
     type="button"
@@ -333,10 +351,7 @@
             <li>
               <button
                 type="button"
-                onclick={() => {
-                  tabularStore.selectDetail(r.id)
-                  router.go('tabular')
-                }}
+                onclick={() => (openReviewId = r.id)}
                 class="w-full flex items-center gap-3 px-4 py-2.5 text-left
                        bg-(--color-surface-0) border border-(--color-surface-200) rounded-(--radius-md)
                        hover:border-(--color-surface-300)"
@@ -354,6 +369,7 @@
     {/if}
   {/if}
 </div>
+{/if}
 
 <!-- export modal -->
 <Modal bind:open={exportOpen} title={t('ProjectExport.title')} size="md">

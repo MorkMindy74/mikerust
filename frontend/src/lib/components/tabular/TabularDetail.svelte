@@ -15,6 +15,7 @@
   import type { PickerItem } from '$lib/components/ui/PickerModal.svelte'
   import { tabularApi, streamGenerate } from '$lib/api/tabular'
   import { documentsApi } from '$lib/api/documents'
+  import { projectsApi } from '$lib/api/projects'
   import { docViewer } from '$lib/stores/doc-viewer.svelte'
   import { toastStore } from '$lib/stores/toast.svelte'
   import { i18n } from '$lib/stores/i18n.svelte'
@@ -142,13 +143,56 @@
   let hasUploadedThisSession = $state(false)
 
   async function refreshPickerItems() {
-    const r = await documentsApi.list()
-    pickerItems = r.documents.map((d) => ({
+    // Doc visibility policy in a tabular-review picker:
+    //   1. domain must match the review's domain — a "medico" review
+    //      never lists "legal" docs and vice versa.
+    //   2. if the review is project-scoped:
+    //        - rigoroso ("strict")  → only docs that belong to that
+    //          project (`project_id === review.project_id`)
+    //        - condiviso ("shared") → project docs + globals
+    //          (`project_id IS NULL`, which is what synced-folder
+    //          uploads and standalone uploads carry)
+    //      The project's isolation_mode is what drives the choice;
+    //      we fetch it once per picker open (cached via projectCache
+    //      across this component's lifetime).
+    //   3. if the review has no project, only globals show up.
+    // This stops the picker from surfacing every doc the user has
+    // ever attached to any chat in any domain — the previous
+    // behaviour the user reported on 2026-06-06.
+    const dom = review?.domain
+    const r = await documentsApi.list(dom ? { domain: dom } : undefined)
+    const reviewProjectId = review?.project_id ?? null
+
+    let scopeMode: 'shared' | 'strict' = 'shared'
+    if (reviewProjectId) {
+      const p =
+        projectCache[reviewProjectId] ??
+        (await projectsApi.get(reviewProjectId).catch(() => null))
+      if (p) {
+        projectCache[reviewProjectId] = p
+        scopeMode = p.isolation_mode ?? 'shared'
+      }
+    }
+
+    const filtered = r.documents.filter((d) => {
+      const dpid = d.project_id ?? null
+      if (reviewProjectId) {
+        if (scopeMode === 'strict') return dpid === reviewProjectId
+        return dpid === reviewProjectId || dpid === null
+      }
+      return dpid === null
+    })
+
+    pickerItems = filtered.map((d) => ({
       id: d.id,
       label: d.filename,
       sublabel: d.file_type,
     }))
   }
+
+  // Light per-instance cache so a back-to-back open of the picker
+  // doesn't refetch the same project. Cleared with the component.
+  const projectCache: Record<string, Awaited<ReturnType<typeof projectsApi.get>>> = {}
 
   async function openPicker() {
     pickerOpen = true
@@ -181,7 +225,14 @@
       // file synchronously; running uploads in parallel just spikes
       // CPU on the embedding worker without finishing sooner.
       for (const f of files) {
-        const doc = await documentsApi.upload(f, { domain: review?.domain })
+        const doc = await documentsApi.upload(f, {
+          domain: review?.domain,
+          // Inherit the review's project so an upload made through the
+          // review's picker stays visible under the strict ("rigoroso")
+          // scope of that same project. Falls back to global (no
+          // project_id) when the review isn't project-bound.
+          projectId: review?.project_id ?? undefined,
+        })
         uploadedIds.push(doc.id)
       }
       await refreshPickerItems()
