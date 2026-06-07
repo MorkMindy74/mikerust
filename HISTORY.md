@@ -13,6 +13,72 @@ diff. For the upstream-sync audit trail (which fixes were ported from
 
 ---
 
+## v0.5.5 — 2026-06-07 (stable consolidation of the v0.5.4 amendment cycle)
+
+Stable promotion of everything that landed during the v0.5.4
+hands-on testing cycle. The v0.5.4 tag was force-rewritten a few
+times as fixes were appended (back-stack regressions, untrack
+boundaries, export-shape gaps, tabular review rename); v0.5.5 marks
+the end of that iteration with a clean, non-rewritten tag.
+
+In addition to consolidating the v0.5.4 work (citation pipeline,
+tabular UX bundle, generic navigation back-stack, sidebar
+"Progetti recenti", PickerModal select-all, per-row project Export,
+nav-tick + untrack fixes), v0.5.5 also includes the final polish
+landed during the same cycle:
+
+### Closed `.mikeprj` export-shape gaps
+
+The v0.5.4 audit ([HISTORY v0.5.4 "Known gaps"](#v054--2026-06-05))
+called out several fields the exporter wasn't reading or was
+reading-and-discarding. All fixed in v0.5.5:
+
+* [`ProjectRecord`](src/mikeprj/manifest.rs) gains `domain` and
+  `isolation_mode`. The recipient lands on the same domain filter
+  and retrieval-scope mode the source project had instead of falling
+  back to defaults.
+* [`DocumentRecord`](src/mikeprj/manifest.rs) gains `domain`,
+  `project_folder_id` (as a path hint — folder-tree rebuild on the
+  recipient side is its own change, tracked separately), and the
+  accept/reject decision tuple from migration 0029
+  (`decision`, `decision_reason`, `decision_summary`).
+  `content_hash` is rehydrated on import from the manifest's
+  `sha256` so the recipient's tabular dedup-by-hash works on the
+  first re-upload, not only after a manual re-hash.
+* [`TabularReviewRecord`](src/mikeprj/manifest.rs) gains `domain`
+  (review-level — can diverge from the project's).
+* [`WorkflowRecord`](src/mikeprj/manifest.rs) gains `domain`. The
+  exporter also stops hard-coding `type = "assistant"` and
+  discarding `columns_config` — a custom tabular workflow finally
+  travels intact.
+
+All new fields are `Option<…>` with `#[serde(default)]` so archives
+produced by the v0.5.4 pre-amendment exporter still deserialise
+cleanly; two new tests
+([`document_record_roundtrips_pre_v054_archives`](src/mikeprj/manifest.rs),
+[`project_record_roundtrips_pre_v054_archives`](src/mikeprj/manifest.rs))
+pin the back-compat behaviour. 21/21 mikeprj tests green.
+
+### Tabular reviews — per-row Pencil rename
+
+The Revisioni tabellari list view ([`Tabular.svelte`](frontend/src/routes/Tabular.svelte))
+gains a Pencil icon between the domain Badge and the Trash on every
+row — parity with the Projects-list rename affordance. Opens a
+small inline modal with the current title pre-filled, Enter
+submits, Escape cancels, Save is disabled when the input is empty
+or unchanged. Reuses the existing `PATCH /tabular-review/:id`
+endpoint (which already accepted `title`). New i18n keys
+`TabularReviews.renameReview` and `TabularReviews.renamedToast`
+localised in all six locales.
+
+### No new schema migration
+
+Schema unchanged from v0.5.4 (still at migration 0031). All v0.5.5
+changes are application-level. v0.5.4 installs upgrade to v0.5.5
+by installing the new MSI on top — no DB step.
+
+---
+
 ## v0.5.4 — 2026-06-05 (tabular-review FK hotfix + the UX upgrades and follow-up fixes from the same testing session)
 
 The schema hotfix that triggered this release is the FK on
