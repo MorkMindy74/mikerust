@@ -5,6 +5,8 @@
  * is a desktop shell, not a website. Pre-unlock routes (boot/setup/
  * unlock) precede the authenticated feature routes.
  */
+import { untrack } from 'svelte'
+
 export type Route =
   | 'boot'
   | 'setup'
@@ -114,10 +116,20 @@ function createRouter() {
      * drill-down is no longer meaningful.
      */
     go(route: Route, context: NavContext = EMPTY_CONTEXT) {
-      current = route
-      pending = context
-      navTick++
-      if (backStack.length > 0) backStack = []
+      // Wrap mutations in `untrack` so callers running inside a
+      // `$effect` body (App.svelte calls `router.go('boot')` from its
+      // boot `$effect` for example) don't accidentally subscribe to
+      // `navTick` or `backStack` via the read-modify-write under the
+      // `++` and the `length` check. Without it the boot effect
+      // re-fires every navigation — infinite loop on startup,
+      // surfaced 2026-06-07 as `effect_update_depth_exceeded` before
+      // the unlock screen could render.
+      untrack(() => {
+        current = route
+        pending = context
+        navTick = navTick + 1
+        if (backStack.length > 0) backStack = []
+      })
     },
 
     /**
@@ -128,10 +140,12 @@ function createRouter() {
      * "Torna a {progetto}" arrow that pops the stack.
      */
     goWithReturn(target: Route, targetContext: NavContext, entry: BackEntry) {
-      backStack = [...backStack, entry]
-      current = target
-      pending = targetContext
-      navTick++
+      untrack(() => {
+        backStack = [...backStack, entry]
+        current = target
+        pending = targetContext
+        navTick = navTick + 1
+      })
     },
 
     /**
@@ -140,12 +154,14 @@ function createRouter() {
      * its nested view (e.g. re-open the originating project detail).
      */
     popBack() {
-      if (backStack.length === 0) return
-      const entry = backStack[backStack.length - 1]
-      backStack = backStack.slice(0, -1)
-      current = entry.route
-      pending = entry.context
-      navTick++
+      untrack(() => {
+        if (backStack.length === 0) return
+        const entry = backStack[backStack.length - 1]
+        backStack = backStack.slice(0, -1)
+        current = entry.route
+        pending = entry.context
+        navTick = navTick + 1
+      })
     },
 
     /**
