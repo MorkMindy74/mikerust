@@ -78,12 +78,6 @@ pub fn build_local_config(
         } else {
             requested_model
         },
-        // Secure mode only applies to the `local:` provider — the
-        // openai: and mistral: cloud branches don't read this flag.
-        // Setting it on those is a no-op (the enforcement guards in
-        // src/llm/local.rs only fire when the request is actually
-        // routed to a local Ollama endpoint).
-        secure_mode: model.starts_with("local:") && s.local_secure_mode,
     })
 }
 

@@ -153,16 +153,6 @@ pub struct LocalConfig {
     pub base_url: String,
     pub api_key: Option<String>,
     pub model: String,
-    /// "Modalità sicura locale" — when true, the local provider
-    /// refuses any base_url that isn't loopback and any model id that
-    /// isn't on the curated allowlist in
-    /// [`crate::llm::ollama_manager::CURATED_MODELS`]. It also
-    /// prepends a no-thinking preamble to the system prompt as a
-    /// belt-and-braces safety net for any model that wasn't created
-    /// via Mike's Modelfile derivation. Default false on installs
-    /// without the v0.5.6 migration (the migration ALTER TABLE pins
-    /// the default to 0).
-    pub secure_mode: bool,
 }
 
 pub struct StreamParams {

@@ -170,19 +170,6 @@ percent-encoding = "2"
 futures-util = "0.3"
 tokio-stream = "0.1"
 bytes = "1"
-# Ollama client — used by the "Modalità sicura locale" plug-and-play
-# flow in src/llm/ollama_manager.rs to probe Ollama, list installed
-# models, stream `pull` progress, and create the curated `mike-…-fast`
-# variants from inline Modelfiles. Talks to the same loopback Ollama
-# the rest of the local provider hits (default
-# http://localhost:11434).
-ollama-rs = { version = "0.3", features = ["stream"] }
-# Idiomatic `async { yield … }` syntax for the ensure_curated streaming
-# helper. ollama-rs has no opinion on how callers shape its output
-# stream; `async-stream` lets us turn a sequential `pull → create`
-# imperative flow into a single `Stream<Item = EnsureEvent>` that the
-# SSE route can forward verbatim.
-async-stream = "0.3"
 
 # ------------------------------------------------------------------
 # Bulk-archive decoding — DILA OPENDATA + future BOE/GU/Gesetze
