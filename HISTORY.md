@@ -247,6 +247,99 @@ New i18n key `Nav.backToProject` localised in all six locales.
 Extending the mechanism to any future drill-down (Workflow editor,
 DOCX template editor, …) is two lines per call-site.
 
+#### Same-route re-navigation + Svelte 5 reactivity traps
+
+Two follow-up fixes needed to make the back-stack robust:
+
+1. **navTick** — clicking a *different* project in the new sidebar
+   accordion while already on the Projects screen did nothing,
+   because `router.go('projects', { projectId: X })` short-circuited
+   on `current === 'projects'` and the destination `$effect` never
+   re-fired. The router now exposes a monotonic `navTick` (bumped
+   by `go` / `goWithReturn` / `popBack`). `Projects.svelte`
+   dereferences it (`void router.navTick`) so the effect re-runs on
+   every navigation, regardless of whether `current` changed.
+2. **untrack on mutations** — wrapping `navTick++` and
+   `backStack.length` checks inside an `$effect` body subscribed
+   the caller to those signals via the read-modify-write, then the
+   write re-triggered the caller. App.svelte's boot effect hit this
+   immediately, producing `effect_update_depth_exceeded` before the
+   unlock screen could render. Every mutating router method now
+   wraps its body in `untrack(() => …)` so reads inside don't
+   subscribe the caller; downstream consumers that explicitly read
+   `navTick` (Projects.svelte) still subscribe and re-fire on
+   navigation, because the write itself is observable across
+   untrack boundaries.
+
+### Sidebar "Progetti recenti" accordion
+
+[`Shell.svelte`](frontend/src/routes/Shell.svelte) gains a
+collapsible "Progetti recenti" section between the tool nav and the
+existing "Chat recenti" accordion. Lists the top 5 projects by
+`updated_at` DESC. Click → `router.go('projects', { projectId: p.id })`
+and the consumePending mechanism drills straight into that project's
+detail. The store is refreshed once on Shell mount so the accordion
+is populated even before the user visits the Projects screen.
+
+New i18n keys `Sidebar.recentProjects` and `Sidebar.noProjects`
+localised in all six locales.
+
+### PickerModal select-all / deselect-all toggle
+
+[`PickerModal`](frontend/src/lib/components/ui/PickerModal.svelte)
+in multi-select mode now exposes a small toggle bar between the
+search input and the list. Visible only when there's more than one
+visible row. Selection scope is the **visible** (search + filter
+applied) set so the user can select-all on a search-filtered subset
+without disturbing selections outside it; the label flips to
+"Deseleziona tutti" once every visible row is in the selection — a
+familiar three-state pattern without a dedicated indeterminate UI.
+A live "{n} selezionati" counter sits on the left of the same row.
+
+New i18n keys `PickerModal.{selectAll, deselectAll, selectedCount}`
+localised in all six locales. The component's local `t` helper now
+forwards a params record so the count interpolation works.
+
+### Per-row Export button on the Projects list
+
+[`Projects.svelte`](frontend/src/routes/Projects.svelte) gains a
+Download icon between the rename and delete affordances on every
+project row. Opens the existing email-prompt + include-chats modal
+previously only reachable from inside a project's detail page.
+
+Reuses the entire backend chain: `POST /project/:id/export` →
+[`mikeprj::io::build_payload`](src/mikeprj/io.rs) → ZIP →
+[`mikeprj::crypto::seal`](src/mikeprj/crypto.rs) (AES-256-GCM with
+an Argon2id-derived key from the recipient email; file format
+documented in [`src/mikeprj/mod.rs`](src/mikeprj/mod.rs)).
+
+The `.mikeprj` payload includes:
+
+* project metadata (name, cm_number, created_at);
+* document binaries via `storage.get(storage_path)` plus the
+  documents' metadata (filename, file_type, size_bytes, sha256,
+  created_at);
+* tabular reviews — **configuration only** (id, title,
+  `columns_config`); the extracted cells do NOT travel and the
+  recipient re-runs the extraction;
+* custom user workflows (built-in presets resolve by id on the
+  recipient side);
+* chats with full message history when the export's
+  `include_chats` toggle is on (default off).
+
+NOT included by design: extracted-text caches, embeddings, the
+chat-attachment hash pool, API keys, MCP server configurations.
+
+**Known gaps in the current export shape** (intentional or oversight,
+documented for transparency — fixes shipped in a follow-up): the
+SELECT in `build_payload` doesn't read the project's `domain` or
+`isolation_mode`, the workflows query hard-codes `type =
+"assistant"` and discards `columns_config` (so tabular custom
+workflows arrive monchi), `documents.project_folder_id` and the
+per-chat decision state aren't carried, and `content_hash` isn't
+re-emitted (the recipient's dedup-by-hash works only after a
+re-upload). See the next entry once it lands.
+
 ---
 
 ## v0.5.3 — 2026-06-05 (hotfix — Gemini 3.5 parallel-tool-call accumulator)
