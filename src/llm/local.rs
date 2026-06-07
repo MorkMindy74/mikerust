@@ -9,6 +9,22 @@ use std::collections::VecDeque;
 use super::types::{Message, Role, StreamEvent, StreamParams, ToolCall};
 use crate::llm::{strip_model_prefix, BoxStream};
 
+/// True when `base` (already normalised via [`normalize_base`]) points
+/// at one of the loopback aliases. Used by the secure-mode guard in
+/// [`resolve_endpoint`] to refuse any base URL that could route off
+/// the machine. We accept `localhost`, `127.0.0.1` and `[::1]`
+/// (IPv6) so a user's `/etc/hosts` quirk or IPv6-only stack doesn't
+/// trip the check — those are still loopback by definition.
+fn is_loopback_url(base: &str) -> bool {
+    let lc = base.to_ascii_lowercase();
+    lc.starts_with("http://localhost")
+        || lc.starts_with("http://127.0.0.1")
+        || lc.starts_with("http://[::1]")
+        || lc.starts_with("https://localhost")
+        || lc.starts_with("https://127.0.0.1")
+        || lc.starts_with("https://[::1]")
+}
+
 /// Normalize a base URL for OpenAI-compatible requests.
 /// Accepts both "https://host" and "https://host/v1" forms — appends `/v1`
 /// when the user-supplied URL doesn't already include a versioned suffix.
@@ -30,13 +46,43 @@ fn normalize_base(url: &str) -> String {
 
 fn resolve_endpoint(params: &StreamParams) -> Result<(String, String, String)> {
     if let Some(cfg) = &params.local_config {
-        let base = normalize_base(&cfg.base_url);
+        let mut base = normalize_base(&cfg.base_url);
         let key = cfg.api_key.clone().unwrap_or_else(|| "local".to_string());
-        let model = if cfg.model.is_empty() {
+        let mut model = if cfg.model.is_empty() {
             strip_model_prefix(&params.model).to_string()
         } else {
             cfg.model.clone()
         };
+
+        // Modalità sicura locale: refuse any base URL that isn't
+        // loopback, and any model id that isn't on the curated
+        // allowlist. The frontend Settings UI prevents this from
+        // happening interactively (URL field is locked, model is a
+        // select restricted to the curated entries) but a stale
+        // local_config row in the DB could still slip past — fail
+        // closed here.
+        if cfg.secure_mode {
+            if !is_loopback_url(&base) {
+                return Err(anyhow!(
+                    "Modalità sicura locale attiva: il provider locale può puntare \
+                     solo a localhost (URL ricevuto: {base})."
+                ));
+            }
+            if !crate::llm::ollama_manager::CURATED_MODELS
+                .iter()
+                .any(|m| m.id == model)
+            {
+                return Err(anyhow!(
+                    "Modalità sicura locale attiva: il modello `{model}` non è \
+                     nell'allowlist dei modelli curati."
+                ));
+            }
+            // Snap the URL to the canonical loopback form so logs /
+            // traces don't show "127.0.0.1" vs "localhost" mismatches.
+            base = format!("{}/v1", crate::llm::ollama_manager::SECURE_BASE_URL);
+            // `model` already validated above; leave it as-is.
+            let _ = &mut model; // (no-op, suppress unused_assignments)
+        }
         return Ok((base, key, model));
     }
     // Legacy env-var path
@@ -116,6 +162,32 @@ struct ChatRequest {
     temperature: Option<f32>,
 }
 
+/// Compose the effective system prompt for a local call. When the
+/// user is in secure mode this prepends the no-think preamble before
+/// `params.full_system()` so any model that wasn't created via Mike's
+/// Modelfile (older Modelfile, stale ollama variant, …) still gets
+/// the "no chain-of-thought" instruction at the top of its system
+/// block. The curated `mike-…-fast` variants get this twice (once
+/// from their Modelfile SYSTEM, once from here) — harmless overlap,
+/// the model just reads the instruction first.
+fn effective_system(params: &StreamParams) -> String {
+    let base = params.full_system();
+    let secure = params
+        .local_config
+        .as_ref()
+        .map(|c| c.secure_mode)
+        .unwrap_or(false);
+    if secure {
+        format!(
+            "{}{}",
+            crate::llm::ollama_manager::no_think_preamble(),
+            base
+        )
+    } else {
+        base
+    }
+}
+
 fn to_wire_messages(system: &str, messages: &[Message]) -> Vec<serde_json::Value> {
     let mut out = Vec::new();
     if !system.is_empty() {
@@ -185,7 +257,7 @@ pub async fn stream(
     tracing::info!("[llm/local] stream → base={base}, model={model}, key_present={}", !api_key.is_empty() && api_key != "local");
     let client = reqwest::Client::new();
 
-    let messages = to_wire_messages(&params.full_system(), &params.messages);
+    let messages = to_wire_messages(&effective_system(&params), &params.messages);
     let tools = if params.tools.is_empty() {
         None
     } else {
@@ -328,7 +400,7 @@ pub async fn complete(params: StreamParams) -> Result<String> {
     tracing::info!("[llm/local] complete → base={base}, model={model}, key_present={}", !api_key.is_empty() && api_key != "local");
     let client = reqwest::Client::new();
 
-    let messages = to_wire_messages(&params.full_system(), &params.messages);
+    let messages = to_wire_messages(&effective_system(&params), &params.messages);
     let body = json!({
         "model": model,
         "messages": messages,
@@ -382,6 +454,112 @@ pub async fn complete(params: StreamParams) -> Result<String> {
 mod tests {
     use super::*;
     use crate::llm::types::StreamEvent;
+
+    fn params_with_local(
+        base_url: &str,
+        model: &str,
+        secure_mode: bool,
+    ) -> StreamParams {
+        StreamParams {
+            model: model.to_string(),
+            system_prompt: "you are mike".into(),
+            system_volatile: String::new(),
+            messages: vec![Message::user("hi".to_string())],
+            tools: vec![],
+            max_iterations: 1,
+            enable_thinking: false,
+            local_config: Some(crate::llm::types::LocalConfig {
+                base_url: base_url.to_string(),
+                api_key: None,
+                model: model.to_string(),
+                secure_mode,
+            }),
+            claude_api_key: None,
+            gemini_api_key: None,
+            gemini_region: None,
+        }
+    }
+
+    #[test]
+    fn loopback_url_classification() {
+        for ok in &[
+            "http://localhost/v1",
+            "http://127.0.0.1:11434/v1",
+            "http://[::1]:11434/v1",
+            "https://localhost:8443/v1",
+        ] {
+            assert!(is_loopback_url(ok), "expected loopback: {ok}");
+        }
+        for bad in &[
+            "http://192.168.1.10:11434/v1",
+            "http://10.0.0.5/v1",
+            "https://ollama.example.com/v1",
+            "http://my-laptop.local:11434/v1",
+        ] {
+            assert!(!is_loopback_url(bad), "expected NOT loopback: {bad}");
+        }
+    }
+
+    #[test]
+    fn secure_mode_rejects_non_loopback_url() {
+        let p = params_with_local(
+            "https://ollama.example.com",
+            "mike-qwen35-4b-fast",
+            true,
+        );
+        let err = resolve_endpoint(&p).unwrap_err();
+        assert!(
+            err.to_string().contains("Modalità sicura"),
+            "secure-mode guard must mention itself in the error (got {err})"
+        );
+    }
+
+    #[test]
+    fn secure_mode_rejects_uncurated_model() {
+        let p = params_with_local("http://localhost:11434", "qwen2.5:7b", true);
+        let err = resolve_endpoint(&p).unwrap_err();
+        assert!(err.to_string().contains("allowlist"), "got: {err}");
+    }
+
+    #[test]
+    fn secure_mode_accepts_curated_model_on_loopback() {
+        let p = params_with_local(
+            "http://localhost:11434",
+            "mike-gemma4-e2b-fast",
+            true,
+        );
+        let (base, _key, model) = resolve_endpoint(&p).unwrap();
+        // Base URL is snapped to the canonical loopback form.
+        assert!(base.starts_with("http://localhost:11434"));
+        assert_eq!(model, "mike-gemma4-e2b-fast");
+    }
+
+    #[test]
+    fn non_secure_mode_permits_any_url_and_model() {
+        let p = params_with_local("http://192.168.1.5:11434", "qwen2.5:7b", false);
+        let (base, _key, model) = resolve_endpoint(&p).unwrap();
+        assert!(base.contains("192.168.1.5"));
+        assert_eq!(model, "qwen2.5:7b");
+    }
+
+    #[test]
+    fn effective_system_prepends_preamble_in_secure_mode() {
+        let p = params_with_local(
+            "http://localhost:11434",
+            "mike-qwen35-4b-fast",
+            true,
+        );
+        let s = effective_system(&p);
+        assert!(s.starts_with("[Modalità sicura locale]"));
+        assert!(s.contains("you are mike"));
+    }
+
+    #[test]
+    fn effective_system_unchanged_off_secure_mode() {
+        let p = params_with_local("http://localhost:11434", "anything", false);
+        let s = effective_system(&p);
+        assert_eq!(s, "you are mike");
+    }
 
     #[test]
     fn parses_done_marker() {
