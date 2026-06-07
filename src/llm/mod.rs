@@ -2,6 +2,7 @@ pub mod types;
 pub mod claude;
 pub mod gemini;
 pub mod local;
+pub mod ollama_manager;
 pub mod builtin_tools;
 pub mod summarize;
 pub mod hyde;

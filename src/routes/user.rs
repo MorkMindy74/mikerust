@@ -1,11 +1,14 @@
 use axum::{
-    extract::State,
+    extract::{Path, State},
     http::StatusCode,
+    response::sse::{Event as SseEvent, KeepAlive, Sse},
     routing::{delete, get},
     Json, Router,
 };
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::convert::Infallible;
 use std::sync::Arc;
 
 use crate::{auth::middleware::AuthUser, AppState};
@@ -24,6 +27,28 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/default-domain", get(get_default_domain).put(update_default_domain))
         .route("/enabled-domains", get(get_enabled_domains).put(update_enabled_domains))
         .route("/hyde-enabled", get(get_hyde_enabled).put(update_hyde_enabled))
+        // v0.5.6 "Modalità sicura locale" plug-and-play endpoints.
+        // The frontend Settings UI hits these to (a) detect whether
+        // Ollama is reachable on loopback, (b) enumerate the curated
+        // model catalogue + which entries are already installed and
+        // (c) idempotently install / uninstall a curated entry with
+        // streaming progress.
+        .route(
+            "/local-secure/heartbeat",
+            get(local_secure_heartbeat),
+        )
+        .route(
+            "/local-secure/models",
+            get(local_secure_models),
+        )
+        .route(
+            "/local-secure/ensure/{model_id}",
+            axum::routing::post(local_secure_ensure),
+        )
+        .route(
+            "/local-secure/uninstall/{model_id}",
+            delete(local_secure_uninstall),
+        )
         .route("/account", delete(delete_account))
         .route("/mcp-servers", get(list_mcp_servers).post(upsert_mcp_server))
         .route("/mcp-servers/probe", axum::routing::post(probe_mcp_server))
@@ -363,31 +388,45 @@ pub struct LlmSettings {
     /// 0030). Toggled from Settings → Recupero documenti. Default OFF
     /// because the technique adds one extra LLM call per chat turn.
     pub hyde_enabled: bool,
+    /// "Modalità sicura locale" — when ON the local provider only
+    /// talks to loopback and only accepts the curated `mike-…-fast`
+    /// model ids defined in
+    /// [`crate::llm::ollama_manager::CURATED_MODELS`]. Persisted in
+    /// `user_settings.local_secure_mode` (migration 0032). Toggled
+    /// from Settings → Modelli LLM. Default OFF for retro-compat on
+    /// existing installs.
+    pub local_secure_mode: bool,
 }
 
-type LlmRow = (
-    Option<String>, // main_model
-    Option<String>, // title_model
-    Option<String>, // tabular_model
-    Option<String>, // claude_api_key
-    Option<String>, // gemini_api_key
-    Option<String>, // gemini_region
-    Option<String>, // gemini_model
-    Option<String>, // openai_api_key
-    Option<String>, // openai_model
-    Option<String>, // local_base_url
-    Option<String>, // local_api_key
-    Option<String>, // local_model
-    Option<String>, // active_provider
-    Option<String>, // mistral_api_key
-    Option<String>, // mistral_model
-    i64,            // hyde_enabled (0/1)
-);
+// We're past sqlx's 16-element `FromRow` tuple limit (added
+// local_secure_mode in v0.5.6 brings us to 17 columns), so switch to
+// a #[derive(FromRow)] struct with the field names matching the SQL
+// column names exactly.
+#[derive(sqlx::FromRow)]
+struct LlmRow {
+    main_model: Option<String>,
+    title_model: Option<String>,
+    tabular_model: Option<String>,
+    claude_api_key: Option<String>,
+    gemini_api_key: Option<String>,
+    gemini_region: Option<String>,
+    gemini_model: Option<String>,
+    openai_api_key: Option<String>,
+    openai_model: Option<String>,
+    local_base_url: Option<String>,
+    local_api_key: Option<String>,
+    local_model: Option<String>,
+    active_provider: Option<String>,
+    mistral_api_key: Option<String>,
+    mistral_model: Option<String>,
+    hyde_enabled: i64,
+    local_secure_mode: i64,
+}
 
 const SELECT_COLUMNS: &str =
     "main_model, title_model, tabular_model, claude_api_key, gemini_api_key, gemini_region, \
      gemini_model, openai_api_key, openai_model, local_base_url, local_api_key, local_model, \
-     active_provider, mistral_api_key, mistral_model, hyde_enabled";
+     active_provider, mistral_api_key, mistral_model, hyde_enabled, local_secure_mode";
 
 pub async fn fetch_llm_settings(
     db: &sqlx::SqlitePool,
@@ -405,22 +444,23 @@ pub async fn fetch_llm_settings(
 
 fn row_to_settings(r: LlmRow) -> LlmSettings {
     LlmSettings {
-        main_model: r.0,
-        title_model: r.1,
-        tabular_model: r.2,
-        claude_api_key: r.3,
-        gemini_api_key: r.4,
-        gemini_region: r.5,
-        gemini_model: r.6,
-        openai_api_key: r.7,
-        openai_model: r.8,
-        local_base_url: r.9,
-        local_api_key: r.10,
-        local_model: r.11,
-        active_provider: r.12,
-        mistral_api_key: r.13,
-        mistral_model: r.14,
-        hyde_enabled: r.15 != 0,
+        main_model: r.main_model,
+        title_model: r.title_model,
+        tabular_model: r.tabular_model,
+        claude_api_key: r.claude_api_key,
+        gemini_api_key: r.gemini_api_key,
+        gemini_region: r.gemini_region,
+        gemini_model: r.gemini_model,
+        openai_api_key: r.openai_api_key,
+        openai_model: r.openai_model,
+        local_base_url: r.local_base_url,
+        local_api_key: r.local_api_key,
+        local_model: r.local_model,
+        active_provider: r.active_provider,
+        mistral_api_key: r.mistral_api_key,
+        mistral_model: r.mistral_model,
+        hyde_enabled: r.hyde_enabled != 0,
+        local_secure_mode: r.local_secure_mode != 0,
     }
 }
 
@@ -470,6 +510,11 @@ struct UpdateLlmSettingsBody {
     #[serde(default)] active_provider: Option<String>,
     #[serde(default)] mistral_api_key: Option<String>,
     #[serde(default)] mistral_model: Option<String>,
+    /// v0.5.6 "Modalità sicura locale" toggle. The Settings UI sends
+    /// this whenever the user flips the switch; absent → leave
+    /// whatever was in the DB (typical for partial saves of other
+    /// fields).
+    #[serde(default)] local_secure_mode: Option<bool>,
 }
 
 async fn update_llm_settings(
@@ -500,24 +545,26 @@ async fn update_llm_settings(
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
+    let secure_value: Option<i64> = body.local_secure_mode.map(|b| if b { 1 } else { 0 });
     sqlx::query(
         "UPDATE user_settings SET \
-            main_model      = COALESCE(?, main_model), \
-            title_model     = COALESCE(?, title_model), \
-            tabular_model   = COALESCE(?, tabular_model), \
-            claude_api_key  = COALESCE(?, claude_api_key), \
-            gemini_api_key  = COALESCE(?, gemini_api_key), \
-            gemini_region   = COALESCE(?, gemini_region), \
-            gemini_model    = COALESCE(?, gemini_model), \
-            openai_api_key  = COALESCE(?, openai_api_key), \
-            openai_model    = COALESCE(?, openai_model), \
-            local_base_url  = COALESCE(?, local_base_url), \
-            local_api_key   = COALESCE(?, local_api_key), \
-            local_model     = COALESCE(?, local_model), \
-            active_provider = COALESCE(?, active_provider), \
-            mistral_api_key = COALESCE(?, mistral_api_key), \
-            mistral_model   = COALESCE(?, mistral_model), \
-            updated_at      = datetime('now') \
+            main_model        = COALESCE(?, main_model), \
+            title_model       = COALESCE(?, title_model), \
+            tabular_model     = COALESCE(?, tabular_model), \
+            claude_api_key    = COALESCE(?, claude_api_key), \
+            gemini_api_key    = COALESCE(?, gemini_api_key), \
+            gemini_region     = COALESCE(?, gemini_region), \
+            gemini_model      = COALESCE(?, gemini_model), \
+            openai_api_key    = COALESCE(?, openai_api_key), \
+            openai_model      = COALESCE(?, openai_model), \
+            local_base_url    = COALESCE(?, local_base_url), \
+            local_api_key     = COALESCE(?, local_api_key), \
+            local_model       = COALESCE(?, local_model), \
+            active_provider   = COALESCE(?, active_provider), \
+            mistral_api_key   = COALESCE(?, mistral_api_key), \
+            mistral_model     = COALESCE(?, mistral_model), \
+            local_secure_mode = COALESCE(?, local_secure_mode), \
+            updated_at        = datetime('now') \
          WHERE user_id = ?",
     )
     .bind(&body.main_model)
@@ -535,6 +582,7 @@ async fn update_llm_settings(
     .bind(&body.active_provider)
     .bind(&body.mistral_api_key)
     .bind(&body.mistral_model)
+    .bind(secure_value)
     .bind(&auth.user_id)
     .execute(&state.db)
     .await
@@ -1186,6 +1234,114 @@ async fn delete_mcp_server(
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
     state.invalidate_mcp_cache_for_user(&auth.user_id).await;
+    Ok(Json(json!({ "ok": true })))
+}
+
+// ---------------------------------------------------------------------------
+// /user/local-secure/*  — v0.5.6 "Modalità sicura locale" plug-and-play
+//
+// Backs the Settings → Modelli LLM section that ships with the v0.5.6
+// "Modalità sicura locale" toggle. The frontend hits these endpoints
+// to (a) detect whether Ollama is reachable on loopback before
+// surfacing the curated catalogue, (b) enumerate the curated catalogue
+// alongside which entries are already installed, and (c) idempotently
+// install / uninstall a curated entry with real-time progress.
+//
+// All four endpoints sit behind the standard auth middleware — they
+// don't touch any user-scoped DB state, but they talk to the Ollama
+// process on the host so we still require an authenticated session
+// (otherwise an unauth caller could drive arbitrary `ollama pull` /
+// `ollama delete` operations against the localhost server).
+// ---------------------------------------------------------------------------
+async fn local_secure_heartbeat(_auth: AuthUser) -> Json<Value> {
+    let alive = crate::llm::ollama_manager::heartbeat().await;
+    Json(json!({
+        "ollama_running": alive,
+        "base_url": crate::llm::ollama_manager::SECURE_BASE_URL,
+    }))
+}
+
+async fn local_secure_models(_auth: AuthUser) -> Json<Value> {
+    // The curated catalogue is static; the "installed" flag is the
+    // only live bit. If Ollama isn't reachable we still return the
+    // catalogue so the UI can render the offline state without a
+    // separate round-trip.
+    let installed = crate::llm::ollama_manager::list_installed()
+        .await
+        .unwrap_or_default();
+    let installed_set: std::collections::HashSet<&str> =
+        installed.iter().map(|s| s.as_str()).collect();
+    let models: Vec<Value> = crate::llm::ollama_manager::CURATED_MODELS
+        .iter()
+        .map(|m| {
+            json!({
+                "id": m.id,
+                "base_model": m.base_model,
+                "display_name": m.display_name,
+                "approx_size_gb": m.approx_size_gb,
+                "min_ram_gb": m.min_ram_gb,
+                // "ready" means the mike-…-fast Modelfile derivation
+                // exists. The BASE model alone isn't enough — the
+                // user gets the suppressed-thinking behaviour only
+                // when the derivation is in place.
+                "ready": installed_set.contains(m.id),
+                // "base_present" lets the UI surface "Pull skipped —
+                // base already on disk, only creating the wrapper"
+                // when the user re-installs after deleting only the
+                // wrapper.
+                "base_present": installed_set.contains(m.base_model),
+            })
+        })
+        .collect();
+    Json(json!({ "models": models }))
+}
+
+async fn local_secure_ensure(
+    _auth: AuthUser,
+    Path(model_id): Path<String>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    // Reject unknown ids before we even talk to Ollama — keeps the
+    // SSE stream short and surfaces the error in a single chunk.
+    if crate::llm::ollama_manager::find_curated(&model_id).is_none() {
+        let stream = futures_util::stream::once(async move {
+            let payload = json!({
+                "phase": "error",
+                "message": format!("Modello non in allowlist: {model_id}")
+            });
+            Ok::<SseEvent, Infallible>(
+                SseEvent::default().json_data(payload).unwrap_or_default(),
+            )
+        })
+        .boxed();
+        return Sse::new(stream)
+            .keep_alive(KeepAlive::default())
+            .into_response();
+    }
+
+    let raw = crate::llm::ollama_manager::ensure_curated(model_id);
+    let sse_stream = raw
+        .map(|event| {
+            let value = serde_json::to_value(&event).unwrap_or_else(
+                |_| json!({"phase": "error", "message": "serialise failed"}),
+            );
+            Ok::<SseEvent, Infallible>(
+                SseEvent::default().json_data(value).unwrap_or_default(),
+            )
+        })
+        .boxed();
+    Sse::new(sse_stream)
+        .keep_alive(KeepAlive::default())
+        .into_response()
+}
+
+async fn local_secure_uninstall(
+    _auth: AuthUser,
+    Path(model_id): Path<String>,
+) -> ApiResult {
+    crate::llm::ollama_manager::uninstall_curated(&model_id)
+        .await
+        .map_err(|e| err(StatusCode::BAD_REQUEST, &e.to_string()))?;
     Ok(Json(json!({ "ok": true })))
 }
 
