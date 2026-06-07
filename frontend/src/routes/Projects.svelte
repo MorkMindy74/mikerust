@@ -22,7 +22,8 @@
   import { i18n } from '$lib/stores/i18n.svelte'
   import { DOMAINS, domainLabel } from '$lib/types/domain'
   import type { Project } from '$lib/types/project'
-  import { Search, Pencil, Trash2, Upload } from 'lucide-svelte'
+  import Checkbox from '$lib/components/ui/Checkbox.svelte'
+  import { Search, Pencil, Trash2, Upload, Download } from 'lucide-svelte'
 
   const t = (k: string, p?: Record<string, string | number>) => i18n.t(k, p)
 
@@ -39,6 +40,42 @@
   let importEmail = $state('')
   let importing = $state(false)
   let importInputEl: HTMLInputElement | undefined = $state()
+
+  // ── per-row export (mirror of the modal in ProjectDetail.svelte) ──
+  let exportTarget = $state<Project | null>(null)
+  let exportEmail = $state('')
+  let exportChats = $state(false)
+  let exporting = $state(false)
+
+  function openExport(p: Project) {
+    exportTarget = p
+    exportEmail = ''
+    exportChats = false
+  }
+
+  async function runExport() {
+    if (!exportTarget || !exportEmail.trim()) return
+    exporting = true
+    try {
+      const blob = await projectsApi.exportProject(
+        exportTarget.id,
+        exportEmail.trim(),
+        exportChats,
+      )
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${exportTarget.name}.mikeprj`
+      a.click()
+      URL.revokeObjectURL(url)
+      toastStore.success(t('ProjectExport.downloadStarted'))
+      exportTarget = null
+    } catch (e) {
+      toastStore.danger(t('ProjectExport.errorExport'), { detail: (e as Error).message })
+    } finally {
+      exporting = false
+    }
+  }
 
   function onPickImport(ev: Event) {
     const target = ev.target as HTMLInputElement
@@ -234,6 +271,13 @@
             <Pencil size={14} />
           </IconButton>
           <IconButton
+            label={t('ProjectExport.title')}
+            size="sm"
+            onclick={() => openExport(p)}
+          >
+            <Download size={14} />
+          </IconButton>
+          <IconButton
             label={t('Projects.deleteProject')}
             size="sm"
             variant="danger"
@@ -284,6 +328,35 @@
     <Button variant="ghost" onclick={() => (importFile = null)}>{t('Common.cancel')}</Button>
     <Button loading={importing} disabled={!importEmail.trim()} onclick={runImport}>
       {t('ProjectImport.importNow')}
+    </Button>
+  {/snippet}
+</Modal>
+
+<!-- per-row .mikeprj export (mirror of the modal in ProjectDetail.svelte) -->
+<Modal
+  open={exportTarget !== null}
+  title={t('ProjectExport.title')}
+  size="md"
+  onclose={() => (exportTarget = null)}
+>
+  <div class="space-y-3">
+    <p class="text-sm text-(--color-text-secondary)">{t('ProjectExport.subtitle')}</p>
+    {#if exportTarget}
+      <p class="text-sm font-medium text-(--color-text-primary)">{exportTarget.name}</p>
+    {/if}
+    <Input
+      label={t('ProjectExport.recipientEmail')}
+      bind:value={exportEmail}
+      placeholder={t('ProjectExport.recipientEmailPlaceholder')}
+      type="email"
+    />
+    <Checkbox label={t('ProjectExport.includeChats')} bind:checked={exportChats} />
+    <p class="text-xs text-(--color-text-secondary)">{t('ProjectExport.includeChatsHint')}</p>
+  </div>
+  {#snippet footer()}
+    <Button variant="ghost" onclick={() => (exportTarget = null)}>{t('Common.cancel')}</Button>
+    <Button loading={exporting} disabled={!exportEmail.trim()} onclick={runExport}>
+      {t('ProjectExport.exportNow')}
     </Button>
   {/snippet}
 </Modal>
