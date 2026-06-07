@@ -25,7 +25,7 @@
   import { DOMAINS, domainLabel, DEFAULT_DOMAIN, type Domain } from '$lib/types/domain'
   import type { Workflow } from '$lib/types/workflow'
   import { ApiError } from '$lib/types/error'
-  import { Trash2 } from 'lucide-svelte'
+  import { Trash2, Pencil } from 'lucide-svelte'
 
   let domainFilter = $state<string>('')
   let tabularWorkflows = $state<Workflow[]>([])
@@ -112,6 +112,39 @@
       formError = e instanceof ApiError ? e.detail : (e as Error).message
     } finally {
       creating = false
+    }
+  }
+
+  // ── rename ──────────────────────────────────────────────────────────
+  // Mirror of the Projects-list pencil affordance — opens a small
+  // inline modal with the current title pre-filled and PATCHes
+  // /tabular-review/:id with the new title on confirm.
+  let renameTarget = $state<{ id: string; title: string } | null>(null)
+  let renameTitle = $state('')
+  let renaming = $state(false)
+
+  function openRename(r: { id: string; title: string }) {
+    renameTarget = { id: r.id, title: r.title }
+    renameTitle = r.title
+  }
+
+  async function runRename() {
+    if (!renameTarget) return
+    const next = renameTitle.trim()
+    if (!next || next === renameTarget.title) {
+      renameTarget = null
+      return
+    }
+    renaming = true
+    try {
+      await tabularApi.patch(renameTarget.id, { title: next })
+      await tabularStore.refresh()
+      toastStore.success(t('TabularReviews.renamedToast'))
+      renameTarget = null
+    } catch (e) {
+      toastStore.danger(t('Errors.somethingWrong'), { detail: (e as Error).message })
+    } finally {
+      renaming = false
     }
   }
 
@@ -224,6 +257,13 @@
           </button>
           <Badge tone="brand">{domainLabel(r.domain)}</Badge>
           <IconButton
+            label={t('TabularReviews.renameReview')}
+            size="sm"
+            onclick={() => openRename({ id: r.id, title: r.title })}
+          >
+            <Pencil size={14} />
+          </IconButton>
+          <IconButton
             label={t('Ui.deleteReview')}
             size="sm"
             variant="danger"
@@ -259,6 +299,34 @@
   {#snippet footer()}
     <Button variant="ghost" onclick={() => (modalOpen = false)}>{t('Common.cancel')}</Button>
     <Button loading={creating} onclick={create}>{t('TabularReviews.createReview')}</Button>
+  {/snippet}
+</Modal>
+
+<!-- rename modal — small inline input, mirror of Projects pencil flow -->
+<Modal
+  open={renameTarget !== null}
+  title={t('TabularReviews.renameReview')}
+  size="sm"
+  onclose={() => (renameTarget = null)}
+>
+  <Input
+    label={t('Common.name')}
+    bind:value={renameTitle}
+    placeholder={t('Common.untitled')}
+    onkeydown={(e: KeyboardEvent) => {
+      if (e.key === 'Enter') void runRename()
+      if (e.key === 'Escape') (renameTarget = null)
+    }}
+  />
+  {#snippet footer()}
+    <Button variant="ghost" onclick={() => (renameTarget = null)}>{t('Common.cancel')}</Button>
+    <Button
+      loading={renaming}
+      disabled={!renameTitle.trim() || renameTitle.trim() === renameTarget?.title}
+      onclick={runRename}
+    >
+      {t('Common.save')}
+    </Button>
   {/snippet}
 </Modal>
 

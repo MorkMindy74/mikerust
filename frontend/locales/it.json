@@ -1014,6 +1014,8 @@
     "selectWorkflowOption": "— seleziona un workflow tabellare —",
     "pickWorkflowError": "Seleziona un workflow tabellare.",
     "createdToast": "Revisione creata",
+    "renameReview": "Rinomina revisione",
+    "renamedToast": "Revisione rinominata",
     "deletedToast": "Revisione eliminata",
     "deleteError": "Impossibile eliminare la revisione",
     "inheritsColumns": "Eredita {n} colonne da questo workflow.",

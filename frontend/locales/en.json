@@ -1014,6 +1014,8 @@
     "selectWorkflowOption": "— select a tabular workflow —",
     "pickWorkflowError": "Pick a tabular workflow.",
     "createdToast": "Review created",
+    "renameReview": "Rename review",
+    "renamedToast": "Review renamed",
     "deletedToast": "Review deleted",
     "deleteError": "Could not delete review",
     "inheritsColumns": "Inherits {n} columns from this workflow.",

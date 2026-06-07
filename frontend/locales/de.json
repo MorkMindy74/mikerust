@@ -864,6 +864,8 @@
     "selectWorkflowOption": "— tabellarischen Workflow auswählen —",
     "pickWorkflowError": "Wählen Sie einen tabellarischen Workflow.",
     "createdToast": "Prüfung erstellt",
+    "renameReview": "Prüfung umbenennen",
+    "renamedToast": "Prüfung umbenannt",
     "deletedToast": "Prüfung gelöscht",
     "deleteError": "Prüfung konnte nicht gelöscht werden",
     "inheritsColumns": "Übernimmt {n} Spalten aus diesem Workflow.",

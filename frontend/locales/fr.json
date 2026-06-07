@@ -864,6 +864,8 @@
     "selectWorkflowOption": "— sélectionnez un workflow tabulaire —",
     "pickWorkflowError": "Choisissez un workflow tabulaire.",
     "createdToast": "Revue créée",
+    "renameReview": "Renommer la revue",
+    "renamedToast": "Revue renommée",
     "deletedToast": "Revue supprimée",
     "deleteError": "Impossible de supprimer la revue",
     "inheritsColumns": "Hérite de {n} colonnes de ce workflow.",

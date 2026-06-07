@@ -864,6 +864,8 @@
     "selectWorkflowOption": "— selecciona un flujo de trabajo tabular —",
     "pickWorkflowError": "Elige un flujo de trabajo tabular.",
     "createdToast": "Revisión creada",
+    "renameReview": "Renombrar revisión",
+    "renamedToast": "Revisión renombrada",
     "deletedToast": "Revisión eliminada",
     "deleteError": "No se pudo eliminar la revisión",
     "inheritsColumns": "Hereda {n} columnas de este flujo de trabajo.",
