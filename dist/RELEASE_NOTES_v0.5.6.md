@@ -1,117 +1,79 @@
-# MikeRust v0.5.6
+# MikeRust v0.5.6 — Chat composer UX fixes
 
-End-to-end opt-in **"Modalità sicura locale"**: turns the local LLM
-provider into a zero-config, loopback-only, two-curated-models
-setup with thinking suppression baked in. Aimed at users who want a
-CPU-only, air-gapped Italian-first chat without juggling Modelfiles
-or context-window tuning by hand.
+Two bug fixes in the chat composer that surfaced during hands-on
+testing of the v0.5.5 cycle, plus an opt-in experimental local-only
+LLM mode for Ollama users (off by default).
 
-## What's new
-
-### Modalità sicura locale — the toggle and what it does
-
-Settings → Modelli LLM → "Locale (compatibile con OpenAI)" gains a
-new toggle at the top. When ON:
-
-* The Ollama base URL is locked to `http://localhost:11434`
-  (loopback only — no LAN endpoints, no public IPs). Any other URL
-  is refused with a clear error message.
-* The chat composer's model picker collapses to only two curated
-  entries: **Qwen 3.5 4B (rapido)** and **Gemma 4 E2B (rapido)**.
-  Cloud providers are hidden from the picker even if their API
-  keys are configured. Flipping the toggle off restores the full
-  picker.
-* Both curated models have **thinking explicitly disabled** via
-  per-strategy Modelfile derivations (`/no_think` Qwen-native
-  token for Qwen, `<think>` / `<thinking>` / `<reasoning>` stop
-  sequences + "rispondi direttamente" preamble for Gemma 4). The
-  user gets direct answers without the chain-of-thought block
-  models in this size range tend to emit by default.
-* The toggle auto-saves the instant you flip it (no separate
-  Save button needed).
-
-### Plug-and-play install / uninstall
-
-Each curated entry shows display name, base model id, approximate
-size, recommended RAM, and one of four states:
-
-* **Installato** — green badge + a Trash "Rimuovi" button.
-* **In corso** — disabled progress button ("Download… 42%",
-  "Configurazione…", "Avvio…") + a brand-coloured progress bar
-  tracking bytes-completed / bytes-total + a Cancel button.
-* **Errore** — red message under the row, Install still clickable.
-* **Da installare** — Install button with a download icon.
-
-Click Install → MikeRust streams `ollama pull` progress in real
-time, then creates the `mike-…-fast` Modelfile derivation that
-bakes in the thinking-suppression configuration. All over the
-network, no terminal required.
-
-### Cancel + parallel downloads
-
-* **Cancel button** during downloads: aborts the fetch → SSE drops
-  → ollama-rs drops its pull → Ollama treats it as cancelled. The
-  partial download stays in Ollama's SHA-256 layer cache so a
-  later re-install resumes for free.
-* **Parallel installs** already worked because each call carries
-  its own fetch + reader + state — the Cancel button is what makes
-  them feel symmetric (start any time, stop any time). Click
-  Install on Qwen while Gemma is at 70% and both progress bars
-  run side by side.
-
-### Persistent install state
-
-The progress map and per-id `AbortController` registry live in a
-module-singleton store that survives the user navigating away from
-Settings and back. The previous design wiped its state on
-component unmount, the Install button re-enabled itself mid-pull,
-and a second click fired a parallel ensure stream that raced the
-original — fixed.
-
-### "Ollama non rilevato" handling
-
-If the heartbeat fails (Ollama not running on port 11434), the
-section surfaces a warning panel with a link to
-`ollama.com/download` and a Retry button — no need to leave
-Settings to re-check.
-
-## Incidental UX fixes from the same testing session
-
-These landed in the same release because they were caught while
-testing the secure-mode flow:
+## Bug fixes
 
 ### Doc picker — project scope
 
-"Sfoglia tutti" inside a project-scoped chat now restricts to the
-project's documents via `?project_id=…`. Standalone chats keep the
-global picker unchanged. Backend filter already existed in
-`documents.rs::list_documents` — only the frontend was passing it
-through.
+The "Sfoglia tutti" picker inside a project-scoped chat used to show
+**every document the user had ever uploaded anywhere** — including
+documents from other projects and standalone-chat attachments. It
+now restricts to the current project's documents via the existing
+`?project_id=…` filter in `documents.rs::list_documents`.
 
-### New chat from a project — confirm modal
+Standalone chats (Assistant tool, no project attached) keep the
+global picker unchanged — that's the path the user takes to add a
+library-wide doc to a fresh conversation.
 
-Clicking `+` in the sidebar while a project-scoped chat is active
-now opens a confirm modal:
+### New-chat-in-project confirm modal
 
-> "Stai lavorando dentro un progetto. Vuoi mantenere il progetto
-> associato alla nuova chat?"
+Clicking `+` (new chat) in the sidebar while a project-scoped chat
+was active used to silently inherit the project on the new chat —
+the user had no way to know the chip had carried over until they
+glanced at the composer. Reported as confusing.
 
-Two action buttons: **Chat indipendente** / **Sì, mantieni il
-progetto**, with implicit cancel via the modal X / Esc / backdrop
-click. Also fixes the long-standing "chip persists silently"
-behaviour where the project chip stuck around after `+` was
-clicked without asking.
+The new flow:
 
-## Migration notes
+* If the active chat **is in a project**, clicking `+` now opens a
+  confirm modal: *"Stai lavorando dentro un progetto. Vuoi
+  mantenere il progetto associato alla nuova chat?"* with two
+  action buttons — **Chat indipendente** / **Sì, mantieni il
+  progetto** — and implicit cancel via the X / Esc / backdrop
+  click.
+* If the active chat **is not in a project**, the flow is unchanged
+  (no modal, instant new chat).
 
-* New schema migration **0032_user_local_secure_mode.sql** — adds
-  `user_settings.local_secure_mode INTEGER DEFAULT 0`. Existing
-  installs keep their custom Ollama URL and free-form model id
-  (the toggle is **OFF by default**, retro-compat).
-* No data is destroyed by the migration. Downgrade path: drop the
-  column or leave it (older mike binaries ignore it).
-* `ollama-rs = 0.3` + `async-stream = 0.3` are new direct
-  dependencies. Both pure Rust, no native libs added.
+Internally this also fixes the long-standing "chip persists
+silently" bug where the composer's `$effect` early-returned on a
+null `activeProjectId` instead of clearing the chip. A new monotonic
+`chatStore.clearProjectTick` lets the modal's "Chat indipendente"
+branch reset the chip without race conditions.
+
+## New (opt-in, experimental)
+
+### Local-only LLM mode for Ollama users
+
+New toggle in Settings → Modelli LLM → "Modalità sicura locale".
+**Off by default**, retro-compatible with existing local-provider
+configurations.
+
+When on:
+* The local provider's base URL is locked to `http://localhost:11434`
+  (loopback only — refuses LAN endpoints or public IPs).
+* The chat composer's model picker collapses to two curated entries
+  (Qwen 3.5 4B `q4_K_M` and Gemma 4 E2B IT GGUF `Q4_K_M`), both
+  derived through Ollama Modelfiles MikeRust creates on demand with
+  thinking suppression baked in.
+* Install / cancel / parallel-download UX directly from Settings,
+  with real-time progress streaming.
+
+Backed by:
+* New module [`src/llm/ollama_manager.rs`](src/llm/ollama_manager.rs)
+  wrapping [`ollama-rs`](https://crates.io/crates/ollama-rs) 0.3.
+* Schema migration **0032** — adds `user_settings.local_secure_mode
+  INTEGER DEFAULT 0`.
+* 13 new unit tests across `llm::local` and `llm::ollama_manager`
+  (15/15 + 6/6 green).
+
+Treat this as an **experimental preview** for the v0.6.x line. The
+mechanism is feature-complete and tested, but the UX around model
+discovery / context-window tuning / cross-platform Ollama detection
+is still being refined. Power users who want to try it can flip the
+toggle; everyone else can ignore it — the rest of the local
+provider works exactly as before.
 
 ## Downloads
 
@@ -121,16 +83,15 @@ Pre-built MSIs for Windows:
 - `MikeRust_0.5.6_arm64.msi` — Windows ARM64, Snapdragon X Elite
   native
 
-Drop-in replacement for v0.5.5. To use the secure mode after
-upgrading:
+Drop-in replacement for v0.5.5.
 
-1. Open Settings → Modelli LLM.
-2. Toggle "Modalità sicura locale" ON.
-3. Click Install on either curated model (Qwen 3.5 4B is the
-   lighter pick at 2.5 GB on disk; Gemma 4 E2B is the smarter one
-   at 3.1 GB).
-4. Once green-badged, start a new chat — the picker now shows
-   the two curated entries; pick one and send.
+## Migration notes
+
+* New schema migration **0032** is applied automatically on first
+  launch. The only column added defaults to 0 — existing installs
+  preserve their custom Ollama URL and free-form model id.
+* New direct dependencies: `ollama-rs = 0.3` (with `stream`) and
+  `async-stream = 0.3`. Both pure Rust, no native libs added.
 
 ## License
 
