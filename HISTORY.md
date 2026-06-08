@@ -13,6 +13,158 @@ diff. For the upstream-sync audit trail (which fixes were ported from
 
 ---
 
+## v0.6.0 — 2026-06-08 (Mistral first-class: cloud provider with prompt caching + sequential tool calling)
+
+Promotes Mistral La Plateforme (`api.mistral.ai`) from an
+opportunistic OpenAI-compat reuse (rode through `local.rs` in
+v0.5.x) to a **dedicated provider** with Mistral-specific
+optimisations baked in. The headline benefits — addressed at the
+legal-target product audience — are:
+
+* **80-90% cost reduction on long document-heavy chats**. Mistral
+  charges 10% of normal token price on cache hits; the new path
+  derives a stable per-chat key (`mike_chat_{chat_id}`) so the
+  system prompt + attached-documents prefix is cached across every
+  turn of a conversation.
+* **Predictable sequential tool execution**. Mistral's API default
+  is `parallel_tool_calls: true`; legal workflows (tabular cell
+  extraction, citation lookups in order) want sequential. We
+  override to `false` by default; the user can re-enable parallel
+  via the new toggle in Settings.
+* **No spurious safety refusals on legal content**. The
+  `safe_prompt` parameter — Mistral's safety wrapper — is sent
+  explicitly OFF by default because criminal-case sentences and
+  sensitive medical reports trip false positives. Available as a
+  toggle for users who hit the opposite case (need stricter
+  filtering).
+* **EU data residency clarity**. New info paragraph in the
+  Mistral card states "EU servers (France) · 30-day rolling abuse
+  monitoring · never used for training on paid API plans". A link
+  to the official Mistral help-center article explains how to
+  request Zero Data Retention (manual support ticket — not a
+  per-request header, confirmed against the docs 2026-06).
+
+### Backend — `src/llm/mistral.rs`
+
+New dedicated module (Commit A — 514 LOC, 17 unit tests). Routes
+the `mistral:` prefix to its own `stream` / `complete` instead of
+the generic `local::stream` OpenAI-compat path. What the module
+sends that `local.rs` never did:
+
+  * `parallel_tool_calls: false` (override Mistral's `true`
+    default for sequential semantics).
+  * `safe_prompt: false` (explicit OFF; was always implicit
+    before).
+  * `prompt_cache_key: "mike_chat_{chat_id}"` (stable per-chat
+    key — only emitted when the call carries a chat_id; one-shot
+    callers like title generation, HyDE, summarisation, doc
+    summary and translation pass None and the key is omitted).
+
+Mistral-specific error mapping with Italian-first messages:
+
+  * 401 → "API key non valida o scaduta. Verifica in
+    Settings → Modelli LLM → Mistral AI."
+  * 403 → "richiesta rifiutata (quota esaurita o filtro di
+    sicurezza attivato)" with body detail.
+  * 422 → "payload non valido. Probabile model id errato o
+    messaggio malformato."
+  * 429 → parses `Retry-After` header into "(riprova fra ~Ns)".
+  * 5xx → "errore lato server" with body detail.
+
+### Plumbing — provider routing + chat_id
+
+* `enum Provider` gains a `Mistral` variant. `provider_for_model("mistral:")`
+  now returns `Provider::Mistral` (was `Provider::OpenAI`).
+  `stream_chat` / `complete_text` dispatch to the new
+  `mistral::stream` / `mistral::complete` functions. All five
+  match-against-Provider sites updated (hyde, summarize,
+  chat title gen, doc summarisation, workflow translation,
+  tabular cell extraction).
+* `StreamParams` gains `chat_id: Option<String>` — threaded
+  through 11 construction sites so the Mistral cache key has a
+  stable anchor.
+* `to_wire_messages` + `parse_sse_line_opt` exposed `pub(crate)`
+  in `local.rs` so `mistral.rs` reuses them — Mistral's SSE +
+  message-wire format is OpenAI-identical, no point duplicating.
+
+### Schema — migration 0033
+
+Two new boolean columns on `user_settings`:
+
+  * `mistral_safe_prompt INTEGER DEFAULT 0`
+  * `mistral_parallel_tools INTEGER DEFAULT 0`
+
+Both OFF by default — matches the Commit A hard-coded behaviour.
+Existing installs upgrade transparently. `StreamParams` gains a
+`mistral_opts: Option<MistralOpts>` field; the new
+`crate::routes::chat::build_mistral_opts(model, settings)` helper
+mirrors `build_local_config`'s shape and is called at every
+StreamParams site where user settings are in scope (3 chat.rs
+sites + tabular_reviews + workflows). One-shot callers
+(hyde, summarize, docs summary, mod.rs complete_text) pass `None`
+and inherit the false defaults.
+
+### UI — Mistral card
+
+`Settings → Modelli LLM → Mistral AI` grows two new sections,
+inserted below the existing "Profilo modelli" picker (which was
+already in v0.5.6):
+
+  1. Two `Toggle` components for `mistral_safe_prompt` and
+     `mistral_parallel_tools`, both with localised labels + hint
+     text. Disabled when no API key is configured — toggling them
+     without Mistral active is meaningless.
+  2. Info paragraph + external link to the Mistral help-center
+     ZDR article. Surfaced as text, not as a checkbox, because
+     ZDR activation is a manual support ticket — verified against
+     the official help center 2026-06.
+
+### i18n — 5 new keys
+
+`Settings.mistralSafePrompt` + Hint,
+`Settings.mistralParallelTools` + Hint, `Settings.mistralEuHostingNote`,
+`Settings.mistralZdrLink`. All localised in it/en/fr/de/es/pt.
+
+### Migration notes
+
+  * Existing chats keep their previous model selection — the
+    routing change (`Provider::OpenAI` → `Provider::Mistral` for
+    `mistral:` prefix) is transparent. The cost reduction kicks
+    in immediately on the next chat turn that carries a chat_id.
+  * Mistral users on v0.5.x can ignore Commit A entirely and
+    keep using the previous defaults; the only behavioural
+    difference is the new `prompt_cache_key` (auto-enabled, no
+    config) which lowers their token bill by ~80-90% on long
+    chats. The two toggles in the Settings card only matter if
+    they're already a Mistral user.
+
+### Tests
+
+17 new unit tests across `src/llm/mistral.rs`:
+  * credentials: missing key / missing config / valid
+  * cache_key: chat-scoped / one-shot / empty-id
+  * build_body: defaults / override / cache-key in/out /
+    sampling defaults / stream flag propagation /
+    mistral_opts override + fallback
+  * error mapping: 401 / 429 with + without Retry-After / 500
+    surfacing body
+
+105/105 across the whole `llm::` tree green. `cargo check` clean
+across the workspace.
+
+### Not in this release (follow-up)
+
+* `wiremock`-backed round-trip HTTP integration tests for
+  Mistral. The 17 unit tests already cover the build_body and
+  error-mapping logic; wiremock would add coverage of the wire
+  shape end-to-end. Deferred to a v0.6.x point release.
+* Vision support over Mistral Medium 3.5 / Large 3 — the API
+  side works (we send `image_url` content parts) but the chat
+  composer doesn't yet route PDF page renders to Mistral the same
+  way it does to Gemini.
+
+---
+
 ## v0.5.6 — 2026-06-07 (chat composer UX fixes + experimental local-only LLM mode)
 
 Two bug fixes in the chat composer that surfaced during hands-on
