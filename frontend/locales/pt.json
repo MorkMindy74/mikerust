@@ -100,6 +100,7 @@
     "renameChat": "Renomear conversa",
     "deleteChatTitle": "Eliminar o chat?",
     "deleteChatBody": "“{title}”, as suas mensagens e os documentos carregados ou gerados nele serão eliminados definitivamente.",
+    "activeDomainTooltip": "Setor ativo — filtra workflows, templates e o papel por defeito para cada novo elemento",
     "newChatInProjectTitle": "Novo chat",
     "newChatInProjectBody": "Estás a trabalhar dentro de um projeto. Queres manter o projeto associado ao novo chat?",
     "newChatKeepProject": "Sim, manter o projeto",

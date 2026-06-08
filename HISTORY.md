@@ -13,6 +13,53 @@ diff. For the upstream-sync audit trail (which fixes were ported from
 
 ---
 
+## v0.6.7 — 2026-06-08 (sidebar active-domain selector)
+
+Adds a compact domain picker next to the MikeRust brand at the
+top of the sidebar. Always visible, default-initialised from the
+user's `default_domain` setting (set at sign-up time and
+configurable in Settings → Generale), persisted server-side on
+every change via the existing `setDefaultDomain` user-store
+action.
+
+### Why
+
+The default domain is the global signal that drives every
+domain-scoped UI:
+
+  * The workflow + template pickers in the chat composer default
+    to filtering by it.
+  * "Nuovo progetto" / "Nuova revisione tabellare" pre-populate
+    their domain dropdown to it.
+  * The chat composer inherits it on chats that aren't inside a
+    project.
+
+Pre-v0.6.7 the only way to change the active domain was to dig
+into Settings → Generale → Dominio predefinito + save. Most
+real-world workflows (a lawyer who works across "Assicurazioni"
+in the morning and "Compliance" in the afternoon) hit this knob
+many times a day; making it a single click on the sidebar brand
+takes a 6-click flow down to one.
+
+### Implementation
+
+* `Shell.svelte` brand snippet rebuilt as a flex row: Logo +
+  "MikeRust" + version + `<Select>` aligned right (`ml-auto`,
+  `max-w-[10rem]`).
+* Options derived from `userStore.effectiveEnabledDomains` so
+  domains the user has hidden in Settings → Generale stay
+  hidden in the sidebar too.
+* `onSidebarDomainChange(next)` calls `userStore.setDefaultDomain`
+  (PUT /user/default-domain) on every change; reverts the
+  visible select on a save failure by virtue of reading from
+  the live `userStore.defaultDomain` getter.
+* Single new i18n key `Sidebar.activeDomainTooltip` localised
+  in all six locales (it / en / fr / de / es / pt).
+
+No schema migration; no backend change; svelte-check 0 errors.
+
+---
+
 ## v0.6.6 — 2026-06-08 (hotfix — Mistral profile picker auto-saves on click)
 
 The Mistral profile picker added in v0.5.6 (Equilibrato / Premium)

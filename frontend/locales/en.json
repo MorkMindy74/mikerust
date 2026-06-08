@@ -100,6 +100,7 @@
     "renameChat": "Rename chat",
     "deleteChatTitle": "Delete chat?",
     "deleteChatBody": "\"{title}\", its messages and the documents uploaded or generated in it will be permanently deleted.",
+    "activeDomainTooltip": "Active sector — filters workflows, templates and the default role for every new item",
     "newChatInProjectTitle": "New chat",
     "newChatInProjectBody": "You're working inside a project. Do you want to keep the project attached to the new chat?",
     "newChatKeepProject": "Yes, keep the project",

@@ -100,6 +100,7 @@
     "renameChat": "Renommer le chat",
     "deleteChatTitle": "Supprimer le chat ?",
     "deleteChatBody": "« {title} », ses messages et les documents importés ou générés dans ce chat seront supprimés définitivement.",
+    "activeDomainTooltip": "Secteur actif — filtre workflows, templates et le rôle par défaut pour tout nouvel élément",
     "newChatInProjectTitle": "Nouveau chat",
     "newChatInProjectBody": "Vous travaillez dans un projet. Voulez-vous garder le projet associé au nouveau chat ?",
     "newChatKeepProject": "Oui, garder le projet",

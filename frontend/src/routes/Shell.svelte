@@ -25,6 +25,9 @@
   import { router, type FeatureRoute } from '$lib/stores/router.svelte'
   import { authStore } from '$lib/stores/auth.svelte'
   import { userStore } from '$lib/stores/user.svelte'
+  import Select from '$lib/components/ui/Select.svelte'
+  import type { Domain } from '$lib/types/domain'
+  import { domainLabel } from '$lib/types/domain'
   import { chatStore } from '$lib/stores/chat.svelte'
   import { projectStore } from '$lib/stores/projects.svelte'
   import { toastStore } from '$lib/stores/toast.svelte'
@@ -80,6 +83,30 @@
 
   let chatsCollapsed = $state(false)
   let projectsCollapsed = $state(false)
+
+  // Sidebar-level active-domain picker. Persists immediately to
+  // `user_settings.default_domain` on change — the global signal
+  // that drives every domain-scoped UI (workflow / template
+  // pickers, default for new projects + tabular reviews, the chat
+  // composer's domain inheritance). Restricted to the enabled-
+  // domains preference so users don't see selectors they've
+  // hidden in Settings.
+  const sidebarDomainOptions = $derived(
+    userStore.effectiveEnabledDomains.map((d) => ({
+      value: d,
+      label: domainLabel(d),
+    })),
+  )
+  async function onSidebarDomainChange(next: Domain) {
+    if (!next || next === userStore.defaultDomain) return
+    try {
+      await userStore.setDefaultDomain(next)
+    } catch (e) {
+      toastStore.danger(i18n.t('Common.error'), {
+        detail: (e as Error).message,
+      })
+    }
+  }
 
   // "Recently active" surrogate: the top 5 by `updated_at` from the
   // global project list. The store loads the full list once on
@@ -222,18 +249,32 @@
   {#snippet sidebar()}
     <Sidebar>
       {#snippet brand()}
-        <span class="flex items-baseline gap-2">
-          <span class="flex items-center gap-2">
-            <Logo size={20} activity="idle" />
-            <span class="text-base font-semibold text-(--color-brand-600)">MikeRust</span>
-          </span>
+        <div class="flex items-center gap-2 w-full">
+          <Logo size={20} activity="idle" />
+          <span class="text-base font-semibold text-(--color-brand-600)">MikeRust</span>
           <span
             class="text-[11px] font-normal text-(--color-text-secondary) tabular-nums"
             title={i18n.t('App.versionTooltip', { version: APP_VERSION })}
           >
             v{APP_VERSION}
           </span>
-        </span>
+          <!-- Global active-domain picker. Initialised from the
+               user's `default_domain` (set at sign-up), saved
+               server-side on every change. Restricted to the
+               enabled-domains preference so hidden domains stay
+               hidden. -->
+          <Select
+            options={sidebarDomainOptions}
+            value={userStore.defaultDomain}
+            onchange={(e: Event) =>
+              void onSidebarDomainChange(
+                (e.target as HTMLSelectElement).value as Domain,
+              )}
+            size="sm"
+            class="ml-auto min-w-0 max-w-[10rem]"
+            title={i18n.t('Sidebar.activeDomainTooltip')}
+          />
+        </div>
       {/snippet}
 
       <!-- nav -->
