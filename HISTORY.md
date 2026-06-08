@@ -13,6 +13,45 @@ diff. For the upstream-sync audit trail (which fixes were ported from
 
 ---
 
+## v0.6.5 — 2026-06-08 (Mistral "Fast" profile preset)
+
+Adds a third Mistral profile preset alongside "Equilibrato" and
+"Premium" — surfaced in Settings → Modelli LLM → Mistral AI card
+right above the two existing ones.
+
+The new **"Veloce"** (Fast) profile assigns Mistral Small 4
+(`mistral-small-latest`) to both main and tabular roles, keeping
+Ministral 3B for titles. Rationale:
+
+  * Mistral Small 4 is ~3-5× faster than Large 3 on typical
+    legal queries — useful when the user is triaging documents
+    or doing quick lookups.
+  * Pricing-wise it's 5× cheaper on input ($0.1 vs $0.5 per Mtok)
+    and 5× cheaper on output ($0.3 vs $1.5), so it's an easy
+    choice for tabular runs where each cell is a focused
+    extraction (filename, dates, parties) rather than deep
+    reasoning.
+  * Small 4 still has vision + function calling + the full 128K
+    context window, so it doesn't downgrade the chat composer's
+    capabilities — only its quality ceiling on complex multi-step
+    reasoning.
+
+Layout: the previous `grid-cols-2` becomes `grid-cols-3` so all
+three buttons fit side-by-side on the Settings card. Order is
+deliberate: Fast → Balanced → Premium (cheap-to-expensive,
+left-to-right). The active profile detection uses the same
+auto-derive logic that already handled Balanced ↔ Premium ↔
+Custom transitions, so the user gets the brand-coloured "Attivo"
+badge on whichever profile their current role assignments match.
+
+Three new i18n keys: `mistralProfileFast`, `mistralProfileFastHint`,
+`mistralProfileFastApplied` localised in all six locales
+(it / en / fr / de / es / pt).
+
+No backend changes; svelte-check 0 errors.
+
+---
+
 ## v0.6.4 — 2026-06-08 (hotfix — Mistral 1-RPS spacing + global cursor-pointer)
 
 Two issues addressed:

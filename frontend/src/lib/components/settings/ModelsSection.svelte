@@ -423,20 +423,30 @@
   }
 
   // ── Mistral role-model profiles ───────────────────────────────────
-  // Two opinionated presets the user can apply with one click, plus
-  // an implicit "custom" fall-through when the role assignments
-  // don't match either preset. The presets fill main / title /
+  // Three opinionated presets the user can apply with one click,
+  // plus an implicit "custom" fall-through when the role assignments
+  // don't match any preset. The presets fill main / title /
   // tabular role models with Mistral ids; clicking again with the
-  // same preset is a no-op (idempotent). The toggle is disabled
+  // same preset is a no-op (idempotent). All buttons are disabled
   // when no API key is configured — otherwise we'd save role
   // assignments that the chat dispatcher would fail to fulfil.
-  type MistralProfile = 'balanced' | 'premium' | 'custom'
+  type MistralProfile = 'fast' | 'balanced' | 'premium' | 'custom'
 
   const MISTRAL_PRESETS: Record<Exclude<MistralProfile, 'custom'>, {
     main: string
     title: string
     tabular: string
   }> = {
+    // Latency-first path. Small 4 ($0.1/$0.3 per Mtok, vision +
+    // function calling + 128K) is ~3-5× faster than Large 3 on
+    // legal queries and ~5× cheaper on input — fine for triage,
+    // quick lookups, and tabular runs where each cell is a
+    // focused extraction (not a deep reasoning task).
+    fast: {
+      main: 'mistral:mistral-small-latest',
+      title: 'mistral:ministral-3b-latest',
+      tabular: 'mistral:mistral-small-latest',
+    },
     // Default sweet spot. Large 3 ($0.5/$1.5 per Mtok, vision +
     // function calling + 128K) covers the bulk of legal chat;
     // Ministral 3B ($0.1/$0.1) crunches chat titles for cents per
@@ -470,18 +480,18 @@
     return 'custom'
   })
 
-  function applyMistralProfile(profile: 'balanced' | 'premium') {
+  function applyMistralProfile(profile: 'fast' | 'balanced' | 'premium') {
     const preset = MISTRAL_PRESETS[profile]
     form.main_model = preset.main
     form.title_model = preset.title
     form.tabular_model = preset.tabular
-    toastStore.info(
-      i18n.t(
-        profile === 'premium'
+    const toastKey =
+      profile === 'fast'
+        ? 'Settings.mistralProfileFastApplied'
+        : profile === 'premium'
           ? 'Settings.mistralProfilePremiumApplied'
-          : 'Settings.mistralProfileBalancedApplied',
-      ),
-    )
+          : 'Settings.mistralProfileBalancedApplied'
+    toastStore.info(i18n.t(toastKey))
   }
 
   async function save() {
@@ -720,7 +730,33 @@
           <p class="text-xs font-medium text-(--color-text-secondary) mb-2">
             {i18n.t('Settings.mistralProfileTitle')}
           </p>
-          <div class="grid grid-cols-2 gap-2">
+          <div class="grid grid-cols-3 gap-2">
+            <button
+              type="button"
+              disabled={!keySet(form.mistral_api_key)}
+              onclick={() => applyMistralProfile('fast')}
+              class="text-left px-3 py-2 rounded-(--radius-md) border transition-colors duration-(--transition-fast)
+                     {activeMistralProfile === 'fast'
+                       ? 'border-(--color-brand-500) bg-(--color-brand-50)'
+                       : 'border-(--color-surface-300) hover:border-(--color-surface-400)'}
+                     disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <div class="flex items-center gap-2">
+                <span class="text-sm font-medium text-(--color-text-primary)">
+                  {i18n.t('Settings.mistralProfileFast')}
+                </span>
+                {#if activeMistralProfile === 'fast'}
+                  <Badge tone="brand" size="xs">{i18n.t('Settings.mistralProfileActive')}</Badge>
+                {/if}
+              </div>
+              <p class="text-xs text-(--color-text-secondary) mt-1">
+                {i18n.t('Settings.mistralProfileFastHint')}
+              </p>
+              <p class="text-[11px] text-(--color-text-disabled) mt-1 font-mono">
+                Small 4 · Ministral 3B · Small 4
+              </p>
+            </button>
+
             <button
               type="button"
               disabled={!keySet(form.mistral_api_key)}
