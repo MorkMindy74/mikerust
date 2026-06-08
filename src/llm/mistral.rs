@@ -99,23 +99,27 @@ pub(crate) fn cache_key_for(params: &StreamParams) -> Option<String> {
 
 pub(crate) fn build_body(params: &StreamParams, model: &str, stream: bool) -> serde_json::Value {
     let messages = to_wire_messages(&params.full_system(), &params.messages);
+    // Per-user overrides (Commit B). When `mistral_opts` is None
+    // (one-shot callers, or chat callers before migration 0033 has
+    // run on their data folder) both flags fall back to false —
+    // matching the Commit A hard-coded behaviour.
+    let opts = params.mistral_opts.as_ref();
+    let parallel = opts.map(|o| o.parallel_tool_calls).unwrap_or(false);
+    let safe = opts.map(|o| o.safe_prompt).unwrap_or(false);
     let mut body = json!({
         "model": model,
         "messages": messages,
         "stream": stream,
         "max_tokens": DEFAULT_MAX_TOKENS,
         "temperature": DEFAULT_TEMPERATURE,
-        // Mistral default is `true`. Legal workflows benefit from
-        // sequential tool execution: tabular reviews extract cell by
-        // cell, citation lookups need a definitive order, and a
-        // parallel call that returns out-of-order results is a debug
-        // nightmare. v0.6.0 Commit B exposes a per-user toggle.
-        "parallel_tool_calls": false,
-        // Mistral default is already `false`; we send explicit-OFF
-        // so future readers see the intent. Legal documents trip
-        // the safe_prompt filter on legitimate content
-        // (criminal-case sentences, sensitive medical reports).
-        "safe_prompt": false,
+        // Mistral default is `true`. We default to `false` (sequential
+        // tool execution for predictable legal workflows); the user
+        // can flip it via `mistral_parallel_tools` in Settings.
+        "parallel_tool_calls": parallel,
+        // Mistral default is also `false`; explicit-OFF unless the
+        // user opted IN via `mistral_safe_prompt` in Settings, which
+        // applies the upstream safety wrapper.
+        "safe_prompt": safe,
     });
     if !params.tools.is_empty() {
         if let Ok(tools) = serde_json::to_value(&params.tools) {
@@ -311,6 +315,7 @@ mod tests {
             gemini_api_key: None,
             gemini_region: None,
             chat_id: chat_id.map(String::from),
+            mistral_opts: None,
         }
     }
 
@@ -397,6 +402,27 @@ mod tests {
         let p = params_with("k", "mistral-large-latest", None);
         let body = build_body(&p, "mistral-large-latest", false);
         assert_eq!(body["stream"], json!(false));
+    }
+
+    #[test]
+    fn build_body_honours_mistral_opts_override_to_true() {
+        let mut p = params_with("k", "mistral-large-latest", None);
+        p.mistral_opts = Some(crate::llm::types::MistralOpts {
+            safe_prompt: true,
+            parallel_tool_calls: true,
+        });
+        let body = build_body(&p, "mistral-large-latest", true);
+        assert_eq!(body["safe_prompt"], json!(true));
+        assert_eq!(body["parallel_tool_calls"], json!(true));
+    }
+
+    #[test]
+    fn build_body_falls_back_to_false_when_mistral_opts_is_none() {
+        let mut p = params_with("k", "mistral-large-latest", None);
+        p.mistral_opts = None;
+        let body = build_body(&p, "mistral-large-latest", true);
+        assert_eq!(body["safe_prompt"], json!(false));
+        assert_eq!(body["parallel_tool_calls"], json!(false));
     }
 
     #[test]

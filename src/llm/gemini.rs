@@ -820,6 +820,7 @@ mod tests {
             gemini_api_key: None,
             gemini_region: None,
             chat_id: None,
+            mistral_opts: None,
         }
     }
 

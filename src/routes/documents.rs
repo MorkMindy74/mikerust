@@ -334,6 +334,8 @@ async fn generate_rejection_summary(
         gemini_region: creds.gemini_region.clone(),
         // Doc-summarisation is one-shot — no Mistral cache benefit.
         chat_id: None,
+        // One-shot path inherits Mistral defaults (Commit A behaviour).
+        mistral_opts: None,
     };
 
     let summary = match crate::llm::provider_for_model(model) {

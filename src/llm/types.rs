@@ -176,6 +176,24 @@ pub struct LocalConfig {
     pub secure_mode: bool,
 }
 
+/// Per-user Mistral provider options. Surfaced from the
+/// `user_settings.mistral_*` columns (migration 0033). Only the
+/// Mistral provider path reads this; other providers ignore it.
+/// `None` on the params means the Mistral defaults apply (both
+/// fields false — the Commit A behaviour).
+#[derive(Debug, Clone, Default)]
+pub struct MistralOpts {
+    /// Mistral's `safe_prompt` request parameter. Default false
+    /// (matches Mistral's API default). Toggle in
+    /// Settings → Modelli LLM → Mistral AI.
+    pub safe_prompt: bool,
+    /// Mistral's `parallel_tool_calls`. Mistral's API default is
+    /// `true`; this product overrides to `false` for sequential
+    /// tool execution in legal workflows. The toggle re-enables
+    /// the upstream parallel behaviour for power users who want it.
+    pub parallel_tool_calls: bool,
+}
+
 pub struct StreamParams {
     pub model: String,
     /// Stable system-prompt prefix — identical across the turns of a chat
@@ -207,6 +225,12 @@ pub struct StreamParams {
     /// stable system prompt + attached documents is a 70-90% cost
     /// reduction. None disables caching for that call.
     pub chat_id: Option<String>,
+    /// Per-user Mistral options. Populated by `build_mistral_opts`
+    /// in chat.rs only when the call is routed to the Mistral
+    /// provider; other provider paths leave it None and Mistral's
+    /// `build_body` falls back to the Commit A hard-coded defaults
+    /// (`safe_prompt: false`, `parallel_tool_calls: false`).
+    pub mistral_opts: Option<MistralOpts>,
 }
 
 impl StreamParams {

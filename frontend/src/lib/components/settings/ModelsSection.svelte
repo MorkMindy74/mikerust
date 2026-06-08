@@ -31,6 +31,9 @@
     /** v0.5.6 "Modalità sicura locale" — when true the form swaps the
      *  free-form URL / api key / model fields for a curated picker. */
     local_secure_mode: boolean
+    /** v0.6.0 Mistral request-knob toggles (migration 0033). */
+    mistral_safe_prompt: boolean
+    mistral_parallel_tools: boolean
   }
 
   const s = (v: string | null | undefined): string => v ?? ''
@@ -53,6 +56,8 @@
       local_model: s(x.local_model),
       active_provider: x.active_provider ?? null,
       local_secure_mode: x.local_secure_mode ?? false,
+      mistral_safe_prompt: x.mistral_safe_prompt ?? false,
+      mistral_parallel_tools: x.mistral_parallel_tools ?? false,
     }
   }
 </script>
@@ -773,6 +778,47 @@
               {i18n.t('Settings.mistralProfileCustomNote')}
             </p>
           {/if}
+        </div>
+
+        <!-- v0.6.0 — Mistral-specific request knobs.
+             Both default to OFF (migration 0033 DEFAULT 0). The card
+             surfaces them so users hitting safe_prompt false-positives
+             on legal content can flip on the upstream filter, or
+             power users who want concurrent tool calls can re-enable
+             Mistral's `parallel_tool_calls: true` default. The
+             corresponding backend pass-through lives in
+             src/llm/mistral.rs::build_body. -->
+        <div class="pt-2 border-t border-(--color-surface-200) space-y-3">
+          <Toggle
+            bind:checked={form.mistral_safe_prompt}
+            disabled={!keySet(form.mistral_api_key)}
+            label={i18n.t('Settings.mistralSafePrompt')}
+            description={i18n.t('Settings.mistralSafePromptHint')}
+          />
+          <Toggle
+            bind:checked={form.mistral_parallel_tools}
+            disabled={!keySet(form.mistral_api_key)}
+            label={i18n.t('Settings.mistralParallelTools')}
+            description={i18n.t('Settings.mistralParallelToolsHint')}
+          />
+        </div>
+
+        <!-- ZDR / EU hosting info. NOT a checkbox — Mistral's Zero
+             Data Retention requires a manual support ticket (confirmed
+             against the official help center 2026-06). The note
+             explains the default 30-day rolling abuse-monitoring
+             retention and offers the help-center link for users who
+             want stricter handling. -->
+        <div class="pt-2 border-t border-(--color-surface-200) text-xs text-(--color-text-secondary) space-y-1">
+          <p>{i18n.t('Settings.mistralEuHostingNote')}</p>
+          <a
+            href="https://help.mistral.ai/en/articles/347612-can-i-activate-zero-data-retention-zdr"
+            target="_blank"
+            rel="noopener"
+            class="inline-flex items-center gap-1 text-(--color-brand-600) hover:text-(--color-brand-700) underline"
+          >
+            {i18n.t('Settings.mistralZdrLink')}
+          </a>
         </div>
       </div>
     </Card>

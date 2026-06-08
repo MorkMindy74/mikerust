@@ -55,6 +55,13 @@ export interface LlmSettings {
   /** v0.5.6: "Modalità sicura locale" toggle. ON → local provider
    *  pins to loopback + curated `mike-…-fast` model ids only. */
   local_secure_mode?: boolean
+  /** v0.6.0: Mistral `safe_prompt` request param. OFF by default;
+   *  ON applies Mistral's upstream safety wrapper. */
+  mistral_safe_prompt?: boolean
+  /** v0.6.0: Mistral `parallel_tool_calls`. OFF by default
+   *  (sequential tool execution for predictable legal workflows);
+   *  ON re-enables Mistral's upstream parallel default. */
+  mistral_parallel_tools?: boolean
   /** Same field on PUT — kept Partial<LlmSettings> compatible. */
   hyde_enabled?: boolean
 }

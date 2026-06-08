@@ -225,6 +225,7 @@ pub async fn summarize_old_turns(
         gemini_region: creds.gemini_region.clone(),
         // Summarisation is one-shot — no cache benefit.
         chat_id: None,
+        mistral_opts: None,
     };
 
     let summary = match super::provider_for_model(target_model) {

@@ -87,6 +87,27 @@ pub fn build_local_config(
     })
 }
 
+/// Build the per-request Mistral options snapshot from the saved
+/// `user_settings.mistral_*` columns. Returns `None` when the call
+/// isn't routed to Mistral (the Mistral provider path is the only
+/// consumer; OpenAI / local / Claude / Gemini ignore this field on
+/// `StreamParams`). The two flags default to `false` server-side
+/// via the migration 0033 DEFAULT clause, matching the v0.6.0
+/// Commit A hard-coded behaviour.
+pub fn build_mistral_opts(
+    model: &str,
+    settings: Option<&crate::routes::user::LlmSettings>,
+) -> Option<crate::llm::types::MistralOpts> {
+    if !model.starts_with("mistral:") {
+        return None;
+    }
+    let s = settings?;
+    Some(crate::llm::types::MistralOpts {
+        safe_prompt: s.mistral_safe_prompt,
+        parallel_tool_calls: s.mistral_parallel_tools,
+    })
+}
+
 // ---------------------------------------------------------------------------
 // MCP capability discovery — surfaces configured servers to the chat model
 // ---------------------------------------------------------------------------
@@ -3727,6 +3748,10 @@ async fn stream_chat_root(
                 // Used by the Mistral provider to derive a stable
                 // prompt_cache_key. Other providers ignore this field.
                 chat_id: Some(chat_id_clone.clone()),
+                // Read per-user Mistral options (safe_prompt /
+                // parallel_tool_calls) from settings. None for any
+                // non-mistral routing.
+                mistral_opts: build_mistral_opts(&raw_model, user_settings.as_ref()),
             };
 
             let stream = llm::stream_chat(params).await;
@@ -5854,6 +5879,7 @@ async fn post_message(
         // benefit on one-shot calls); pass through the route's
         // chat_id anyway so future-Mistral can opt-in.
         chat_id: Some(chat_id.clone()),
+        mistral_opts: build_mistral_opts(&model, user_settings.as_ref()),
     };
 
     // SSE stream
@@ -6081,6 +6107,7 @@ async fn generate_title(
         gemini_region: user_settings.as_ref().and_then(|s| s.gemini_region.clone()),
         // Title generation is one-shot — no Mistral cache benefit.
         chat_id: None,
+        mistral_opts: build_mistral_opts(&title_model, user_settings.as_ref()),
     };
 
     let title_text = match llm::provider_for_model(&title_model) {

@@ -140,6 +140,7 @@ pub async fn complete_text(model: &str, system: Option<&str>, user: &str) -> Res
         gemini_api_key: None,
         gemini_region: None,
         chat_id: None,
+        mistral_opts: None,
     };
     match provider_for_model(model) {
         Provider::Claude => claude::complete(params).await,

@@ -478,6 +478,7 @@ async fn translate_prompt(
         gemini_region: settings.gemini_region.clone(),
         // Translation is one-shot — no Mistral cache benefit.
         chat_id: None,
+        mistral_opts: crate::routes::chat::build_mistral_opts(&model, Some(&settings)),
     };
     let translated = match llm::provider_for_model(&model) {
         llm::Provider::Claude => llm::claude::complete(params).await,

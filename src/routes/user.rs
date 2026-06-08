@@ -396,12 +396,22 @@ pub struct LlmSettings {
     /// from Settings → Modelli LLM. Default OFF for retro-compat on
     /// existing installs.
     pub local_secure_mode: bool,
+    /// Mistral `safe_prompt` request parameter (migration 0033).
+    /// OFF by default — the Mistral safety wrapper false-flags
+    /// legitimate legal content. Toggled from Settings → Modelli
+    /// LLM → Mistral AI.
+    pub mistral_safe_prompt: bool,
+    /// Mistral `parallel_tool_calls` (migration 0033). OFF by
+    /// default — sequential tool execution is more predictable in
+    /// legal workflows. Toggled from Settings → Modelli LLM →
+    /// Mistral AI.
+    pub mistral_parallel_tools: bool,
 }
 
 // We're past sqlx's 16-element `FromRow` tuple limit (added
-// local_secure_mode in v0.5.6 brings us to 17 columns), so switch to
-// a #[derive(FromRow)] struct with the field names matching the SQL
-// column names exactly.
+// local_secure_mode in v0.5.6 brings us to 17 columns; v0.6.0
+// migration 0033 added two more), so switch to a #[derive(FromRow)]
+// struct with the field names matching the SQL column names exactly.
 #[derive(sqlx::FromRow)]
 struct LlmRow {
     main_model: Option<String>,
@@ -421,12 +431,15 @@ struct LlmRow {
     mistral_model: Option<String>,
     hyde_enabled: i64,
     local_secure_mode: i64,
+    mistral_safe_prompt: i64,
+    mistral_parallel_tools: i64,
 }
 
 const SELECT_COLUMNS: &str =
     "main_model, title_model, tabular_model, claude_api_key, gemini_api_key, gemini_region, \
      gemini_model, openai_api_key, openai_model, local_base_url, local_api_key, local_model, \
-     active_provider, mistral_api_key, mistral_model, hyde_enabled, local_secure_mode";
+     active_provider, mistral_api_key, mistral_model, hyde_enabled, local_secure_mode, \
+     mistral_safe_prompt, mistral_parallel_tools";
 
 pub async fn fetch_llm_settings(
     db: &sqlx::SqlitePool,
@@ -461,6 +474,8 @@ fn row_to_settings(r: LlmRow) -> LlmSettings {
         mistral_model: r.mistral_model,
         hyde_enabled: r.hyde_enabled != 0,
         local_secure_mode: r.local_secure_mode != 0,
+        mistral_safe_prompt: r.mistral_safe_prompt != 0,
+        mistral_parallel_tools: r.mistral_parallel_tools != 0,
     }
 }
 
@@ -515,6 +530,9 @@ struct UpdateLlmSettingsBody {
     /// whatever was in the DB (typical for partial saves of other
     /// fields).
     #[serde(default)] local_secure_mode: Option<bool>,
+    /// v0.6.0 Mistral provider options. Migration 0033.
+    #[serde(default)] mistral_safe_prompt: Option<bool>,
+    #[serde(default)] mistral_parallel_tools: Option<bool>,
 }
 
 async fn update_llm_settings(
@@ -546,25 +564,30 @@ async fn update_llm_settings(
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     let secure_value: Option<i64> = body.local_secure_mode.map(|b| if b { 1 } else { 0 });
+    let mistral_safe_value: Option<i64> = body.mistral_safe_prompt.map(|b| if b { 1 } else { 0 });
+    let mistral_parallel_value: Option<i64> =
+        body.mistral_parallel_tools.map(|b| if b { 1 } else { 0 });
     sqlx::query(
         "UPDATE user_settings SET \
-            main_model        = COALESCE(?, main_model), \
-            title_model       = COALESCE(?, title_model), \
-            tabular_model     = COALESCE(?, tabular_model), \
-            claude_api_key    = COALESCE(?, claude_api_key), \
-            gemini_api_key    = COALESCE(?, gemini_api_key), \
-            gemini_region     = COALESCE(?, gemini_region), \
-            gemini_model      = COALESCE(?, gemini_model), \
-            openai_api_key    = COALESCE(?, openai_api_key), \
-            openai_model      = COALESCE(?, openai_model), \
-            local_base_url    = COALESCE(?, local_base_url), \
-            local_api_key     = COALESCE(?, local_api_key), \
-            local_model       = COALESCE(?, local_model), \
-            active_provider   = COALESCE(?, active_provider), \
-            mistral_api_key   = COALESCE(?, mistral_api_key), \
-            mistral_model     = COALESCE(?, mistral_model), \
-            local_secure_mode = COALESCE(?, local_secure_mode), \
-            updated_at        = datetime('now') \
+            main_model             = COALESCE(?, main_model), \
+            title_model            = COALESCE(?, title_model), \
+            tabular_model          = COALESCE(?, tabular_model), \
+            claude_api_key         = COALESCE(?, claude_api_key), \
+            gemini_api_key         = COALESCE(?, gemini_api_key), \
+            gemini_region          = COALESCE(?, gemini_region), \
+            gemini_model           = COALESCE(?, gemini_model), \
+            openai_api_key         = COALESCE(?, openai_api_key), \
+            openai_model           = COALESCE(?, openai_model), \
+            local_base_url         = COALESCE(?, local_base_url), \
+            local_api_key          = COALESCE(?, local_api_key), \
+            local_model            = COALESCE(?, local_model), \
+            active_provider        = COALESCE(?, active_provider), \
+            mistral_api_key        = COALESCE(?, mistral_api_key), \
+            mistral_model          = COALESCE(?, mistral_model), \
+            local_secure_mode      = COALESCE(?, local_secure_mode), \
+            mistral_safe_prompt    = COALESCE(?, mistral_safe_prompt), \
+            mistral_parallel_tools = COALESCE(?, mistral_parallel_tools), \
+            updated_at             = datetime('now') \
          WHERE user_id = ?",
     )
     .bind(&body.main_model)
@@ -583,6 +606,8 @@ async fn update_llm_settings(
     .bind(&body.mistral_api_key)
     .bind(&body.mistral_model)
     .bind(secure_value)
+    .bind(mistral_safe_value)
+    .bind(mistral_parallel_value)
     .bind(&auth.user_id)
     .execute(&state.db)
     .await

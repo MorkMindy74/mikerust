@@ -498,6 +498,7 @@ mod tests {
                 secure_mode,
             }),
             chat_id: None,
+            mistral_opts: None,
             claude_api_key: None,
             gemini_api_key: None,
             gemini_region: None,

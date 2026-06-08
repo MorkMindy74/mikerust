@@ -112,6 +112,7 @@ pub async fn generate_hypothesis(
         gemini_region: creds.gemini_region.clone(),
         // HyDE is one-shot — no cache benefit from chat-scoped keys.
         chat_id: None,
+        mistral_opts: None,
     };
 
     let raw = match super::provider_for_model(target_model) {
