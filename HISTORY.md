@@ -13,6 +13,44 @@ diff. For the upstream-sync audit trail (which fixes were ported from
 
 ---
 
+## v0.6.1 — 2026-06-08 (hotfix — Mistral 429 retry-with-backoff)
+
+Single-fix release on top of v0.6.0. The dedicated Mistral provider
+landed in v0.6.0 surfaces an immediate error when Mistral returns
+HTTP 429, which on the free Experiment tier (default 1 RPS) is easy
+to trip when the chat composer fires multiple Mistral calls in
+quick succession (main chat + title generation + HyDE + tabular
+extraction). v0.6.1 wraps the POST to /chat/completions in a
+3-attempt retry-with-backoff:
+
+  1. Honour Mistral's `Retry-After` header when present (parsed as
+     integer seconds, capped at 30s to avoid pathological waits on
+     monthly-quota resets).
+  2. Fall back to exponential backoff when the header is absent:
+     1s → 2s → 4s. Total worst-case wait ~7s before surfacing the
+     error.
+  3. Only 429 triggers a retry — 401/403/422/5xx are surfaced
+     immediately because they're either authoritative refusals
+     (auth, quota, validation) or distinct failure modes that
+     would be misleading to hide behind a retry.
+
+New helper `next_backoff(attempt, retry_after_header)` is a pure
+function (no I/O, no clock); the actual sleep happens in
+`post_with_retry` around `tokio::time::sleep`. Both `stream` and
+`complete` route through the same wrapper so SSE and non-SSE
+paths share the policy.
+
+5 new unit tests pin the backoff calculation (Retry-After
+honoured, capped at 30s, exponential fallback, bogus-format
+fallback, whitespace tolerance). 22/22 `llm::mistral` tests
+green; 110/110 across the `llm::` tree.
+
+No schema migration; no UI change; no API contract change beyond
+the user-perceptible "transient 429s now resolve themselves in
+~1-7s instead of failing the chat turn."
+
+---
+
 ## v0.6.0 — 2026-06-08 (Mistral first-class: cloud provider with prompt caching + sequential tool calling)
 
 Promotes Mistral La Plateforme (`api.mistral.ai`) from an

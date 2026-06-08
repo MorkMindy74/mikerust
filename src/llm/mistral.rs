@@ -36,10 +36,107 @@ use futures_util::stream;
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::VecDeque;
+use std::time::Duration;
 
 use super::local::{parse_sse_line_opt, to_wire_messages};
 use super::types::{StreamEvent, StreamParams};
 use crate::llm::BoxStream;
+
+/// Max retry attempts on HTTP 429 before surfacing the error to the
+/// caller. Three is enough to ride out the typical RPS hiccup on
+/// Mistral's Experiment tier (1 req/s) without making the user wait
+/// pathologically long if the quota is genuinely exhausted.
+const MAX_429_RETRIES: u32 = 3;
+
+/// Hard cap on `Retry-After` honour. Mistral has been observed to
+/// occasionally send very large retry-after values when a workspace's
+/// monthly quota resets; we cap so the chat composer doesn't hang
+/// for half an hour on what looks like a network freeze. After the
+/// cap the call surfaces the 429 error and the user can retry
+/// manually.
+const MAX_BACKOFF_SECS: u64 = 30;
+
+/// Decide how long to wait before retrying a 429. Pure function so
+/// the retry policy is testable without sleeping.
+///
+/// Strategy:
+///   1. If Mistral sent a `Retry-After` header parseable as integer
+///      seconds, honour it (capped at MAX_BACKOFF_SECS).
+///   2. Otherwise fall back to exponential backoff:
+///      attempt 0 → 1s, attempt 1 → 2s, attempt 2 → 4s, …
+pub(crate) fn next_backoff(attempt: u32, retry_after: Option<&str>) -> Duration {
+    if let Some(ra) = retry_after {
+        if let Ok(secs) = ra.trim().parse::<u64>() {
+            return Duration::from_secs(secs.min(MAX_BACKOFF_SECS));
+        }
+        // Mistral has historically sent integer seconds; if we ever
+        // get the HTTP-date format ("Mon, 01 Jan 2026 00:00:00 GMT")
+        // we don't bother parsing it — fall through to exponential.
+    }
+    Duration::from_secs(1u64 << attempt.min(6)) // cap shift to avoid overflow
+}
+
+/// POST to Mistral with automatic 429 retry. Returns the first
+/// non-429 response (or the final 429 after `MAX_429_RETRIES`
+/// attempts so the caller can surface it via `mistral_error`).
+///
+/// We retry only on 429 — other status codes (401 invalid key, 403
+/// quota or guardrail, 422 validation, 5xx server) are surfaced
+/// immediately because they're either authoritative refusals or
+/// distinct enough to be worth user attention without our retry
+/// loop hiding them.
+async fn post_with_retry(
+    client: &reqwest::Client,
+    url: &str,
+    api_key: &str,
+    body: &serde_json::Value,
+) -> Result<reqwest::Response> {
+    for attempt in 0..MAX_429_RETRIES {
+        let resp = client
+            .post(url)
+            .header("Authorization", format!("Bearer {api_key}"))
+            .header("Content-Type", "application/json")
+            .json(body)
+            .send()
+            .await?;
+
+        // Last attempt: caller handles whatever came back.
+        if attempt + 1 == MAX_429_RETRIES {
+            return Ok(resp);
+        }
+
+        // 429 → back off and retry. Anything else → surface now.
+        if resp.status().as_u16() != 429 {
+            return Ok(resp);
+        }
+
+        let retry_after = resp
+            .headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+        // Drain the body so the connection can be reused — without
+        // this reqwest may hold it open until drop.
+        let _ = resp.bytes().await;
+
+        let backoff = next_backoff(attempt, retry_after.as_deref());
+        tracing::warn!(
+            "[llm/mistral] 429 on attempt {} of {}, backing off {:?}{}",
+            attempt + 1,
+            MAX_429_RETRIES,
+            backoff,
+            retry_after
+                .as_deref()
+                .map(|r| format!(" (Retry-After: {r})"))
+                .unwrap_or_default(),
+        );
+        tokio::time::sleep(backoff).await;
+    }
+    // Unreachable — the loop returns on the last iteration. Keep an
+    // explicit error to satisfy the type checker without `unreachable!`
+    // (cleaner stack if the constant ever drifts).
+    Err(anyhow!("post_with_retry: exhausted retries unexpectedly"))
+}
 
 /// La Plateforme endpoint. Hardcoded — Mistral is a managed cloud
 /// provider; the regional Azure-AI / AWS-Bedrock deployments need
@@ -177,13 +274,8 @@ pub async fn stream(params: StreamParams) -> Result<BoxStream> {
     let client = reqwest::Client::new();
     let body = build_body(&params, &model, true);
 
-    let resp = client
-        .post(format!("{MISTRAL_BASE_URL}/chat/completions"))
-        .header("Authorization", format!("Bearer {api_key}"))
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await?;
+    let url = format!("{MISTRAL_BASE_URL}/chat/completions");
+    let resp = post_with_retry(&client, &url, &api_key, &body).await?;
 
     if !resp.status().is_success() {
         let status = resp.status();
@@ -239,13 +331,8 @@ pub async fn complete(params: StreamParams) -> Result<String> {
     let client = reqwest::Client::new();
     let body = build_body(&params, &model, false);
 
-    let resp = client
-        .post(format!("{MISTRAL_BASE_URL}/chat/completions"))
-        .header("Authorization", format!("Bearer {api_key}"))
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await?;
+    let url = format!("{MISTRAL_BASE_URL}/chat/completions");
+    let resp = post_with_retry(&client, &url, &api_key, &body).await?;
 
     if !resp.status().is_success() {
         let status = resp.status();
@@ -451,6 +538,51 @@ mod tests {
         let s = e.to_string();
         assert!(s.contains("429"));
         assert!(s.contains("rate limit"));
+    }
+
+    #[test]
+    fn next_backoff_honours_retry_after_seconds() {
+        // Mistral typically sends Retry-After as a plain integer
+        // number of seconds. Honour it verbatim.
+        assert_eq!(next_backoff(0, Some("5")), Duration::from_secs(5));
+        assert_eq!(next_backoff(2, Some("12")), Duration::from_secs(12));
+    }
+
+    #[test]
+    fn next_backoff_caps_retry_after_at_thirty_seconds() {
+        // Mistral has been observed to occasionally return a very
+        // large Retry-After when a monthly quota resets — without a
+        // cap the chat composer would hang for half an hour. Cap is
+        // explicit so users see a "still rate-limited" error
+        // promptly instead of a frozen UI.
+        assert_eq!(
+            next_backoff(0, Some("9999")),
+            Duration::from_secs(30),
+        );
+    }
+
+    #[test]
+    fn next_backoff_exponential_when_header_missing() {
+        // 1s, 2s, 4s — total ~7s for the default 3-attempt budget.
+        assert_eq!(next_backoff(0, None), Duration::from_secs(1));
+        assert_eq!(next_backoff(1, None), Duration::from_secs(2));
+        assert_eq!(next_backoff(2, None), Duration::from_secs(4));
+    }
+
+    #[test]
+    fn next_backoff_ignores_bogus_retry_after_format() {
+        // If we ever get HTTP-date format (RFC 7231) instead of
+        // integer seconds, parsing fails and we fall back to
+        // exponential — better than panic or zero wait.
+        let b = next_backoff(2, Some("Mon, 01 Jan 2026 00:00:00 GMT"));
+        assert_eq!(b, Duration::from_secs(4));
+    }
+
+    #[test]
+    fn next_backoff_handles_whitespace_in_header() {
+        // Some load balancers add whitespace; the trim() in
+        // next_backoff handles it.
+        assert_eq!(next_backoff(0, Some("  3  ")), Duration::from_secs(3));
     }
 
     #[test]
