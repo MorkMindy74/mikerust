@@ -14,6 +14,7 @@
   import Button from '$lib/components/ui/Button.svelte'
   import IconButton from '$lib/components/ui/IconButton.svelte'
   import ChipGroup from '$lib/components/ui/ChipGroup.svelte'
+  import DomainPicker from '$lib/components/ui/DomainPicker.svelte'
   import MarkdownEditor from '$lib/components/ui/MarkdownEditor.svelte'
   import { workflowsApi } from '$lib/api/workflows'
   import { userStore } from '$lib/stores/user.svelte'
@@ -53,6 +54,7 @@
   let title = $state('')
   let type = $state<WorkflowType>('assistant')
   let domain = $state<Domain>('legal')
+  let alsoApplicableTo = $state<string[]>([])
   let practice = $state<string | null>(null)
   let promptMd = $state('')
   let columns = $state<ColumnDraft[]>([])
@@ -60,6 +62,14 @@
   let formError = $state<string | null>(null)
 
   const domainOptions = $derived(DOMAINS.map((d) => ({ value: d, label: domainLabel(d) })))
+
+  // Drop the primary domain if the user picked it as an extra after the
+  // fact — it can never be both primary and additional.
+  $effect(() => {
+    if (alsoApplicableTo.includes(domain)) {
+      alsoApplicableTo = alsoApplicableTo.filter((d) => d !== domain)
+    }
+  })
   const practiceChips = $derived(
     PRACTICES.map((p) => ({ value: p, label: t(`Workflows.practiceLabels.${p}`) }))
   )
@@ -80,6 +90,7 @@
       title = ''
       type = 'assistant'
       domain = userStore.defaultDomain
+      alsoApplicableTo = []
       practice = null
       promptMd = ''
       columns = []
@@ -112,6 +123,7 @@
         title: title.trim(),
         type,
         domain,
+        also_applicable_to: alsoApplicableTo,
         practice: practice ?? undefined,
       }
       if (type === 'assistant') {
@@ -167,6 +179,18 @@
 
     <!-- Domain -->
     <Select label={t('Domains.label')} options={domainOptions} bind:value={domain} class="w-60" />
+
+    <!-- Additional domains (cross-domain registration) -->
+    <div class="space-y-1.5">
+      <span class="text-xs font-medium text-(--color-text-secondary)">{t('Workflows.alsoApplicableTo')}</span>
+      <DomainPicker
+        bind:selected={alsoApplicableTo}
+        available={domainOptions}
+        exclude={domain}
+        placeholder={t('Workflows.alsoApplicableToPlaceholder')}
+      />
+      <p class="text-xs text-(--color-text-disabled)">{t('Workflows.alsoApplicableToHint')}</p>
+    </div>
 
     <!-- Practice -->
     <div class="space-y-1.5">

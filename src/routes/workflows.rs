@@ -51,15 +51,29 @@ type WorkflowRow = (
     String,         // created_at
     String,         // updated_at
     String,         // domain (added in migration 0018, defaults to 'legal')
+    String,         // also_applicable_to (JSON array text, migration 0034, default '[]')
 );
 
 const SELECT_COLS: &str =
-    "id, user_id, title, NULLIF(prompt_md, '') AS prompt_md, type, practice, columns_config, created_at, updated_at, domain";
+    "id, user_id, title, NULLIF(prompt_md, '') AS prompt_md, type, practice, columns_config, created_at, updated_at, domain, also_applicable_to";
+
+/// Parse the stored `also_applicable_to` JSON text into a clean
+/// `Vec<String>`: keep only canonical domains, drop a redundant
+/// listing of the primary domain. Tolerant of malformed JSON
+/// (treats it as empty) so a bad row never breaks the list.
+fn parse_also_applicable(raw: &str, primary: &str) -> Vec<String> {
+    serde_json::from_str::<Vec<String>>(raw)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|d| d != primary && crate::domain::is_valid(d))
+        .collect()
+}
 
 fn row_to_json(row: WorkflowRow, current_user: &str) -> Value {
-    let (id, user_id, title, prompt_md, ty, practice, columns_config, created_at, _updated_at, domain) =
+    let (id, user_id, title, prompt_md, ty, practice, columns_config, created_at, _updated_at, domain, also_raw) =
         row;
     let cols: Value = serde_json::from_str(&columns_config).unwrap_or_else(|_| json!([]));
+    let also = parse_also_applicable(&also_raw, &domain);
     let is_owner = user_id == current_user;
     json!({
         "id": id,
@@ -70,10 +84,27 @@ fn row_to_json(row: WorkflowRow, current_user: &str) -> Value {
         "columns_config": cols,
         "practice": practice,
         "domain": domain,
+        "also_applicable_to": also,
         "created_at": created_at,
         "is_system": false,
         "is_owner": is_owner,
     })
+}
+
+/// Sanitise a client-supplied additional-domains list into the JSON
+/// text we persist: keep only canonical domains, drop any redundant
+/// listing of the primary domain, de-duplicate. Returns "[]" for
+/// None/empty. Mirrors the preset loader's `also_applicable_to`
+/// hygiene so user rows and built-in presets behave identically.
+fn sanitise_also_applicable(list: Option<&Vec<String>>, primary: &str) -> String {
+    let mut seen = std::collections::HashSet::new();
+    let clean: Vec<&String> = list
+        .map(|v| v.as_slice())
+        .unwrap_or(&[])
+        .iter()
+        .filter(|d| d.as_str() != primary && crate::domain::is_valid(d) && seen.insert((*d).clone()))
+        .collect();
+    serde_json::to_string(&clean).unwrap_or_else(|_| "[]".to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -99,23 +130,22 @@ async fn list_workflows(
 
     // Build the WHERE clause incrementally so we keep parameter bindings
     // positional and avoid runtime SQL string concatenation tricks.
+    // NOTE: the `domain` filter is applied in Rust (not SQL) because a
+    // row now matches on its primary `domain` OR any entry in the
+    // `also_applicable_to` JSON array (migration 0034) — cross-domain
+    // user workflows, mirroring the preset behaviour. The `type`
+    // filter stays in SQL (cheap, exact).
     let mut sql = format!(
         "SELECT {SELECT_COLS} FROM workflows WHERE user_id = ?"
     );
     if type_filter.is_some() {
         sql.push_str(" AND type = ?");
     }
-    if domain_filter.is_some() {
-        sql.push_str(" AND domain = ?");
-    }
     sql.push_str(" ORDER BY updated_at DESC");
 
     let mut q = sqlx::query_as::<_, WorkflowRow>(&sql).bind(&auth.user_id);
     if let Some(t) = &type_filter {
         q = q.bind(t);
-    }
-    if let Some(d) = &domain_filter {
-        q = q.bind(d);
     }
     let rows: Vec<WorkflowRow> = q
         .fetch_all(&state.db)
@@ -124,6 +154,11 @@ async fn list_workflows(
 
     let mut workflows: Vec<Value> = rows
         .into_iter()
+        .filter(|r| match &domain_filter {
+            None => true,
+            // r.9 = primary domain, r.10 = also_applicable_to JSON text.
+            Some(d) => &r.9 == d || parse_also_applicable(&r.10, &r.9).iter().any(|x| x == d),
+        })
         .map(|r| row_to_json(r, &auth.user_id))
         .collect();
 
@@ -171,6 +206,11 @@ struct CreateWorkflowBody {
     /// to `legal` (matching the schema default) when omitted or unknown.
     #[serde(default)]
     domain: Option<String>,
+    /// Additional domains the workflow also surfaces under (migration
+    /// 0034). Sanitised server-side: only canonical domains kept, the
+    /// primary domain dropped if redundantly listed.
+    #[serde(default)]
+    also_applicable_to: Option<Vec<String>>,
 }
 
 async fn create_workflow(
@@ -206,10 +246,11 @@ async fn create_workflow(
         .unwrap_or_else(|| "[]".to_string());
 
     let dom = crate::domain::normalise_or_default(body.domain.as_deref());
+    let also_text = sanitise_also_applicable(body.also_applicable_to.as_ref(), dom);
 
     sqlx::query(
-        "INSERT INTO workflows (id, user_id, title, prompt_md, type, practice, columns_config, domain) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO workflows (id, user_id, title, prompt_md, type, practice, columns_config, domain, also_applicable_to) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&auth.user_id)
@@ -219,6 +260,7 @@ async fn create_workflow(
     .bind(&body.practice)
     .bind(&cols_text)
     .bind(dom)
+    .bind(&also_text)
     .execute(&state.db)
     .await
     .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
@@ -277,6 +319,10 @@ struct UpdateWorkflowBody {
     columns_config: Option<Value>,
     #[serde(default)]
     domain: Option<String>,
+    /// Additional domains (migration 0034). Some(list) replaces the
+    /// stored set (empty array clears it); None leaves it unchanged.
+    #[serde(default)]
+    also_applicable_to: Option<Vec<String>>,
 }
 
 async fn update_workflow(
@@ -298,13 +344,24 @@ async fn update_workflow(
         }
     }
 
+    // Sanitise against the effective primary domain: the one being set
+    // in this same update, else "" (a no-op for the redundant-primary
+    // filter — the SELECT path re-strips any stale primary on read).
+    // Some(list) replaces the stored set (empty array clears it);
+    // None leaves the column untouched via COALESCE.
+    let also_text: Option<String> = body
+        .also_applicable_to
+        .as_ref()
+        .map(|v| sanitise_also_applicable(Some(v), body.domain.as_deref().unwrap_or("")));
+
     let result = sqlx::query(
         "UPDATE workflows SET \
-           title          = COALESCE(?, title), \
-           prompt_md      = COALESCE(?, prompt_md), \
-           practice       = COALESCE(?, practice), \
-           columns_config = COALESCE(?, columns_config), \
-           domain         = COALESCE(?, domain), \
+           title              = COALESCE(?, title), \
+           prompt_md          = COALESCE(?, prompt_md), \
+           practice           = COALESCE(?, practice), \
+           columns_config     = COALESCE(?, columns_config), \
+           domain             = COALESCE(?, domain), \
+           also_applicable_to = COALESCE(?, also_applicable_to), \
            updated_at = datetime('now') \
          WHERE id = ? AND user_id = ?",
     )
@@ -313,6 +370,7 @@ async fn update_workflow(
     .bind(&body.practice)
     .bind(&cols_text)
     .bind(&body.domain)
+    .bind(&also_text)
     .bind(&id)
     .bind(&auth.user_id)
     .execute(&state.db)

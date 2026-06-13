@@ -75,6 +75,8 @@ export interface Workflow {
   columns_config: WorkflowColumn[]
   practice: string | null
   domain: Domain
+  /** Extra domains this workflow also surfaces under (migration 0034). */
+  also_applicable_to: Domain[]
   created_at: string
   /** true = shipped preset (config/workflows/*), not editable. */
   is_system: boolean

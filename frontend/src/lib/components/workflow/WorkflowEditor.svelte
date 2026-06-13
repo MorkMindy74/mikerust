@@ -16,12 +16,13 @@
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import TranslateModal from '$lib/components/ui/TranslateModal.svelte'
   import MarkdownEditor from '$lib/components/ui/MarkdownEditor.svelte'
+  import DomainPicker from '$lib/components/ui/DomainPicker.svelte'
   import { renderMarkdown } from '$lib/utils/markdown'
   import { translateAll, type TranslateJob } from '$lib/utils/translate'
   import { workflowsApi } from '$lib/api/workflows'
   import { toastStore } from '$lib/stores/toast.svelte'
   import { i18n } from '$lib/stores/i18n.svelte'
-  import { domainLabel } from '$lib/types/domain'
+  import { DOMAINS, domainLabel } from '$lib/types/domain'
   import type { Locale } from '$lib/types/user'
   import {
     COLUMN_FORMATS,
@@ -61,6 +62,7 @@
   let title = $state('')
   let promptMd = $state('')
   let columns = $state<ColumnDraft[]>([])
+  let alsoApplicableTo = $state<string[]>([])
   let saveState = $state<'idle' | 'saving' | 'saved'>('idle')
   let deleteOpen = $state(false)
   let promptMode = $state<'edit' | 'preview'>('edit')
@@ -74,6 +76,7 @@
   const formatOptions = $derived(
     COLUMN_FORMATS.map((f) => ({ value: f, label: t(`ColumnFormats.${f}`) })),
   )
+  const domainOptions = $derived(DOMAINS.map((d) => ({ value: d, label: domainLabel(d) })))
 
   $effect(() => {
     loading = true
@@ -84,6 +87,7 @@
         wf = w
         title = w.title
         promptMd = w.prompt_md ?? ''
+        alsoApplicableTo = [...(w.also_applicable_to ?? [])]
         columns = (w.columns_config ?? []).map((c) => ({
           name: ((c.name ?? c.label ?? c.key ?? '') as string).trim(),
           format: normalizeColumnFormat(c.format),
@@ -123,7 +127,10 @@
 
   async function doSave() {
     if (!wf || readOnly) return
-    const payload: Partial<Workflow> = { title: title.trim() || wf.title }
+    const payload: Partial<Workflow> = {
+      title: title.trim() || wf.title,
+      also_applicable_to: alsoApplicableTo as Workflow['also_applicable_to'],
+    }
     if (wf.type === 'assistant') {
       payload.prompt_md = promptMd
     } else {
@@ -147,6 +154,7 @@
         title: t('Workflows.copySuffix', { title: wf.title }),
         type: wf.type,
         domain: wf.domain,
+        also_applicable_to: alsoApplicableTo as Workflow['also_applicable_to'],
         practice: wf.practice ?? undefined,
         prompt_md: wf.type === 'assistant' ? promptMd : undefined,
         columns_config: wf.type === 'tabular' ? buildColumns() : undefined,
@@ -252,10 +260,29 @@
           {wf.type === 'assistant' ? t('Workflows.typeAssistant') : t('Workflows.typeTabular')}
         </Badge>
         <Badge tone="brand">{domainLabel(wf.domain)}</Badge>
+        {#if readOnly}
+          {#each alsoApplicableTo as d (d)}
+            <Badge tone="neutral">{domainLabel(d)}</Badge>
+          {/each}
+        {/if}
         {#if wf.practice}
           <span class="text-xs text-(--color-text-secondary)">{wf.practice}</span>
         {/if}
       </div>
+
+      {#if !readOnly}
+        <div class="space-y-1.5">
+          <span class="text-xs font-medium text-(--color-text-secondary)">{t('Workflows.alsoApplicableTo')}</span>
+          <DomainPicker
+            bind:selected={alsoApplicableTo}
+            available={domainOptions}
+            exclude={wf.domain}
+            placeholder={t('Workflows.alsoApplicableToPlaceholder')}
+            onchange={scheduleSave}
+          />
+          <p class="text-xs text-(--color-text-disabled)">{t('Workflows.alsoApplicableToHint')}</p>
+        </div>
+      {/if}
     </header>
 
     {#if wf.type === 'assistant'}
