@@ -43,8 +43,19 @@ pub struct WorkflowPreset {
     /// One of `assistant` | `tabular`.
     #[serde(rename = "type")]
     pub kind: String,
-    /// Professional vertical — see `crate::domain::DOMAINS`. Required.
+    /// Primary professional vertical — see `crate::domain::DOMAINS`.
+    /// Required. Also the folder the preset lives under by convention.
     pub domain: String,
+    /// Additional domains this preset should also surface under, beyond
+    /// the primary `domain`. Mirrors the DOCX-template
+    /// `also_applicable_to` mechanism: a workflow useful to more than
+    /// one vertical (e.g. fixed-asset analysis is relevant to both
+    /// `fiscale` and `finance`) is registered ONCE and listed in every
+    /// applicable domain's picker. Empty / omitted = the preset shows
+    /// strictly under its primary `domain`. Each entry is validated
+    /// against the canonical domain set at load time.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub also_applicable_to: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub practice: Option<String>,
     /// Free-form Markdown system prompt. Required for assistant
@@ -70,6 +81,17 @@ pub struct WorkflowPreset {
 }
 
 impl WorkflowPreset {
+    /// True when this preset should appear for `target`: matches the
+    /// primary `domain` or any entry in `also_applicable_to`. With
+    /// `target = None` (no domain filter) it always matches. Mirrors
+    /// `DocxTemplate::matches_domain`.
+    pub fn matches_domain(&self, target: Option<&str>) -> bool {
+        match target {
+            None => true,
+            Some(d) => self.domain == d || self.also_applicable_to.iter().any(|x| x == d),
+        }
+    }
+
     /// Render the preset as the JSON shape the `/workflow` endpoint
     /// serves to the frontend. Adds the synthesised fields (`is_system`,
     /// `user_id`, `created_at`, `is_owner`) so consumers see the same
@@ -89,6 +111,7 @@ impl WorkflowPreset {
             "columns_config": columns,
             "practice": self.practice,
             "domain": self.domain,
+            "also_applicable_to": self.also_applicable_to,
             "default_output_template": self.default_output_template,
             "created_at": "",
             "is_system": true,
@@ -128,7 +151,7 @@ pub fn load_workflow_presets(dir: &Path) -> Result<Vec<WorkflowPreset>> {
             }
         };
         match serde_json::from_slice::<WorkflowPreset>(&bytes) {
-            Ok(p) => {
+            Ok(mut p) => {
                 if p.id.is_empty() || p.title.is_empty() {
                     tracing::warn!(
                         "[workflow-presets] skip {} (id/title empty)",
@@ -151,6 +174,33 @@ pub fn load_workflow_presets(dir: &Path) -> Result<Vec<WorkflowPreset>> {
                         p.domain
                     );
                     continue;
+                }
+                // Sanitise also_applicable_to: drop non-canonical
+                // entries and any redundant listing of the primary
+                // domain (warn, don't kill the preset). Keeps the
+                // cross-domain surface honest without making one bad
+                // entry take down an otherwise-valid workflow.
+                {
+                    let primary = p.domain.clone();
+                    let before = p.also_applicable_to.len();
+                    p.also_applicable_to.retain(|d| {
+                        if d == &primary {
+                            tracing::warn!(
+                                "[workflow-presets] {}: also_applicable_to redundantly lists primary domain {} — dropping",
+                                p.id, d
+                            );
+                            return false;
+                        }
+                        if !crate::domain::is_valid(d) {
+                            tracing::warn!(
+                                "[workflow-presets] {}: also_applicable_to entry {} not canonical — dropping",
+                                p.id, d
+                            );
+                            return false;
+                        }
+                        true
+                    });
+                    let _ = before;
                 }
                 tracing::info!(
                     "[workflow-presets] loaded {} ({}, {}, domain={})",
@@ -213,6 +263,46 @@ mod tests {
                 p.id,
                 p.kind
             );
+        }
+    }
+
+    #[test]
+    fn matches_domain_primary_also_and_none() {
+        let mut p = WorkflowPreset {
+            id: "x".into(),
+            title: "X".into(),
+            kind: "tabular".into(),
+            domain: "fiscale".into(),
+            also_applicable_to: vec!["finance".into()],
+            practice: None,
+            prompt_md: None,
+            columns_config: None,
+            default_output_template: None,
+        };
+        assert!(p.matches_domain(None), "no filter ⇒ always matches");
+        assert!(p.matches_domain(Some("fiscale")), "primary domain matches");
+        assert!(p.matches_domain(Some("finance")), "also_applicable_to matches");
+        assert!(!p.matches_domain(Some("legal")), "unrelated domain does not match");
+        p.also_applicable_to.clear();
+        assert!(!p.matches_domain(Some("finance")), "without also_applicable_to, secondary no longer matches");
+    }
+
+    /// The two cross-domain commercialista workflows (fixed-asset
+    /// analysis + bookkeeping quadrature) must surface in BOTH the
+    /// `fiscale` and `finance` pickers via `also_applicable_to`.
+    /// Guards the cross-domain registration the user asked for in
+    /// v0.7.3.
+    #[test]
+    fn shipped_cross_domain_commercialista_presets_in_both_pickers() {
+        let dir = crate::presets::config_subdir("workflow-presets");
+        let presets = load_workflow_presets(&dir).expect("load");
+        for id in ["builtin-fiscale-analisi-cespiti", "builtin-finance-controlli-libri-contabili"] {
+            let p = presets
+                .iter()
+                .find(|p| p.id == id)
+                .unwrap_or_else(|| panic!("missing cross-domain preset {id}"));
+            assert!(p.matches_domain(Some("fiscale")), "{id} must show under fiscale");
+            assert!(p.matches_domain(Some("finance")), "{id} must show under finance");
         }
     }
 

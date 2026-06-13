@@ -140,7 +140,9 @@ async fn list_workflows(
             }
         }
         if let Some(ref d) = domain_filter {
-            if &preset.domain != d {
+            // Cross-domain aware: a preset surfaces under its primary
+            // `domain` AND any `also_applicable_to` entry.
+            if !preset.matches_domain(Some(d)) {
                 continue;
             }
         }

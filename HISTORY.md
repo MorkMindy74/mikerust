@@ -13,6 +13,59 @@ diff. For the upstream-sync audit trail (which fixes were ported from
 
 ---
 
+## v0.7.3 — 2026-06-13 (workflow cross-dominio + analisi cespiti e libri contabili)
+
+Adds two commercialista workflows — fixed-asset analysis and
+bookkeeping quadrature — and the **cross-domain registration**
+mechanism the user asked for so a single preset can surface in more
+than one sector's picker.
+
+### Cross-domain preset support (`also_applicable_to`)
+
+`WorkflowPreset` gains an optional `also_applicable_to: Vec<String>`
+field, mirroring the DOCX-template mechanism of the same name. A
+preset relevant to more than one vertical is registered **once** and
+listed in every applicable domain's picker — no duplicate JSON.
+
+* `src/presets/workflow.rs`: new field + `matches_domain(target)`
+  method (primary `domain` OR any `also_applicable_to` entry, `None`
+  ⇒ always). The loader sanitises the list — drops non-canonical
+  entries and any redundant listing of the primary domain (warn,
+  don't kill the preset). `to_api_json` exposes the field.
+* `src/routes/workflows.rs`: the in-memory preset filter now uses
+  `preset.matches_domain(Some(d))` instead of exact `domain == d`,
+  so cross-domain presets slice into both pickers. User-created DB
+  workflows stay single-domain (the column filter is unchanged).
+* 2 new unit tests: `matches_domain_primary_also_and_none` and
+  `shipped_cross_domain_commercialista_presets_in_both_pickers`.
+
+### Two new workflows (both cross-domain `fiscale` ⇄ `finance`)
+
+Grounded in authoritative sources (art. 16 DPR 600/73, art. 102/86
+TUIR, DM 31/12/1988 coefficients, art. 5 D.Lgs. 446/97; verified
+against current rules — super/iper-ammortamento is historical,
+replaced by the Transizione 4.0/5.0 credito d'imposta; manutenzioni
+plafond 5% per art. 102 c.6):
+
+* **`builtin-fiscale-analisi-cespiti`** (tabular, primary `fiscale`,
+  also `finance`) — fixed-asset register analysis: register↔bilancio
+  reconciliation, amortisation deductibility, fiscal excess (→ IRES
+  variation), movements + plus/minusvalenze. One row per asset/category.
+* **`builtin-finance-controlli-libri-contabili`** (tabular, primary
+  `finance`, also `fiscale`) — bookkeeping quadrature → anomaly
+  register: double-entry balance, numbering progressivity, key-account
+  balances (cassa never negative, bank reconciled), VAT registers ↔
+  LIPE ↔ annual return, ritenute ↔ F24, customer/supplier squaring,
+  year-end adjustments. One row per anomaly.
+
+Both appear in the Fiscale **and** Finance workflow pickers.
+docs/WORKFLOWS.md §2 documents the `also_applicable_to` field;
+docs/piano_settore_fiscale.md §3 notes the cross-domain pair.
+
+42/42 preset-loader tests green; no schema migration.
+
+---
+
 ## v0.7.2 — 2026-06-13 (settore Fiscale — analisi del bilancio ai fini fiscali)
 
 Fills a gap reported during testing: the Fiscale sector had no

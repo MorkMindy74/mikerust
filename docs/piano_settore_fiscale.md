@@ -73,6 +73,16 @@ Undici preset pronti all'uso, mix assistant + tabular.
 | `scadenzario-versamenti-f24` | Scadenzario versamenti F24 per cliente | scadenza di versamento (tributo/codice/periodo/importo) |
 | `riconciliazione-civilistico-fiscale` | Riconciliazione civilistico-fiscale (variazioni IRES — Quadro RF) | variazione in aumento/diminuzione dal risultato civilistico al reddito imponibile (art. 83 TUIR) |
 | `base-imponibile-irap` | Determinazione base imponibile IRAP da bilancio | voce/aggregato del valore della produzione netta (art. 5 D.Lgs. 446/97) |
+| `analisi-cespiti` ⇄ | Analisi cespiti / registro beni ammortizzabili | cespite o categoria (riconciliazione registro↔bilancio, ammortamenti art. 102 TUIR, eccedenza fiscale, plus/minus) |
+
+> **Workflow cross-dominio (⇄).** Due workflow del commercialista sono
+> registrati una sola volta ma visibili in **due settori** tramite il
+> campo `also_applicable_to`: `analisi-cespiti` (primario `fiscale`,
+> anche `finance`) e `controlli-libri-contabili` (primario `finance`,
+> anche `fiscale` — file in `config/workflow-presets/finance/`). Così
+> l'analisi cespiti e i controlli di quadratura compaiono sia nel
+> picker Fiscale sia in quello Finanza, senza duplicare il JSON. Vedi
+> `docs/WORKFLOWS.md` §2 (campo `also_applicable_to`).
 
 > **Bilancio: angolazione fiscale vs finanziaria.** L'analisi del bilancio
 > esiste in due settori con tagli diversi e complementari: nel settore
