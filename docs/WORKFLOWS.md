@@ -83,7 +83,7 @@ authoring time:
 |---|---|
 | `title` | Shown in the workflow list and in the chat composer's workflow picker. Keep it action-oriented: "Review NDA terms", not "NDA workflow". |
 | `type` | `"assistant"` or `"tabular"`. Drives where the workflow appears in the UI and how the model is asked to respond. |
-| `domain` | Top-level professional vertical. One of `legal` (default), `medical`, `finance`, `real_estate`, `hr`, `insurance`, `ip`, `compliance`, `others`. Filters list views and is inherited by tabular reviews. See §5 for the practice/domain distinction. |
+| `domain` | Top-level professional vertical. One of `legal` (default), `medical`, `finance`, `fiscale`, `real_estate`, `hr`, `insurance`, `ip`, `compliance`, `gdpr`, `pa`, `others`. Filters list views and is inherited by tabular reviews. See §5 for the practice/domain distinction. |
 | `practice` | A sub-category tag *within* a domain. Used for filtering the workflow list. Pick from the shipped list (see §5) or type a custom one. |
 | `prompt_md` | The instructions to the model, written in Markdown. This is the most important field. See §7 for guidance. |
 | `columns_config` | (tabular only) An array of column definitions. Each column has a `name`, a `prompt`, and an optional `format`. See §3. |
@@ -175,9 +175,10 @@ MikeRust uses **two** orthogonal categorisation fields, introduced
 in migration 0018:
 
 - **`domain`** — the broad professional vertical the artefact belongs
-  to. Always one of nine shipped values: `legal` (default), `medical`,
-  `finance`, `real_estate`, `hr`, `insurance`, `ip`, `compliance`,
-  `others`. Validated at the API boundary — unknown values fall back
+  to. Always one of twelve shipped values: `legal` (default), `medical`,
+  `finance`, `fiscale`, `real_estate`, `hr`, `insurance`, `ip`,
+  `compliance`, `gdpr`, `pa`, `others`. Validated at the API boundary —
+  unknown values fall back
   to `legal` on create, are rejected on update. New domains can be
   added by editing `crate::domain::DOMAINS` on the backend and
   `Domain` in `frontend/.../shared/types.ts` — no SQL migration needed,
@@ -499,10 +500,13 @@ upgrades make sense:
 
 ### 11.0 Add a new domain to the shipped enum
 
-The 9 domains shipped today (`legal`, `medical`, `finance`,
-`real_estate`, `hr`, `insurance`, `ip`, `compliance`, `others`) cover
-most professional verticals. To add another (e.g. `architecture`,
-`journalism`, `accounting`):
+The 12 domains shipped today (`legal`, `medical`, `finance`,
+`fiscale`, `real_estate`, `hr`, `insurance`, `ip`, `compliance`,
+`gdpr`, `pa`, `others`) cover most professional verticals — the
+`fiscale` (Italian tax/commercialista) vertical was added in v0.7.0
+as a worked example of the full add-a-domain flow (see
+`docs/piano_settore_fiscale.md`). To add another (e.g. `architecture`,
+`journalism`):
 
 1. Edit
    [`src/domain.rs`](../src/domain.rs): append the new identifier to

@@ -18,6 +18,13 @@ pub const DOMAINS: &[&str] = &[
     "legal",
     "medical",
     "finance",
+    // `fiscale` (Italian tax / commercialista compliance + advisory)
+    // sits next to `finance`: finance holds the analytical side
+    // (bilanci, valutazione d'azienda, crisi d'impresa), fiscale the
+    // tax-compliance + advisory side (IVA, dichiarazioni, imposte,
+    // ravvedimento, accertamento, contenzioso tributario). Added in
+    // v0.7.0; no migration needed (validation is API-boundary only).
+    "fiscale",
     "real_estate",
     "hr",
     "insurance",

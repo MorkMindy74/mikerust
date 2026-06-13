@@ -12,6 +12,7 @@ export const DOMAINS = [
   'legal',
   'medical',
   'finance',
+  'fiscale',
   'real_estate',
   'hr',
   'insurance',

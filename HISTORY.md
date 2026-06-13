@@ -13,6 +13,83 @@ diff. For the upstream-sync audit trail (which fixes were ported from
 
 ---
 
+## v0.7.0 — 2026-06-09 (nuovo settore «Fiscale» — tax/commercialista italiano)
+
+Adds a twelfth professional vertical, **`fiscale`** (Italian tax /
+commercialista compliance + advisory), end-to-end. It sits next to
+`finance`: finance holds the analytical side (bilanci, valutazione
+d'azienda, crisi d'impresa), fiscale the tax-compliance + advisory
+side (IVA, dichiarazioni, imposte dirette/indirette, ravvedimento,
+accertamento, contenzioso tributario).
+
+### Domain registration
+
+* `src/domain.rs` — `"fiscale"` added to `DOMAINS` (after
+  `finance`). No migration needed; validation is API-boundary only.
+* `frontend/src/lib/types/domain.ts` — `'fiscale'` added to the
+  mirror `DOMAINS` const.
+* All six locales gain `Domains.values.fiscale`: IT «Fiscale»,
+  EN «Tax», FR «Fiscalité», DE «Steuern», ES/PT «Fiscal».
+
+### System prompts (6 languages)
+
+`config/system-prompts/{it,en,fr,de,es,pt}/fiscale.md`. The Italian
+one is the richest; the others are operational translations that
+keep the Italian statutory references (the subject matter is
+national). All six bake in the **2024 tax-reform updates** so the
+model never cites superseded institutes:
+
+* Reclamo-mediazione (art. 17-bis D.Lgs. 546/92) **repealed** from
+  4 Jan 2024 (D.Lgs. 220/2023) — appeals go straight to the Corte
+  di Giustizia Tributaria di primo grado.
+* New penalty regime **D.Lgs. 87/2024 from 1 Sep 2024** — omitted/
+  late payment base penalty 30% → 25%; the model must check the
+  violation date and state which regime it applies.
+* Generalised prior adversarial procedure (art. 6-bis L. 212/2000,
+  D.Lgs. 219/2023).
+
+### Workflow presets — `config/workflow-presets/fiscale/` (8)
+
+Assistant: `parere-tributario`, `ravvedimento-operoso` (calcolo con
+regime D.Lgs. 87/2024 + interessi legali pro-rata + codici tributo
+F24), `analisi-avviso-accertamento` (termini, vizi, confronto
+adesione/autotutela/ricorso post-abrogazione reclamo).
+
+Tabular: `riconciliazione-iva` (registri vs LIPE vs F24),
+`verifica-forfettario` (requisiti L. 190/2014 art. 1 c. 54-89),
+`quadro-rw-monitoraggio` (IVIE/IVAFE su attività estere),
+`imposte-indirette-atto` (registro/bollo/ipo-catastali, DPR 131/86),
+`scadenzario-versamenti-f24`.
+
+### Column presets — `config/column-presets/fiscale/` (9)
+
+`imponibile`, `aliquota`, `imposta-dovuta`, `ritenuta`, `sanzione`
+(con avviso sul nuovo regime D.Lgs. 87/2024), `interessi` (tasso
+legale pro-rata annuo), `norma-riferimento`, `scadenza`,
+`codice-tributo`.
+
+### Docs
+
+* New `docs/piano_settore_fiscale.md` — descriptive sector plan:
+  scope, distinction from finance, 2024 reform notes, the 8
+  workflows + 9 columns, **public/open databases for norms and
+  case-law** (Normattiva, def.finanze.it DEF, Sentenze Web
+  Cassazione, Giustizia Tributaria DGT, EUR-Lex), and a 4-phase
+  enrichment roadmap.
+* `docs/WORKFLOWS.md` domain references updated from the stale "9
+  domains" to the accurate 12, with `fiscale` flagged as the worked
+  example of the add-a-domain flow.
+
+### Tests
+
+No new tests authored, but the existing preset-loader suite is the
+gate: `shipped_workflow_presets_all_load_cleanly` (40 preset tests)
+parses every shipped workflow including the 8 new fiscale ones and
+would reject an invalid `domain` — all green. `cargo check` clean,
+svelte-check 0 errors.
+
+---
+
 ## v0.6.7 — 2026-06-08 (sidebar active-domain selector)
 
 Adds a compact domain picker next to the MikeRust brand at the
