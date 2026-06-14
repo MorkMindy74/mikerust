@@ -13,6 +13,47 @@ diff. For the upstream-sync audit trail (which fixes were ported from
 
 ---
 
+## v0.7.4 — 2026-06-14 (cross-dominio nell'editor dei workflow)
+
+Extends the `also_applicable_to` cross-domain mechanism — shipped for
+built-in presets in v0.7.3 — to **user-created** workflows, so the
+workflow/tabular editor can tag any workflow as applicable to more
+than one sector via a free-text tag picker.
+
+### Added
+
+* **`DomainPicker.svelte`** — a tag-style input with free-text
+  autocomplete over the available domains: chips for the chosen extra
+  domains (each removable), a filtered suggestion dropdown, arrow-key
+  navigation, Enter to add, Backspace to remove the last. The primary
+  domain is excluded from suggestions. Wired into both the create modal
+  (`WorkflowModal.svelte`) and the auto-saving editor
+  (`WorkflowEditor.svelte`); the editor also renders the extra domains
+  as badges in read-only (preset) view.
+* `also_applicable_to` on user workflows (migration **0034**): new
+  `TEXT NOT NULL DEFAULT '[]'` column on `workflows`. Existing rows
+  default to single-domain — no behaviour change on upgrade.
+* 3 i18n keys (`Workflows.alsoApplicableTo*`) across all 6 locales.
+
+### Changed
+
+* `src/routes/workflows.rs`: `also_applicable_to` flows through
+  SELECT / INSERT / UPDATE. Create and update **sanitise** the list
+  server-side (canonical domains only, drop any redundant primary,
+  dedup). The `GET /workflow?domain=` filter now matches a row when
+  the target equals the primary `domain` **or** appears in its extra
+  domains — moved from the SQL `WHERE` into Rust to mirror the preset
+  `matches_domain` path.
+* `docs/WORKFLOWS.md`: the `also_applicable_to` row no longer claims
+  user workflows are single-domain; documents the editor tag picker.
+
+### Notes
+
+* Verified: `svelte-check` 0 errors · 42/42 preset-loader tests ·
+  `cargo check` clean.
+
+---
+
 ## v0.7.3 — 2026-06-13 (workflow cross-dominio + analisi cespiti e libri contabili)
 
 Adds two commercialista workflows — fixed-asset analysis and
